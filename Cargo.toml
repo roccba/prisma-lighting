@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/prisma-core",
+    "crates/prisma-render",
+    "crates/prisma-output",
+    "crates/prisma-midi",
+    "crates/prisma-script",
+    "crates/prisma-patch",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "UNLICENSED"
+publish = false

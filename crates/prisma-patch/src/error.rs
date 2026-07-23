@@ -1,0 +1,140 @@
+//! Errors surfaced by loading, validating and compiling a patch.
+
+use std::fmt;
+use uuid::Uuid;
+
+/// Anything that can go wrong turning bytes on disk into a validated,
+/// index-ready [`Patch`](crate::Patch).
+#[derive(Debug)]
+pub enum PatchError {
+    /// The JSON envelope or body failed to parse.
+    Json(serde_json::Error),
+    /// The `format` tag was not the expected `"prisma.patch"`.
+    BadFormat { found: String },
+    /// The file was written by a newer schema than this build understands. We
+    /// refuse rather than load partially and corrupt a shared file (§3, M2).
+    NewerThanReader { file: u32, reader: u32 },
+    /// A `schema_version` older than any we have a migration path from.
+    UnknownSchema { version: u32 },
+    /// A zone references a pixel that does not exist in the patch.
+    DanglingPixelRef {
+        zone: Uuid,
+        fixture: Uuid,
+        pixel: u32,
+    },
+    /// A zone references a fixture that does not exist in the patch.
+    DanglingFixtureRef { zone: Uuid, fixture: Uuid },
+    /// A fixture's pixels are not densely indexed `0..len` in vector order.
+    /// The model requires `pixels[i].index == i` so that a `PixelRef` and the
+    /// master-buffer ordering have exactly one meaning.
+    NonDensePixelIndex {
+        fixture: Uuid,
+        position: u32,
+        index: u32,
+    },
+    /// A pixel's DMX span (`start_channel .. start_channel + components`) runs
+    /// past channel 512 or starts below 1.
+    ChannelOutOfRange {
+        fixture: Uuid,
+        pixel: u32,
+        start: u16,
+        span: u16,
+    },
+    /// Two pixels claim an overlapping `(universe, channel)` range.
+    AddressCollision {
+        universe: u16,
+        channel: u16,
+        first: Uuid,
+        second: Uuid,
+    },
+    /// A pixel's `position` does not land on a cell inside `matrix_size` (or is
+    /// not finite). Such a pixel can never receive content — the render samples
+    /// the virtual matrix at each pixel's cell (§5.2 step 5) — so this is refused
+    /// at load rather than discovered as one dark fixture on stage. The runtime
+    /// gather is defensive about it anyway (out-of-range samples read black), the
+    /// same belt-and-braces as the layout-generation guard.
+    PositionOutOfMatrix {
+        fixture: Uuid,
+        pixel: u32,
+        position: [f32; 3],
+        matrix_size: [u32; 3],
+    },
+}
+
+impl fmt::Display for PatchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PatchError::Json(e) => write!(f, "malformed patch JSON: {e}"),
+            PatchError::BadFormat { found } => {
+                write!(f, "not a Prisma patch file (format = {found:?})")
+            }
+            PatchError::NewerThanReader { file, reader } => write!(
+                f,
+                "this patch was created by a newer version of Prisma \
+                 (schema v{file}, this build reads up to v{reader}); please update Prisma"
+            ),
+            PatchError::UnknownSchema { version } => {
+                write!(f, "unknown patch schema version v{version}")
+            }
+            PatchError::DanglingPixelRef {
+                zone,
+                fixture,
+                pixel,
+            } => write!(
+                f,
+                "zone {zone} references pixel {pixel} of fixture {fixture}, which does not exist"
+            ),
+            PatchError::DanglingFixtureRef { zone, fixture } => write!(
+                f,
+                "zone {zone} references fixture {fixture}, which does not exist"
+            ),
+            PatchError::NonDensePixelIndex {
+                fixture,
+                position,
+                index,
+            } => write!(
+                f,
+                "fixture {fixture} pixel at position {position} declares index {index} \
+                 (pixels must be densely indexed 0..len in order)"
+            ),
+            PatchError::ChannelOutOfRange {
+                fixture,
+                pixel,
+                start,
+                span,
+            } => write!(
+                f,
+                "pixel {pixel} of fixture {fixture} spans channels {start}..{} \
+                 (must be within 1..=512)",
+                start.saturating_add(*span)
+            ),
+            PatchError::AddressCollision {
+                universe,
+                channel,
+                first,
+                second,
+            } => write!(
+                f,
+                "fixtures {first} and {second} both claim universe {universe} channel {channel}"
+            ),
+            PatchError::PositionOutOfMatrix {
+                fixture,
+                pixel,
+                position,
+                matrix_size,
+            } => write!(
+                f,
+                "fixture {fixture} pixel {pixel} at position {position:?} falls outside the \
+                 virtual matrix {matrix_size:?} — it could never receive content"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PatchError {}
+
+impl From<serde_json::Error> for PatchError {
+    fn from(e: serde_json::Error) -> Self {
+        PatchError::Json(e)
+    }
+}

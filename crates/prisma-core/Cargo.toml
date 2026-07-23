@@ -1,0 +1,14 @@
+[package]
+name = "prisma-core"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# NOTE: prisma-core must never depend on prisma-render (CLAUDE.md §7):
+# the engine model stays headlessly testable.
+
+[dependencies]
+# Fast, no-poisoning Mutex/RwLock/Condvar for the registry and per-slot
+# arbitration state. Not used on the wait-free read path (that is atomics only).
+parking_lot = "0.12"

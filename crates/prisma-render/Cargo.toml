@@ -1,0 +1,31 @@
+[package]
+name = "prisma-render"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Engine model: parameter tree (effect uniforms are sourced from it), clock
+# snapshot, and — from later M5 steps — the zone-state predicates. prisma-core
+# never depends back on prisma-render (§7): the model stays headlessly testable.
+prisma-core = { path = "../prisma-core" }
+# Patch model: BlendMode (shared by intra-zone layer blending and, from S4,
+# zone-over-zone compositing — the same machinery, §4.1), geometry and PatchIndex.
+prisma-patch = { path = "../prisma-patch" }
+# Frame handoff + the output stage the render loop publishes into (S6).
+prisma-output = { path = "../prisma-output" }
+# GPU pipeline (CLAUDE.md §2). Vulkan on Linux/Windows via the same codebase.
+wgpu = { version = "30", default-features = false, features = ["wgsl", "vulkan"] }
+# Half-precision floats: the canonical master buffer is linear-light f16 so the
+# render→output chain keeps precision until the single round-to-wire at the
+# output stage (CLAUDE.md §5.2 color pipeline). Matches the Rgba16Float GPU
+# texture format for a zero-conversion readback.
+half = { version = "2", features = ["bytemuck"] }
+bytemuck = { version = "1", features = ["derive"] }
+# Block the calling thread on wgpu's async device/adapter/map futures. Used only
+# off the render hot path (setup + test-side readback wait), never per frame.
+pollster = "0.4"
+# Used by the render-probe binary (and tests) to build patches.
+glam = "0.29"
+uuid = { version = "1", features = ["v4"] }

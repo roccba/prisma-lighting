@@ -1,0 +1,126 @@
+//! Built-in effect library (CLAUDE.md §5.3): procedural WGSL effects, each a
+//! manifest + a shader. Effects are **data**, not special-cased engine code —
+//! adding one is a manifest and a `.wgsl`, never a compositor change (§7).
+//!
+//! S1 ships one effect (a gradient) to establish the tree→uniform→pixel seam;
+//! S2+ add plasma, wave/noise, etc. behind the same [`EffectManifest`] contract.
+
+use crate::effect::{EffectManifest, ParamSpec};
+use prisma_core::{Curve, ParamDescriptor, RealRange};
+
+/// WGSL source for the horizontal grayscale gradient, from the shared shader
+/// library (§7 `shaders/`).
+const GRADIENT_WGSL: &str = include_str!("../../../shaders/gradient.wgsl");
+const SOLID_WGSL: &str = include_str!("../../../shaders/solid.wgsl");
+const PLASMA_WGSL: &str = include_str!("../../../shaders/plasma.wgsl");
+const WAVE_WGSL: &str = include_str!("../../../shaders/wave.wgsl");
+
+/// Sum-of-sines plasma. `scale` sets the spatial frequency of the field and
+/// `speed` how fast it evolves against show time. Param order here **is** the
+/// uniform layout the shader reads.
+pub fn plasma() -> EffectManifest {
+    EffectManifest {
+        effect_id: "plasma",
+        params: vec![
+            ParamSpec {
+                name: "scale",
+                descriptor: ParamDescriptor::level(
+                    "effect.plasma.scale",
+                    RealRange {
+                        min: 1.0,
+                        max: 20.0,
+                    },
+                    Curve::Linear,
+                    0.25,
+                ),
+            },
+            ParamSpec {
+                name: "speed",
+                descriptor: ParamDescriptor::level(
+                    "effect.plasma.speed",
+                    RealRange { min: 0.0, max: 4.0 },
+                    Curve::Linear,
+                    0.25,
+                ),
+            },
+        ],
+        shader_source: PLASMA_WGSL,
+    }
+}
+
+/// A travelling sine along X. `frequency` is cycles across the matrix width,
+/// `speed` cycles per second against show time.
+pub fn wave() -> EffectManifest {
+    EffectManifest {
+        effect_id: "wave",
+        params: vec![
+            ParamSpec {
+                name: "frequency",
+                descriptor: ParamDescriptor::level(
+                    "effect.wave.frequency",
+                    RealRange {
+                        min: 0.0,
+                        max: 10.0,
+                    },
+                    Curve::Linear,
+                    0.1,
+                ),
+            },
+            ParamSpec {
+                name: "speed",
+                descriptor: ParamDescriptor::level(
+                    "effect.wave.speed",
+                    RealRange { min: 0.0, max: 4.0 },
+                    Curve::Linear,
+                    0.0,
+                ),
+            },
+        ],
+        shader_source: WAVE_WGSL,
+    }
+}
+
+/// A flat linear-light color from three unit-range parameters `r`, `g`, `b`. The
+/// simplest effect (§5.3 "solid color") and a clean, known building block for the
+/// compositor tests. Param order here is the uniform layout the shader reads.
+pub fn solid() -> EffectManifest {
+    EffectManifest {
+        effect_id: "solid",
+        params: vec![
+            ParamSpec {
+                name: "r",
+                descriptor: ParamDescriptor::unit_level("effect.solid.r", 0.0),
+            },
+            ParamSpec {
+                name: "g",
+                descriptor: ParamDescriptor::unit_level("effect.solid.g", 0.0),
+            },
+            ParamSpec {
+                name: "b",
+                descriptor: ParamDescriptor::unit_level("effect.solid.b", 0.0),
+            },
+        ],
+        shader_source: SOLID_WGSL,
+    }
+}
+
+/// A horizontal grayscale linear gradient. Two unit-range parameters, `start` and
+/// `end`, set the grayscale value at the left and right edges; the shader
+/// interpolates between them per column. Their order here **is** the uniform
+/// layout the shader reads (see [`crate::effect`]).
+pub fn gradient() -> EffectManifest {
+    EffectManifest {
+        effect_id: "gradient",
+        params: vec![
+            ParamSpec {
+                name: "start",
+                descriptor: ParamDescriptor::unit_level("effect.gradient.start", 0.0),
+            },
+            ParamSpec {
+                name: "end",
+                descriptor: ParamDescriptor::unit_level("effect.gradient.end", 1.0),
+            },
+        ],
+        shader_source: GRADIENT_WGSL,
+    }
+}

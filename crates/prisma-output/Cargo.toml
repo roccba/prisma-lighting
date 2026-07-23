@@ -1,0 +1,36 @@
+[package]
+name = "prisma-output"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The packet codec (step 2) is dependency-free on purpose: pure functions,
+# no I/O, no allocation in the hot path — this is the layer the packet-level
+# tests target (CLAUDE.md §7). Transport/scheduler (step 4) add exactly two:
+[dependencies]
+prisma-patch = { path = "../prisma-patch" }  # patch model + PatchIndex/LayoutGeneration (M2)
+prisma-core = { path = "../prisma-core" }    # OverlapSnapshot: the frame's classification (M5 §5.2.1)
+half = "2"                # canonical master buffer is linear-light f16 (§5.2); the
+                          # round to 8-bit wire happens once, at the gamma stage
+socket2 = "0.5"           # fine socket control: bind-to-interface, multicast, non-blocking
+thread-priority = "1"     # cross-platform RT elevation with a measured fallback
+core_affinity = "0.8"     # cross-platform core pinning (Linux/Windows/macOS), no privileges
+
+[features]
+# Linux-only: request SCHED_FIFO through RtKit (no root). Off by default so the
+# base build carries no D-Bus dependency; enable for Linux product builds. The
+# tested default path is plain SCHED_FIFO (needs CAP_SYS_NICE or an rtprio limit).
+rtkit = ["dep:zbus", "dep:libc"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "4", optional = true, default-features = false, features = ["async-io"] }
+libc = { version = "0.2", optional = true }
+
+[dev-dependencies]
+uuid = { version = "1", features = ["v4"] }  # building test patches
+glam = "0.29"                                 # Vec3 for test pixel positions
+
+[[bin]]
+name = "probe"
+path = "src/bin/probe.rs"

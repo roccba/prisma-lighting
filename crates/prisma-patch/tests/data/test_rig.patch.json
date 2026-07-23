@@ -1,0 +1,88 @@
+{
+  "format": "prisma.patch",
+  "schema_version": 1,
+  "written_by": "hand-written test rig",
+  "patch": {
+    "id": "00000000-0000-0000-0000-000000000001",
+    "name": "Test Rig — two pixel tubes, sectors + global strobe",
+    "matrix_size": [8, 2, 1],
+    "fixtures": [
+      {
+        "id": "00000000-0000-0000-0000-00000000000a",
+        "name": "Tube A (WS2812 GRB)",
+        "profile": { "name": "WS2812 GRB", "components": "Rgb", "gamma": { "gamma": 1.0 } },
+        "pixels": [
+          { "index": 0, "position": [0.0, 0.0, 0.0], "universe": 1, "start_channel": 1,  "color_order": "Grb" },
+          { "index": 1, "position": [1.0, 0.0, 0.0], "universe": 1, "start_channel": 4,  "color_order": "Grb" },
+          { "index": 2, "position": [2.0, 0.0, 0.0], "universe": 1, "start_channel": 7,  "color_order": "Grb" },
+          { "index": 3, "position": [3.0, 0.0, 0.0], "universe": 1, "start_channel": 10, "color_order": "Grb" }
+        ]
+      },
+      {
+        "id": "00000000-0000-0000-0000-00000000000b",
+        "name": "Tube B (SK6812 RGBW)",
+        "profile": { "name": "SK6812 RGBW", "components": "Rgbw", "gamma": { "gamma": 2.2 } },
+        "pixels": [
+          { "index": 0, "position": [0.0, 1.0, 0.0], "universe": 1, "start_channel": 20, "color_order": "Rgb" },
+          { "index": 1, "position": [1.0, 1.0, 0.0], "universe": 1, "start_channel": 24, "color_order": "Rgb" },
+          { "index": 2, "position": [2.0, 1.0, 0.0], "universe": 1, "start_channel": 28, "color_order": "Rgb" },
+          { "index": 3, "position": [3.0, 1.0, 0.0], "universe": 1, "start_channel": 32, "color_order": "Rgb" }
+        ]
+      }
+    ],
+    "zones": [
+      {
+        "id": "00000000-0000-0000-0000-000000000021",
+        "name": "sector-left",
+        "members": [
+          { "fixture": "00000000-0000-0000-0000-00000000000a", "pixel": 0 },
+          { "fixture": "00000000-0000-0000-0000-00000000000a", "pixel": 1 }
+        ],
+        "bounds": null,
+        "z_order": 0,
+        "blend_mode": "Normal"
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000020",
+        "name": "sector-right",
+        "members": [
+          { "fixture": "00000000-0000-0000-0000-00000000000a", "pixel": 2 },
+          { "fixture": "00000000-0000-0000-0000-00000000000a", "pixel": 3 }
+        ],
+        "bounds": null,
+        "z_order": 0,
+        "blend_mode": "Normal"
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000022",
+        "name": "sector-b",
+        "members": [
+          { "fixture": "00000000-0000-0000-0000-00000000000b", "pixel": 0 },
+          { "fixture": "00000000-0000-0000-0000-00000000000b", "pixel": 1 },
+          { "fixture": "00000000-0000-0000-0000-00000000000b", "pixel": 2 },
+          { "fixture": "00000000-0000-0000-0000-00000000000b", "pixel": 3 }
+        ],
+        "bounds": null,
+        "z_order": 5,
+        "blend_mode": "Normal"
+      },
+      {
+        "id": "00000000-0000-0000-0000-000000000023",
+        "name": "global-strobe",
+        "members": [
+          { "fixture": "00000000-0000-0000-0000-00000000000a", "pixel": 0 },
+          { "fixture": "00000000-0000-0000-0000-00000000000a", "pixel": 1 },
+          { "fixture": "00000000-0000-0000-0000-00000000000a", "pixel": 2 },
+          { "fixture": "00000000-0000-0000-0000-00000000000a", "pixel": 3 },
+          { "fixture": "00000000-0000-0000-0000-00000000000b", "pixel": 0 },
+          { "fixture": "00000000-0000-0000-0000-00000000000b", "pixel": 1 },
+          { "fixture": "00000000-0000-0000-0000-00000000000b", "pixel": 2 },
+          { "fixture": "00000000-0000-0000-0000-00000000000b", "pixel": 3 }
+        ],
+        "bounds": null,
+        "z_order": 10,
+        "blend_mode": "Add"
+      }
+    ]
+  }
+}

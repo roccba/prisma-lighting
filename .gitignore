@@ -1,0 +1,17 @@
+# Rust / Cargo build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo.lock is committed: this workspace produces binaries (the Tauri app,
+# probes), and a committed lock file makes their builds reproducible.
+
+# Editor / IDE
+/.idea/
+/.vscode/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
