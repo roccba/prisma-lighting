@@ -205,7 +205,10 @@ impl PreviewLoop {
         // stage reads, so the preview and the wire move together.
         flat_source.read_into(flat);
 
-        match encode_frame(plan, frame, flat, buf) {
+        // The wire sequence is a monotonic count of shipped frames, so the consumer
+        // can tell a real drop from a normal newest-wins skip (see `encode_frame`).
+        let sequence = stats.frames_encoded;
+        match encode_frame(plan, frame, flat, sequence, buf) {
             Ok(()) => {
                 stats.frames_encoded += 1;
                 sink.send_frame(buf);

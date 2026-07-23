@@ -25,6 +25,7 @@ pub mod encode;
 pub mod frame;
 pub mod plan;
 pub mod preview_loop;
+pub mod sink;
 
 pub use descriptor::{DescriptorPixel, DescriptorZone, PreviewDescriptor};
 pub use encode::{encode_frame, linear_to_srgb8, PreviewEncodeError, FORMAT_VERSION, MAGIC};
@@ -33,3 +34,4 @@ pub use plan::{PreviewPixel, PreviewPlan, NO_COMPONENT};
 pub use preview_loop::{
     run_preview_loop, PreviewLoop, PreviewLoopConfig, PreviewOutcome, PreviewSink, PreviewStats,
 };
+pub use sink::{ChannelSink, PreviewMessage, WebSocketSink};

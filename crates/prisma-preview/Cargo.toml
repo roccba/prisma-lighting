@@ -21,6 +21,10 @@ glam = "0.29"             # pixel positions, as in prisma-patch
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["serde"] }  # zone ids in the descriptor
+# WebSocket transport for the browser viewer (P4). This is the one place a
+# network dependency belongs in this crate — it is UI-facing and off the DMX hot
+# path, so the §2 "no heavy deps in the hot path" rule does not apply here.
+tungstenite = "0.24"
 
 [dev-dependencies]
 uuid = { version = "1", features = ["v4"] }  # building test patches

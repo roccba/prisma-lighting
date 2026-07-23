@@ -111,7 +111,7 @@ pub fn linear_to_srgb8(c: f32) -> u8 {
 ///   4    2    format version
 ///   6    1    pixel format (0 = RGB8 sRGB)
 ///   7    1    reserved (0)
-///   8    8    frame_id
+///   8    8    sequence
 ///  16    8    layout_generation
 ///  24    4    pixel_count
 ///  28    2    zone_count
@@ -119,6 +119,13 @@ pub fn linear_to_srgb8(c: f32) -> u8 {
 ///  32    …    zone block:  zone_count × [flags:u8, r:u8, g:u8, b:u8]
 ///   …    …    pixel block: pixel_count × [r:u8, g:u8, b:u8]  (global-index order)
 /// ```
+///
+/// `sequence` is a **monotonic count of shipped preview frames**, supplied by the
+/// caller (the preview loop). It is deliberately *not* the render frame id: the
+/// preview loop runs slower than render and re-ships on live parameter changes, so
+/// the render id skips and repeats. The sequence increments by exactly one per
+/// frame the loop ships, so a consumer detects genuine transport drops from gaps in
+/// it — which the render id could never distinguish from normal newest-wins skips.
 ///
 /// Each pixel is sampled through [`PreviewPlan::sample_pixel`] — the *shared*
 /// output-stage scale (master + per-zone flat parameters, chosen by the frame's
@@ -129,6 +136,7 @@ pub fn encode_frame(
     plan: &PreviewPlan,
     frame: &PreviewFrame,
     flat: &FlatParams,
+    sequence: u64,
     out: &mut Vec<u8>,
 ) -> Result<(), PreviewEncodeError> {
     let plan_gen = plan.generation().get();
@@ -151,7 +159,7 @@ pub fn encode_frame(
     out.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
     out.push(PIXEL_FORMAT_RGB8_SRGB);
     out.push(0); // reserved
-    out.extend_from_slice(&frame.frame_id.to_le_bytes());
+    out.extend_from_slice(&sequence.to_le_bytes());
     out.extend_from_slice(&(frame_gen).to_le_bytes());
     out.extend_from_slice(&(pixel_count as u32).to_le_bytes());
     out.extend_from_slice(&(zone_count as u16).to_le_bytes());

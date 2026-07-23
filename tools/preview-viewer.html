@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Prisma preview viewer</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0b0b0d; color: #d8d8dc; font: 13px/1.4 ui-monospace, monospace; }
+  header { display: flex; gap: 16px; align-items: center; padding: 8px 12px; background: #161619; border-bottom: 1px solid #26262b; flex-wrap: wrap; }
+  header .title { font-weight: 700; color: #fff; letter-spacing: .5px; }
+  input { background: #0b0b0d; color: #d8d8dc; border: 1px solid #33333a; border-radius: 4px; padding: 3px 6px; width: 64px; font: inherit; }
+  button { background: #2a2a30; color: #fff; border: 1px solid #40404a; border-radius: 4px; padding: 3px 10px; font: inherit; cursor: pointer; }
+  button:hover { background: #35353d; }
+  .stat { white-space: nowrap; }
+  .stat b { color: #fff; }
+  .ok { color: #57d977; } .warn { color: #ffcf5c; } .bad { color: #ff6b6b; }
+  #wrap { display: flex; height: calc(100vh - 84px); }
+  #stage { flex: 1; position: relative; }
+  canvas { display: block; width: 100%; height: 100%; }
+  #legend { width: 220px; padding: 10px; background: #121215; border-left: 1px solid #26262b; overflow: auto; }
+  #legend h3 { margin: 4px 0 10px; font-size: 12px; color: #9a9aa2; text-transform: uppercase; letter-spacing: 1px; }
+  .zrow { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .zdot { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+  .zswatch { width: 22px; height: 12px; border-radius: 2px; flex: none; border: 1px solid #333; }
+  .zname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ztag { font-size: 10px; padding: 1px 5px; border-radius: 3px; }
+  .ztag.on { background: #14431f; color: #7be394; }
+  .ztag.off { background: #2a2a30; color: #8a8a92; }
+</style>
+</head>
+<body>
+<header>
+  <span class="title">PRISMA · preview</span>
+  <label>ws://127.0.0.1:<input id="port" value="8787"></label>
+  <button id="connect">connect</button>
+  <span class="stat">conn: <b id="conn" class="bad">off</b></span>
+  <span class="stat">recv <b id="fps">0</b> fps</span>
+  <span class="stat">frames <b id="frames">0</b></span>
+  <span class="stat">drops <b id="drops" class="ok">0</b></span>
+  <span class="stat">descriptor <b id="desc" class="warn">none</b></span>
+  <span class="stat">zones on <b id="zon">0/0</b></span>
+</header>
+<div id="wrap">
+  <div id="stage"><canvas id="cv"></canvas></div>
+  <div id="legend"><h3>zones</h3><div id="zones"></div></div>
+</div>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const cv = $("cv"), ctx = cv.getContext("2d");
+
+let descriptor = null;        // {generation, matrix_size, pixels:[{x,y}], zones:[{id,name,members}]}
+let pixelZone = [];           // pixel index -> zone slot (first owning zone), or -1
+let zoneColors = [];          // css color per zone
+let lastColors = null;        // Uint8Array RGB per pixel (last frame)
+let lastZoneFlags = [];       // active bool per zone
+let lastZoneSwatch = [];      // [r,g,b] per zone
+
+// health
+let frameTimes = [];          // recent arrival timestamps
+let totalFrames = 0, drops = 0, lastFrameId = null, stale = false;
+
+const MAGIC = [0x50,0x50,0x56,0x31]; // "PPV1"
+
+function zoneColor(i, n) {
+  const h = (i * 360 / Math.max(1, n)) % 360;
+  return `hsl(${h.toFixed(0)} 85% 60%)`;
+}
+
+function applyDescriptor(d) {
+  descriptor = d;
+  const n = d.zones.length;
+  zoneColors = d.zones.map((_, i) => zoneColor(i, n));
+  pixelZone = new Array(d.pixels.length).fill(-1);
+  d.zones.forEach((z, slot) => z.members.forEach(p => { if (pixelZone[p] < 0) pixelZone[p] = slot; }));
+  lastZoneFlags = new Array(n).fill(false);
+  lastZoneSwatch = d.zones.map(() => [40,40,48]);
+  buildLegend();
+  $("desc").textContent = "gen " + d.generation;
+  $("desc").className = "warn";
+}
+
+function buildLegend() {
+  const box = $("zones"); box.innerHTML = "";
+  descriptor.zones.forEach((z, i) => {
+    const row = document.createElement("div"); row.className = "zrow"; row.dataset.slot = i;
+    row.innerHTML =
+      `<span class="zdot" style="background:${zoneColors[i]}"></span>` +
+      `<span class="zswatch" id="sw${i}"></span>` +
+      `<span class="zname" title="${z.name}">${z.name}</span>` +
+      `<span class="ztag off" id="tag${i}">off</span>`;
+    box.appendChild(row);
+  });
+}
+
+function onDescriptorText(text) {
+  try { applyDescriptor(JSON.parse(text)); }
+  catch (e) { console.error("bad descriptor", e); }
+}
+
+function onFrameBinary(buf) {
+  const dv = new DataView(buf);
+  for (let i = 0; i < 4; i++) if (dv.getUint8(i) !== MAGIC[i]) return; // not ours
+  const sequence = Number(dv.getBigUint64(8, true)); // monotonic per shipped frame
+  const generation = Number(dv.getBigUint64(16, true));
+  const pixelCount = dv.getUint32(24, true);
+  const zoneCount = dv.getUint16(28, true);
+  let off = 32;
+
+  // zone block: [flags, r, g, b]
+  const flags = new Array(zoneCount), swatch = new Array(zoneCount);
+  for (let z = 0; z < zoneCount; z++) {
+    flags[z] = (dv.getUint8(off) & 1) === 1;
+    swatch[z] = [dv.getUint8(off+1), dv.getUint8(off+2), dv.getUint8(off+3)];
+    off += 4;
+  }
+  // pixel block: RGB8
+  const colors = new Uint8Array(buf, off, pixelCount * 3);
+
+  // health
+  const now = performance.now();
+  frameTimes.push(now); while (frameTimes.length > 60) frameTimes.shift();
+  totalFrames++;
+  // Gaps in the monotonic sequence are genuine transport drops (the server drops a
+  // frame for a lagging client), NOT the normal newest-wins skips of the render id.
+  if (lastFrameId !== null && sequence > lastFrameId + 1) drops += sequence - lastFrameId - 1;
+  lastFrameId = sequence;
+  stale = !descriptor || generation !== descriptor.generation;
+
+  lastColors = colors; lastZoneFlags = flags; lastZoneSwatch = swatch;
+  updateHealth(zoneCount);
+  draw();
+}
+
+function updateHealth(zoneCount) {
+  let fps = 0;
+  if (frameTimes.length > 1) {
+    const span = (frameTimes[frameTimes.length-1] - frameTimes[0]) / 1000;
+    if (span > 0) fps = (frameTimes.length - 1) / span;
+  }
+  $("fps").textContent = fps.toFixed(0);
+  $("frames").textContent = totalFrames;
+  const dr = $("drops"); dr.textContent = drops; dr.className = drops ? "bad" : "ok";
+  const de = $("desc");
+  if (stale) { de.textContent = "STALE"; de.className = "bad"; }
+  else if (descriptor) { de.textContent = "gen " + descriptor.generation; de.className = "ok"; }
+  let on = 0; for (let z = 0; z < zoneCount; z++) if (lastZoneFlags[z]) on++;
+  $("zon").textContent = on + "/" + zoneCount;
+  // legend swatches + active tags
+  if (descriptor) descriptor.zones.forEach((_, i) => {
+    const sw = $("sw"+i); if (sw && lastZoneSwatch[i]) sw.style.background = `rgb(${lastZoneSwatch[i].join(",")})`;
+    const tag = $("tag"+i); if (tag) { const on = lastZoneFlags[i]; tag.textContent = on ? "on" : "off"; tag.className = "ztag " + (on ? "on" : "off"); }
+  });
+}
+
+function fitCanvas() {
+  const r = cv.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.max(1, Math.round(r.width * dpr));
+  cv.height = Math.max(1, Math.round(r.height * dpr));
+  draw();
+}
+
+function draw() {
+  ctx.fillStyle = "#050506"; ctx.fillRect(0, 0, cv.width, cv.height);
+  if (!descriptor || !lastColors) return;
+  const pts = descriptor.pixels;
+  // bounds of real positions -> uniform fit with padding (this is the RIG's shape,
+  // not a generic grid)
+  let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+  for (const p of pts) { minX=Math.min(minX,p.x); maxX=Math.max(maxX,p.x); minY=Math.min(minY,p.y); maxY=Math.max(maxY,p.y); }
+  const spanX = Math.max(1e-3, maxX-minX), spanY = Math.max(1e-3, maxY-minY);
+  const pad = 24 * (window.devicePixelRatio||1);
+  const sx = (cv.width - 2*pad) / spanX, sy = (cv.height - 2*pad) / spanY;
+  const s = Math.min(sx, sy);
+  // pixel dot radius from nearest-neighbour spacing along the denser axis
+  const approxCell = Math.max(s, 1);
+  const r = Math.max(2, Math.min(approxCell*0.42, 18));
+  const ox = (cv.width - s*spanX)/2 - minX*s;
+  const oy = (cv.height - s*spanY)/2 - minY*s;
+
+  for (let i = 0; i < pts.length; i++) {
+    const cx = ox + pts[i].x * s, cy = oy + pts[i].y * s;
+    const cr = lastColors[i*3], cg = lastColors[i*3+1], cb = lastColors[i*3+2];
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2);
+    ctx.fillStyle = `rgb(${cr},${cg},${cb})`; ctx.fill();
+    const zs = pixelZone[i];
+    if (zs >= 0) { ctx.lineWidth = Math.max(1.5, r*0.28); ctx.strokeStyle = zoneColors[zs]; ctx.stroke(); }
+  }
+}
+
+// ---- connection ----
+let ws = null, reconnectTimer = null;
+function connect() {
+  if (ws) { try { ws.close(); } catch(e){} ws = null; }
+  clearTimeout(reconnectTimer);
+  const port = $("port").value.trim() || "8787";
+  const url = `ws://127.0.0.1:${port}`;
+  $("conn").textContent = "…"; $("conn").className = "warn";
+  ws = new WebSocket(url); ws.binaryType = "arraybuffer";
+  ws.onopen = () => { $("conn").textContent = "on"; $("conn").className = "ok"; };
+  ws.onmessage = ev => { if (typeof ev.data === "string") onDescriptorText(ev.data); else onFrameBinary(ev.data); };
+  ws.onclose = () => { $("conn").textContent = "off"; $("conn").className = "bad"; scheduleReconnect(); };
+  ws.onerror = () => { try { ws.close(); } catch(e){} };
+}
+function scheduleReconnect() { clearTimeout(reconnectTimer); reconnectTimer = setTimeout(connect, 1000); }
+
+$("connect").onclick = connect;
+window.addEventListener("resize", fitCanvas);
+fitCanvas();
+connect();
+</script>
+</body>
+</html>

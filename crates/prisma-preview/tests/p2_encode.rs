@@ -154,14 +154,14 @@ fn encode_frame_lays_out_header_zones_and_pixels() {
     flat.set_zone(1, 1.0, [0.0, 0.0, 1.0]);
 
     let mut out = Vec::new();
-    encode_frame(&plan, &frame, &flat, &mut out).unwrap();
+    encode_frame(&plan, &frame, &flat, 42, &mut out).unwrap();
 
     // --- header ---
     assert_eq!(&out[0..4], &MAGIC);
     assert_eq!(u16_at(&out, 4), 1, "format version");
     assert_eq!(out[6], PIXEL_FORMAT_RGB8_SRGB);
     assert_eq!(out[7], 0, "reserved");
-    assert_eq!(u64_at(&out, 8), 42, "frame_id");
+    assert_eq!(u64_at(&out, 8), 42, "sequence");
     assert_eq!(
         u64_at(&out, 16),
         index.generation().get(),
@@ -205,14 +205,14 @@ fn the_master_fader_moves_the_encoded_pixels() {
     let frame = a_frame(index.generation(), master, ZoneActiveMask::new(2));
 
     let mut full = Vec::new();
-    encode_frame(&plan, &frame, &FlatParams::identity(2), &mut full).unwrap();
+    encode_frame(&plan, &frame, &FlatParams::identity(2), 0, &mut full).unwrap();
     let p = HEADER_LEN + 2 * ZONE_ENTRY_LEN;
     assert_eq!(full[p], 255, "full master -> sRGB(1.0)");
 
     let mut dimmed_flat = FlatParams::identity(2);
     dimmed_flat.set_master(0.5, [1.0, 1.0, 1.0]);
     let mut dimmed = Vec::new();
-    encode_frame(&plan, &frame, &dimmed_flat, &mut dimmed).unwrap();
+    encode_frame(&plan, &frame, &dimmed_flat, 1, &mut dimmed).unwrap();
     assert_eq!(dimmed[p], 188, "half master -> sRGB(0.5), no re-render");
 }
 
@@ -226,7 +226,7 @@ fn a_generation_mismatch_is_refused() {
     // A frame stamped with NONE (never-published) — a different generation.
     let frame = a_frame(LayoutGeneration::NONE, master, ZoneActiveMask::new(2));
     let mut out = Vec::new();
-    let err = encode_frame(&plan, &frame, &FlatParams::identity(2), &mut out).unwrap_err();
+    let err = encode_frame(&plan, &frame, &FlatParams::identity(2), 0, &mut out).unwrap_err();
     assert_eq!(
         err,
         PreviewEncodeError::GenerationMismatch {
@@ -281,6 +281,6 @@ fn descriptor_and_frame_share_the_generation_used_by_the_guard() {
 
     // And a matching pair encodes without error.
     let mut out = Vec::new();
-    encode_frame(&plan, &frame, &FlatParams::identity(2), &mut out).unwrap();
+    encode_frame(&plan, &frame, &FlatParams::identity(2), 0, &mut out).unwrap();
     assert_eq!(u64_at(&out, 16), desc.generation);
 }
