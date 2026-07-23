@@ -15,6 +15,12 @@ prisma-core = { path = "../prisma-core" }    # OverlapSnapshot: the frame's clas
 prisma-output = { path = "../prisma-output" } # FlatParams + the SHARED scale_component (§5.2 step 6)
 half = "2"                # the canonical master buffer is linear-light f16 (§5.2)
 glam = "0.29"             # pixel positions, as in prisma-patch
+# The static descriptor is JSON (sent once, human-inspectable, trivial to parse
+# in the JS viewer); the per-frame data is hand-rolled binary (P2). Per-frame
+# never touches serde.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["serde"] }  # zone ids in the descriptor
 
 [dev-dependencies]
 uuid = { version = "1", features = ["v4"] }  # building test patches

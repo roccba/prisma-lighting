@@ -8,11 +8,11 @@
 //! IPC, no effect logic duplicated in the webview.
 //!
 //! Layering (M6 build steps):
-//!   - [`plan`]  — master buffer → linear-light screen RGB (P0).
-//!   - [`frame`] — the preview handoff payload and its producer (P1).
-//!   - `encode` / `descriptor` — sRGB + the binary wire format (P2).
-//!   - `loop`    — the fixed-interval preview thread (P3).
-//!   - `sink`    — in-process and WebSocket transports (P4).
+//!   - [`plan`]       — master buffer → linear-light screen RGB (P0).
+//!   - [`frame`]      — the preview handoff payload and its producer (P1).
+//!   - [`encode`] / [`descriptor`] — sRGB + the binary wire format (P2).
+//!   - `loop`         — the fixed-interval preview thread (P3).
+//!   - `sink`         — in-process and WebSocket transports (P4).
 //!
 //! # It is never on the critical path
 //!
@@ -20,8 +20,12 @@
 //! output. Its latency is **not** part of the §1.5 budget, which is about light on
 //! the rig; under backpressure it drops frames rather than blocking anything.
 
+pub mod descriptor;
+pub mod encode;
 pub mod frame;
 pub mod plan;
 
+pub use descriptor::{DescriptorPixel, DescriptorZone, PreviewDescriptor};
+pub use encode::{encode_frame, linear_to_srgb8, PreviewEncodeError, FORMAT_VERSION, MAGIC};
 pub use frame::{preview_handoff, PreviewConsumer, PreviewFrame, PreviewProducer, ZoneActiveMask};
 pub use plan::{PreviewPixel, PreviewPlan, NO_COMPONENT};

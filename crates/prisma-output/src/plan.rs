@@ -152,6 +152,17 @@ impl FlatParams {
         self.zones.len()
     }
 
+    /// A zone's emitted tint `[d·r, d·g, d·b]` — its colour already scaled by its
+    /// dimmer. This is what a preview strip swatch should show: it darkens as the
+    /// fader drops. Black for an unknown slot (nothing to show). Not used on the
+    /// DMX path; exposed for the M6 preview, which reads the same live `FlatParams`.
+    #[inline]
+    pub fn zone_tint(&self, slot: usize) -> [f32; 3] {
+        self.zones
+            .get(slot)
+            .map_or([0.0; 3], |z| [z[0], z[1], z[2]])
+    }
+
     #[inline]
     fn master_scale(&self, channel: usize) -> f32 {
         self.master[channel.min(3)]

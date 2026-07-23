@@ -973,6 +973,8 @@ dependencies = [
  "prisma-core",
  "prisma-output",
  "prisma-patch",
+ "serde",
+ "serde_json",
  "uuid",
 ]
 
