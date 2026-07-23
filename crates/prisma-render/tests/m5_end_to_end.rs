@@ -50,7 +50,9 @@ use prisma_render::overlap::{zone_cell_coverage, OverlapCounter};
 use prisma_render::readback::create_render_target;
 use prisma_render::render_loop::{run_render_loop, FrameContent, RenderLoop, RenderLoopConfig};
 use prisma_render::sample::{SamplePlan, Sampler};
-use prisma_render::{create_cell_mask, effects, AdapterPreference, Gpu, LiveParams};
+use prisma_render::{create_cell_mask, effects, Gpu, LiveParams};
+
+mod common;
 use uuid::Uuid;
 
 const WIDTH: u32 = 5;
@@ -206,10 +208,7 @@ fn wait_for(handle: &sink::SinkHandle, what: &str, done: impl Fn(&[u8]) -> bool)
 
 #[test]
 fn m5_zones_run_independent_effects_with_live_dimmer_and_additive_overlap() {
-    let gpu = match Gpu::new(AdapterPreference::Software) {
-        Ok(g) => g,
-        Err(e) => panic!("software adapter required: {e}"),
-    };
+    let gpu = common::software_gpu();
 
     // 1. The virtual sink stands in for the physical rig (M1's arrangement).
     let sink = sink::spawn(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
@@ -259,16 +258,16 @@ fn m5_zones_run_independent_effects_with_live_dimmer_and_additive_overlap() {
 
     // 4. The real render loop, on this thread's own engine.
     let textures: Vec<wgpu::Texture> = (0..3)
-        .map(|_| create_render_target(&gpu, WIDTH, 1))
+        .map(|_| create_render_target(gpu, WIDTH, 1))
         .collect();
     let mut effects_v = Vec::new();
     // left: a flat solid; right: a gradient — unmistakably different patterns.
-    let mut left = EffectInstance::new(&gpu, &tree, "/m5/left", &effects::solid());
+    let mut left = EffectInstance::new(gpu, &tree, "/m5/left", &effects::solid());
     for (c, v) in [("r", 0.25), ("g", 0.25), ("b", 0.25)] {
         tree.write_path(&format!("/m5/left/param/{c}"), v, ui());
     }
     left.render(
-        &gpu,
+        gpu,
         &ClockSnapshot {
             frame: 0,
             wall_ns: 0,
@@ -283,17 +282,17 @@ fn m5_zones_run_independent_effects_with_live_dimmer_and_additive_overlap() {
     );
     effects_v.push(left);
     effects_v.push(EffectInstance::new(
-        &gpu,
+        gpu,
         &tree,
         "/m5/right",
         &effects::gradient(),
     ));
-    let mut strobe = EffectInstance::new(&gpu, &tree, "/m5/strobe", &effects::solid());
+    let mut strobe = EffectInstance::new(gpu, &tree, "/m5/strobe", &effects::solid());
     for c in ["r", "g", "b"] {
         tree.write_path(&format!("/m5/strobe/param/{c}"), 0.25, ui());
     }
     strobe.render(
-        &gpu,
+        gpu,
         &ClockSnapshot {
             frame: 0,
             wall_ns: 0,
@@ -310,11 +309,11 @@ fn m5_zones_run_independent_effects_with_live_dimmer_and_additive_overlap() {
 
     let coverage: Vec<wgpu::Buffer> = zone_cell_coverage(&patch, &index)
         .iter()
-        .map(|m| create_cell_mask(&gpu, m))
+        .map(|m| create_cell_mask(gpu, m))
         .collect();
 
     let mut content = ZoneContent {
-        compositor: Compositor::new(&gpu),
+        compositor: Compositor::new(gpu),
         textures,
         effects: effects_v,
         coverage,
@@ -322,9 +321,9 @@ fn m5_zones_run_independent_effects_with_live_dimmer_and_additive_overlap() {
     };
 
     let sample_plan = SamplePlan::compile(&patch, &index);
-    let sampler = Sampler::new(&gpu, &sample_plan);
+    let sampler = Sampler::new(gpu, &sample_plan);
     let mut engine = RenderLoop::with_default_slots(
-        &gpu,
+        gpu,
         sampler,
         producer,
         (WIDTH, 1),
@@ -338,7 +337,6 @@ fn m5_zones_run_independent_effects_with_live_dimmer_and_additive_overlap() {
     // mid-test while the output loop keeps going.
     let render_stats = std::thread::scope(|scope| {
         let handle = {
-            let gpu = &gpu;
             let live = live.clone();
             let stop = Arc::clone(&render_stop);
             scope.spawn(move || {

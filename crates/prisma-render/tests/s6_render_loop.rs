@@ -25,12 +25,11 @@ use prisma_render::render_loop::{
     run_render_loop, FrameContent, RenderLoop, RenderLoopConfig, TickOutcome,
 };
 use prisma_render::sample::{SamplePlan, Sampler};
-use prisma_render::{AdapterPreference, Gpu};
-use uuid::Uuid;
+mod common;
 
-fn software_gpu() -> Gpu {
-    Gpu::new(AdapterPreference::Software).expect("software (lavapipe) adapter must be available")
-}
+use common::software_gpu;
+use prisma_render::Gpu;
+use uuid::Uuid;
 
 /// Two RGB pixels in a 2x1 matrix, both in one zone.
 fn test_patch() -> Patch {
@@ -152,7 +151,7 @@ fn setup(
 #[test]
 fn the_loop_renders_and_publishes_frames() {
     let gpu = software_gpu();
-    let (mut engine, mut consumer, index, mut counter, zones, _patch) = setup(&gpu, 3);
+    let (mut engine, mut consumer, index, mut counter, zones, _patch) = setup(gpu, 3);
     let mut clock = MasterClock::new(Arc::new(SystemClock::new()));
     let mut content = FlatContent {
         value: 0.5,
@@ -160,7 +159,7 @@ fn the_loop_renders_and_publishes_frames() {
     };
 
     let stats = run_render_loop(
-        &gpu,
+        gpu,
         &mut engine,
         &mut clock,
         &mut counter,
@@ -203,7 +202,7 @@ fn an_exhausted_ring_skips_the_frame_instead_of_waiting() {
     // The rule: with every slot in flight, the loop must NOT block, must NOT
     // render, and must count the stall.
     let gpu = software_gpu();
-    let (mut engine, _consumer, _index, mut counter, zones, _patch) = setup(&gpu, 1);
+    let (mut engine, _consumer, _index, mut counter, zones, _patch) = setup(gpu, 1);
     let mut clock = MasterClock::new(Arc::new(SystemClock::new()));
     let mut content = FlatContent {
         value: 0.25,
@@ -214,7 +213,7 @@ fn an_exhausted_ring_skips_the_frame_instead_of_waiting() {
     let overlap = counter.snapshot();
 
     // First tick claims the only slot and starts a readback.
-    let first = engine.tick(&gpu, &clock.tick(), &zones, &overlap, &mut content);
+    let first = engine.tick(gpu, &clock.tick(), &zones, &overlap, &mut content);
     assert_eq!(first, TickOutcome::Rendered);
 
     // Immediately tick again. Either the readback already completed (the slot was
@@ -225,7 +224,7 @@ fn an_exhausted_ring_skips_the_frame_instead_of_waiting() {
     let mut stalls_seen = 0;
     for _ in 0..50 {
         let snapshot = clock.tick();
-        if engine.tick(&gpu, &snapshot, &zones, &overlap, &mut content) == TickOutcome::Stalled {
+        if engine.tick(gpu, &snapshot, &zones, &overlap, &mut content) == TickOutcome::Stalled {
             stalls_seen += 1;
         }
     }
@@ -264,10 +263,10 @@ fn a_readback_carries_the_snapshot_of_its_own_frame() {
     let patch = test_patch();
     let index = patch.compile().unwrap();
     let plan = SamplePlan::compile(&patch, &index);
-    let sampler = Sampler::new(&gpu, &plan);
-    let mut ring = ReadbackRing::new(&gpu, index.master_buffer_len(), 3);
+    let sampler = Sampler::new(gpu, &plan);
+    let mut ring = ReadbackRing::new(gpu, index.master_buffer_len(), 3);
 
-    let framebuffer = prisma_render::readback::create_render_target(&gpu, patch.matrix_size[0], 1);
+    let framebuffer = prisma_render::readback::create_render_target(gpu, patch.matrix_size[0], 1);
 
     // Two distinguishable snapshots.
     let mut first = OverlapSnapshot::zeroed(2, 2, 6);
@@ -283,17 +282,17 @@ fn a_readback_carries_the_snapshot_of_its_own_frame() {
 
     // Submit two frames, each with its own snapshot.
     let slot_a = ring.try_claim().expect("slot free");
-    sampler.gather_into(&gpu, &framebuffer, ring.buffer(slot_a));
+    sampler.gather_into(gpu, &framebuffer, ring.buffer(slot_a));
     ring.begin_map(slot_a, Instant::now(), 1, Some(Arc::clone(&first)));
 
     let slot_b = ring.try_claim().expect("slot free");
-    sampler.gather_into(&gpu, &framebuffer, ring.buffer(slot_b));
+    sampler.gather_into(gpu, &framebuffer, ring.buffer(slot_b));
     ring.begin_map(slot_b, Instant::now(), 2, Some(Arc::clone(&second)));
 
     // Drain: the OLDEST completed readback comes first, with ITS snapshot.
     let mut seen: Vec<(u64, Option<u32>)> = Vec::new();
     for _ in 0..1000 {
-        ring.poll(&gpu);
+        ring.poll(gpu);
         while let Some(entry) = ring.consume_ready(Instant::now(), |meta, _data| {
             (
                 meta.frame,
@@ -324,7 +323,7 @@ fn a_readback_carries_the_snapshot_of_its_own_frame() {
 fn stalls_and_failures_are_reported_separately() {
     // They mean different things: a stall is "too slow", a failure is "broken".
     let gpu = software_gpu();
-    let ring = ReadbackRing::new(&gpu, 6, 2);
+    let ring = ReadbackRing::new(gpu, 6, 2);
     assert_eq!(ring.stalls(), 0);
     assert_eq!(ring.failures(), 0);
     assert_eq!(ring.slot_count(), 2);

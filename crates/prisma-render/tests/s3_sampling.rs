@@ -25,16 +25,15 @@ use prisma_patch::{
 };
 use prisma_render::readback::create_render_target;
 use prisma_render::sample::{SamplePlan, Sampler};
-use prisma_render::{AdapterPreference, Gpu};
+mod common;
+
+use common::software_gpu;
+use prisma_render::Gpu;
 use uuid::Uuid;
 
 /// The same golden rig M2 pinned down: 8 pixels, tube A (RGB/GRB) on row 0 and
 /// tube B (RGBW) on row 1, in an 8x2 matrix. Non-square on purpose.
 const GOLDEN: &str = include_str!("../../prisma-patch/tests/data/test_rig.patch.json");
-
-fn software_gpu() -> Gpu {
-    Gpu::new(AdapterPreference::Software).expect("software (lavapipe) adapter must be available")
-}
 
 // ---- the synthetic pattern -------------------------------------------------
 
@@ -115,7 +114,7 @@ fn assert_component(master: &[f16], offset: usize, k: usize, expected: f32, ctx:
 #[test]
 fn each_pixel_gathers_its_own_cell() {
     let gpu = software_gpu();
-    let (index, master) = gather_rig(&gpu, |_, _| true);
+    let (index, master) = gather_rig(gpu, |_, _| true);
     assert_eq!(master.len(), index.master_buffer_len());
 
     // Tube A: globals 0..3 on row 0; tube B: globals 4..7 on row 1. Each pixel's
@@ -149,7 +148,7 @@ fn a_swapped_axis_would_be_caught() {
     // they would read each other's cell; a symmetric pattern would make that
     // invisible, which is exactly the bug this asymmetry exists to catch.
     let gpu = software_gpu();
-    let (index, master) = gather_rig(&gpu, |_, _| true);
+    let (index, master) = gather_rig(gpu, |_, _| true);
 
     // global 1 is tube A pixel 1 → cell (1,0); global 4 is tube B pixel 0 → (0,1).
     let a = index.pixel_component_offset(1) as usize;
@@ -173,7 +172,7 @@ fn lighting_one_zone_touches_only_its_member_pixels() {
     // sector-left (tube A pixels 0 and 1 → cells (0,0) and (1,0)); every other
     // component of the master buffer must stay exactly zero.
     let gpu = software_gpu();
-    let (index, master) = gather_rig(&gpu, |x, y| y == 0 && x < 2);
+    let (index, master) = gather_rig(gpu, |x, y| y == 0 && x < 2);
 
     let members: Vec<u32> = index.zone_members(0).to_vec();
     assert_eq!(members, vec![0, 1], "sector-left is tube A pixels 0 and 1");
@@ -248,11 +247,11 @@ fn pixels_sharing_a_cell_read_the_same_texel_by_design() {
     let gpu = software_gpu();
     let patch = two_pixels_one_cell();
     let index = patch.compile().expect("valid patch");
-    let fb = upload_pattern(&gpu, 2, 1, |_, _| true);
+    let fb = upload_pattern(gpu, 2, 1, |_, _| true);
     let plan = SamplePlan::compile(&patch, &index);
-    let sampler = Sampler::new(&gpu, &plan);
-    sampler.gather(&gpu, &fb);
-    let master = sampler.read_master_f16(&gpu);
+    let sampler = Sampler::new(gpu, &plan);
+    sampler.gather(gpu, &fb);
+    let master = sampler.read_master_f16(gpu);
 
     let expected = pattern(1, 0);
     for global in 0..2u32 {
@@ -295,11 +294,11 @@ fn an_out_of_range_pixel_gathers_black_rather_than_a_clamped_texel() {
     let patch = pixel_outside_matrix();
     // Bypass validate() deliberately to exercise the runtime path.
     let index = PatchIndex::build(&patch).expect("index builds without validation");
-    let fb = upload_pattern(&gpu, 2, 1, |_, _| true);
+    let fb = upload_pattern(gpu, 2, 1, |_, _| true);
     let plan = SamplePlan::compile(&patch, &index);
-    let sampler = Sampler::new(&gpu, &plan);
-    sampler.gather(&gpu, &fb);
-    let master = sampler.read_master_f16(&gpu);
+    let sampler = Sampler::new(gpu, &plan);
+    sampler.gather(gpu, &fb);
+    let master = sampler.read_master_f16(gpu);
 
     // Pixel 0 is in range and gathers normally.
     let in_range = index.pixel_component_offset(0) as usize;

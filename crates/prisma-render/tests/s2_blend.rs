@@ -35,7 +35,10 @@ use prisma_render::blend::{Compositor, Layer};
 use prisma_render::effect::EffectInstance;
 use prisma_render::effects;
 use prisma_render::readback::{create_render_target, read_rgba16f};
-use prisma_render::{AdapterPreference, Gpu};
+mod common;
+
+use common::software_gpu;
+use prisma_render::Gpu;
 
 const EPS: f32 = 1.0 / 128.0;
 
@@ -48,10 +51,6 @@ fn still_clock() -> ClockSnapshot {
         bpm: 120.0,
         playing: false,
     }
-}
-
-fn software_gpu() -> Gpu {
-    Gpu::new(AdapterPreference::Software).expect("software (lavapipe) adapter must be available")
 }
 
 // ---- reference blend math (from the definitions, independent of the shader) ----
@@ -168,7 +167,7 @@ fn distinct_modes_are_actually_distinct() {
 fn every_blend_mode_matches_its_linear_definition() {
     let gpu = software_gpu();
     let tree = ParameterTree::with_defaults();
-    let comp = Compositor::new(&gpu);
+    let comp = Compositor::new(gpu);
 
     for mode in [
         BlendMode::Normal,
@@ -178,7 +177,7 @@ fn every_blend_mode_matches_its_linear_definition() {
         BlendMode::Mask,
         BlendMode::Max,
     ] {
-        let px = blend_on_gpu(&gpu, &tree, &comp, A, B, mode, 1.0);
+        let px = blend_on_gpu(gpu, &tree, &comp, A, B, mode, 1.0);
         let want = blended_ref(A, B, mode);
         assert_uniform(&px, want, &format!("{mode:?}"));
     }
@@ -188,12 +187,12 @@ fn every_blend_mode_matches_its_linear_definition() {
 fn opacity_lerps_between_accumulator_and_blend() {
     let gpu = software_gpu();
     let tree = ParameterTree::with_defaults();
-    let comp = Compositor::new(&gpu);
+    let comp = Compositor::new(gpu);
 
     // Screen at 0.5 opacity: out = mix(A, Screen(A,B), 0.5).
     let full = blended_ref(A, B, BlendMode::Screen);
     let want = with_opacity(A, full, 0.5);
-    let px = blend_on_gpu(&gpu, &tree, &comp, A, B, BlendMode::Screen, 0.5);
+    let px = blend_on_gpu(gpu, &tree, &comp, A, B, BlendMode::Screen, 0.5);
     assert_uniform(&px, want, "Screen @ opacity 0.5");
 
     // And it must land strictly between A and the full-opacity blend — proof the
@@ -209,14 +208,14 @@ fn opacity_lerps_between_accumulator_and_blend() {
 fn stack_folds_bottom_to_top_and_order_matters() {
     let gpu = software_gpu();
     let tree = ParameterTree::with_defaults();
-    let comp = Compositor::new(&gpu);
+    let comp = Compositor::new(gpu);
 
     let c0 = [0.2, 0.3, 0.1];
     let c1 = [0.3, 0.2, 0.4];
     let c2 = [0.5, 0.6, 0.7];
-    let t0 = render_solid(&gpu, &tree, "/s2/l0", c0);
-    let t1 = render_solid(&gpu, &tree, "/s2/l1", c1);
-    let t2 = render_solid(&gpu, &tree, "/s2/l2", c2);
+    let t0 = render_solid(gpu, &tree, "/s2/l0", c0);
+    let t1 = render_solid(gpu, &tree, "/s2/l1", c1);
+    let t2 = render_solid(gpu, &tree, "/s2/l2", c2);
 
     // Forward stack over black: Normal(c0) → Add(c1) → Multiply(c2).
     // black → c0 → clamp(c0+c1) → that * c2, computed here from the definitions.
@@ -224,7 +223,7 @@ fn stack_folds_bottom_to_top_and_order_matters() {
     let reference = blended_ref(after_add, c2, BlendMode::Multiply); // (0.25, 0.30, 0.35)
 
     let forward = comp.composite_over_black(
-        &gpu,
+        gpu,
         &[
             Layer {
                 texture: &t0,
@@ -246,7 +245,7 @@ fn stack_folds_bottom_to_top_and_order_matters() {
         2,
     );
     assert_uniform(
-        &read_rgba16f(&gpu, &forward, 2, 2),
+        &read_rgba16f(gpu, &forward, 2, 2),
         reference,
         "forward fold",
     );
@@ -254,7 +253,7 @@ fn stack_folds_bottom_to_top_and_order_matters() {
     // Reversed order composites differently (blending is not commutative). We only
     // need it to differ from `reference`, proving order is respected.
     let reversed = comp.composite_over_black(
-        &gpu,
+        gpu,
         &[
             Layer {
                 texture: &t2,
@@ -275,7 +274,7 @@ fn stack_folds_bottom_to_top_and_order_matters() {
         2,
         2,
     );
-    let rev = read_rgba16f(&gpu, &reversed, 2, 2);
+    let rev = read_rgba16f(gpu, &reversed, 2, 2);
     let rev0 = [rev[0][0].to_f32(), rev[0][1].to_f32(), rev[0][2].to_f32()];
     assert!(
         linf(rev0, reference) > 0.1,

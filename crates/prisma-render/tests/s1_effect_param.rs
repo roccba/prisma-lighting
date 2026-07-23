@@ -17,7 +17,9 @@ use prisma_core::{ClockSnapshot, ParameterTree};
 use prisma_render::effect::EffectInstance;
 use prisma_render::effects;
 use prisma_render::readback::{create_render_target, read_rgba16f};
-use prisma_render::{AdapterPreference, Gpu};
+
+mod common;
+use common::software_gpu;
 
 /// Clock input for a static effect: only `resolution`/params matter here; time is
 /// exercised by animated effects in later steps.
@@ -50,26 +52,22 @@ fn assert_gray(px: [f16; 4], expected: f32) {
 }
 
 /// Build a software (lavapipe) GPU; the deterministic correctness target.
-fn software_gpu() -> Gpu {
-    Gpu::new(AdapterPreference::Software).expect("software (lavapipe) adapter must be available")
-}
-
 #[test]
 fn tree_write_flows_through_uniform_to_pixel() {
     let gpu = software_gpu();
     let tree = ParameterTree::with_defaults();
-    let mut effect = EffectInstance::new(&gpu, &tree, "/test/gradient", &effects::gradient());
+    let mut effect = EffectInstance::new(gpu, &tree, "/test/gradient", &effects::gradient());
 
     // 5 columns → normalized positions t = 0, .25, .5, .75, 1 (all exact in f16).
     let (w, h) = (5u32, 1u32);
-    let target = create_render_target(&gpu, w, h);
+    let target = create_render_target(gpu, w, h);
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
     let clock = still_clock();
     let src = SourceId::new(priority::UI, 1);
 
     // --- 1. Defaults (start=0.0, end=1.0): a full 0→1 ramp across the row. ---
-    effect.render(&gpu, &clock, &view, w, h);
-    let px = read_rgba16f(&gpu, &target, w, h);
+    effect.render(gpu, &clock, &view, w, h);
+    let px = read_rgba16f(gpu, &target, w, h);
     assert_gray(px[0], 0.0);
     assert_gray(px[1], 0.25);
     assert_gray(px[2], 0.5);
@@ -83,8 +81,8 @@ fn tree_write_flows_through_uniform_to_pixel() {
         .expect("param path must exist (registered by the effect)");
     assert_eq!(out, prisma_core::WriteOutcome::Accepted);
 
-    effect.render(&gpu, &clock, &view, w, h);
-    let px = read_rgba16f(&gpu, &target, w, h);
+    effect.render(gpu, &clock, &view, w, h);
+    let px = read_rgba16f(gpu, &target, w, h);
     assert_gray(px[0], 0.5); // left edge followed `start`
     assert_gray(px[2], 0.75); // mix(0.5, 1.0, 0.5)
     assert_gray(px[4], 1.0); // right edge unchanged (`end` still default)
@@ -94,8 +92,8 @@ fn tree_write_flows_through_uniform_to_pixel() {
     //         (exact in f16) → every column identical. ---
     tree.write_path("/test/gradient/param/start", 0.375, src);
     tree.write_path("/test/gradient/param/end", 0.375, src);
-    effect.render(&gpu, &clock, &view, w, h);
-    let px = read_rgba16f(&gpu, &target, w, h);
+    effect.render(gpu, &clock, &view, w, h);
+    let px = read_rgba16f(gpu, &target, w, h);
     for (i, p) in px.iter().enumerate() {
         assert!(
             (red(*p) - 0.375).abs() < EPS,
@@ -112,14 +110,14 @@ fn defaults_come_from_the_manifest_descriptor() {
     // tree — i.e. the descriptor's `default_norm` is the initial uniform value.
     let gpu = software_gpu();
     let tree = ParameterTree::with_defaults();
-    let mut effect = EffectInstance::new(&gpu, &tree, "/test/g2", &effects::gradient());
+    let mut effect = EffectInstance::new(gpu, &tree, "/test/g2", &effects::gradient());
 
     let (w, h) = (3u32, 1u32);
-    let target = create_render_target(&gpu, w, h);
+    let target = create_render_target(gpu, w, h);
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
 
-    effect.render(&gpu, &still_clock(), &view, w, h);
-    let px = read_rgba16f(&gpu, &target, w, h);
+    effect.render(gpu, &still_clock(), &view, w, h);
+    let px = read_rgba16f(gpu, &target, w, h);
     assert_gray(px[0], 0.0); // start default
     assert_gray(px[1], 0.5); // midpoint
     assert_gray(px[2], 1.0); // end default
@@ -131,7 +129,7 @@ fn effect_registers_its_params_into_the_tree() {
     // paths exist after construction and are walkable for MIDI-learn/UI.
     let gpu = software_gpu();
     let tree = ParameterTree::with_defaults();
-    let _effect = EffectInstance::new(&gpu, &tree, "/test/g3", &effects::gradient());
+    let _effect = EffectInstance::new(gpu, &tree, "/test/g3", &effects::gradient());
 
     let nodes = tree.walk("/test/g3");
     let paths: Vec<&str> = nodes.iter().map(|n| &*n.path).collect();

@@ -23,14 +23,13 @@ use prisma_render::effect::EffectInstance;
 use prisma_render::overlap::{zone_cell_coverage, OverlapCounter};
 use prisma_render::readback::create_render_target;
 use prisma_render::sample::{SamplePlan, Sampler};
-use prisma_render::{create_cell_mask, effects, AdapterPreference, Gpu};
+mod common;
+
+use common::software_gpu;
+use prisma_render::{create_cell_mask, effects, Gpu};
 use uuid::Uuid;
 
 const EPS: f32 = 1.0 / 128.0;
-
-fn software_gpu() -> Gpu {
-    Gpu::new(AdapterPreference::Software).expect("software (lavapipe) adapter must be available")
-}
 
 fn still_clock() -> ClockSnapshot {
     ClockSnapshot {
@@ -413,12 +412,12 @@ fn neither_pixel_of_a_mixed_cell_is_dimmed_twice() {
     zones.set_dimmer(1, 1.0);
     counter.sync(&zones);
     let snap = counter.snapshot();
-    let cell_mask = create_cell_mask(&gpu, snap.cell_mask_bytes());
+    let cell_mask = create_cell_mask(gpu, snap.cell_mask_bytes());
     let coverage = zone_cell_coverage(&patch, &index);
-    let cov_bufs: Vec<wgpu::Buffer> = coverage.iter().map(|m| create_cell_mask(&gpu, m)).collect();
+    let cov_bufs: Vec<wgpu::Buffer> = coverage.iter().map(|m| create_cell_mask(gpu, m)).collect();
 
-    let white = solid_texture(&gpu, &tree, "/s4/a", [1.0, 1.0, 1.0], 2);
-    let black = solid_texture(&gpu, &tree, "/s4/b", [0.0, 0.0, 0.0], 2);
+    let white = solid_texture(gpu, &tree, "/s4/a", [1.0, 1.0, 1.0], 2);
+    let black = solid_texture(gpu, &tree, "/s4/b", [0.0, 0.0, 0.0], 2);
 
     let composites = vec![
         ZoneComposite {
@@ -436,7 +435,7 @@ fn neither_pixel_of_a_mixed_cell_is_dimmed_twice() {
             coverage: &cov_bufs[1],
         },
     ];
-    let values = composite_and_gather(&gpu, &patch, &index, &composites, &cell_mask);
+    let values = composite_and_gather(gpu, &patch, &index, &composites, &cell_mask);
 
     for (p, v) in values.iter().enumerate() {
         assert!(
@@ -474,14 +473,14 @@ fn two_zones_run_unmistakably_different_effects_independently() {
     zones.set_dimmer(1, 1.0);
     counter.sync(&zones);
     let snap = counter.snapshot();
-    let cell_mask = create_cell_mask(&gpu, snap.cell_mask_bytes());
+    let cell_mask = create_cell_mask(gpu, snap.cell_mask_bytes());
     let coverage = zone_cell_coverage(&patch, &index);
-    let cov_bufs: Vec<wgpu::Buffer> = coverage.iter().map(|m| create_cell_mask(&gpu, m)).collect();
+    let cov_bufs: Vec<wgpu::Buffer> = coverage.iter().map(|m| create_cell_mask(gpu, m)).collect();
 
-    let flat = solid_texture(&gpu, &tree, "/s4/left", [0.25, 0.25, 0.25], 5);
+    let flat = solid_texture(gpu, &tree, "/s4/left", [0.25, 0.25, 0.25], 5);
     // Gradient defaults: 0 at the left edge, 1 at the right, over 5 cells → the
     // exact quarters 0, .25, .5, .75, 1.
-    let ramp = gradient_texture(&gpu, &tree, "/s4/right", 5);
+    let ramp = gradient_texture(gpu, &tree, "/s4/right", 5);
 
     let composites = vec![
         ZoneComposite {
@@ -499,7 +498,7 @@ fn two_zones_run_unmistakably_different_effects_independently() {
             coverage: &cov_bufs[1],
         },
     ];
-    let v = composite_and_gather(&gpu, &patch, &index, &composites, &cell_mask);
+    let v = composite_and_gather(gpu, &patch, &index, &composites, &cell_mask);
 
     // Left zone: flat, and untouched by the gradient.
     assert!((v[0] - 0.25).abs() < EPS, "pixel 0 = {}", v[0]);
@@ -541,12 +540,12 @@ fn an_add_zone_brightens_the_zone_below_instead_of_occluding_it() {
     let snap = counter.snapshot();
     assert!(snap.cell_overlapped(0) && snap.cell_overlapped(1));
 
-    let cell_mask = create_cell_mask(&gpu, snap.cell_mask_bytes());
+    let cell_mask = create_cell_mask(gpu, snap.cell_mask_bytes());
     let coverage = zone_cell_coverage(&patch, &index);
-    let cov_bufs: Vec<wgpu::Buffer> = coverage.iter().map(|m| create_cell_mask(&gpu, m)).collect();
+    let cov_bufs: Vec<wgpu::Buffer> = coverage.iter().map(|m| create_cell_mask(gpu, m)).collect();
 
-    let base = solid_texture(&gpu, &tree, "/s4/base", [0.25, 0.25, 0.25], 2);
-    let flash = solid_texture(&gpu, &tree, "/s4/flash", [0.5, 0.5, 0.5], 2);
+    let base = solid_texture(gpu, &tree, "/s4/base", [0.25, 0.25, 0.25], 2);
+    let flash = solid_texture(gpu, &tree, "/s4/flash", [0.5, 0.5, 0.5], 2);
 
     let mk = |mode: BlendMode| {
         vec![
@@ -569,7 +568,7 @@ fn an_add_zone_brightens_the_zone_below_instead_of_occluding_it() {
 
     // Add: 0.25 + 0.5 = 0.75 — brighter than either input, so the strobe lifted
     // the zone below rather than replacing it.
-    let added = composite_and_gather(&gpu, &patch, &index, &mk(BlendMode::Add), &cell_mask);
+    let added = composite_and_gather(gpu, &patch, &index, &mk(BlendMode::Add), &cell_mask);
     for (p, v) in added.iter().enumerate() {
         assert!((v - 0.75).abs() < EPS, "pixel {p} = {v}, expected 0.75");
         assert!(*v > 0.25, "must brighten the base, not occlude it");
@@ -578,14 +577,14 @@ fn an_add_zone_brightens_the_zone_below_instead_of_occluding_it() {
 
     // Max: max(0.25, 0.5) = 0.5 — also non-occluding (it keeps the brighter of
     // the two), and distinguishable from Add.
-    let maxed = composite_and_gather(&gpu, &patch, &index, &mk(BlendMode::Max), &cell_mask);
+    let maxed = composite_and_gather(gpu, &patch, &index, &mk(BlendMode::Max), &cell_mask);
     for (p, v) in maxed.iter().enumerate() {
         assert!((v - 0.5).abs() < EPS, "pixel {p} = {v}, expected 0.5");
     }
 
     // Contrast: with Normal the strobe WOULD occlude, landing on its own value.
     // Asserting this pins down that Add/Max are doing something different.
-    let normal = composite_and_gather(&gpu, &patch, &index, &mk(BlendMode::Normal), &cell_mask);
+    let normal = composite_and_gather(gpu, &patch, &index, &mk(BlendMode::Normal), &cell_mask);
     for v in &normal {
         assert!((v - 0.5).abs() < EPS);
     }

@@ -14,14 +14,13 @@ use prisma_core::{ClockSnapshot, ParameterTree};
 use prisma_render::effect::EffectInstance;
 use prisma_render::effects;
 use prisma_render::readback::{create_render_target, read_rgba16f};
-use prisma_render::{AdapterPreference, Gpu};
+mod common;
+
+use common::software_gpu;
+use prisma_render::Gpu;
 
 const WIDTH: u32 = 5;
 const EPS: f32 = 1.0 / 128.0;
-
-fn software_gpu() -> Gpu {
-    Gpu::new(AdapterPreference::Software).expect("software (lavapipe) adapter must be available")
-}
 
 fn ui() -> SourceId {
     SourceId::new(priority::UI, 1)
@@ -57,9 +56,9 @@ fn wave_is_a_sine_across_the_matrix() {
     // read off the shader.
     let gpu = software_gpu();
     let tree = ParameterTree::with_defaults();
-    let mut wave = EffectInstance::new(&gpu, &tree, "/fx/wave", &effects::wave());
+    let mut wave = EffectInstance::new(gpu, &tree, "/fx/wave", &effects::wave());
 
-    let v = render(&gpu, &mut wave, &clock_at(0.0));
+    let v = render(gpu, &mut wave, &clock_at(0.0));
     let expected = [0.5, 1.0, 0.5, 0.0, 0.5];
     for (i, want) in expected.iter().enumerate() {
         assert!(
@@ -75,11 +74,11 @@ fn wave_animates_with_show_time() {
     // Speed 1 cycle/s: half a second later the sine is inverted.
     let gpu = software_gpu();
     let tree = ParameterTree::with_defaults();
-    let mut wave = EffectInstance::new(&gpu, &tree, "/fx/wave2", &effects::wave());
+    let mut wave = EffectInstance::new(gpu, &tree, "/fx/wave2", &effects::wave());
     tree.write_real(&tree.resolve("/fx/wave2/param/speed").unwrap(), 1.0, ui());
 
-    let at0 = render(&gpu, &mut wave, &clock_at(0.0));
-    let at_half = render(&gpu, &mut wave, &clock_at(0.5));
+    let at0 = render(gpu, &mut wave, &clock_at(0.0));
+    let at_half = render(gpu, &mut wave, &clock_at(0.5));
     // sin(theta + pi) = -sin(theta), so 0.5 + 0.5*sin flips about 0.5.
     for i in 0..WIDTH as usize {
         assert!(
@@ -99,9 +98,9 @@ fn wave_animates_with_show_time() {
 fn plasma_is_a_varying_field_driven_by_its_parameters() {
     let gpu = software_gpu();
     let tree = ParameterTree::with_defaults();
-    let mut plasma = EffectInstance::new(&gpu, &tree, "/fx/plasma", &effects::plasma());
+    let mut plasma = EffectInstance::new(gpu, &tree, "/fx/plasma", &effects::plasma());
 
-    let v = render(&gpu, &mut plasma, &clock_at(0.0));
+    let v = render(gpu, &mut plasma, &clock_at(0.0));
     assert!(
         v.iter().any(|x| (x - v[0]).abs() > 0.02),
         "plasma must vary across the matrix, got {v:?}"
@@ -114,7 +113,7 @@ fn plasma_is_a_varying_field_driven_by_its_parameters() {
     // `scale` is a real parameter, not decoration: changing it changes the field.
     let scale = tree.resolve("/fx/plasma/param/scale").unwrap();
     tree.write_real(&scale, 18.0, ui());
-    let wide = render(&gpu, &mut plasma, &clock_at(0.0));
+    let wide = render(gpu, &mut plasma, &clock_at(0.0));
     assert!(
         v.iter().zip(&wide).any(|(a, b)| (a - b).abs() > 0.05),
         "scale must change the field: {v:?} vs {wide:?}"
@@ -125,9 +124,9 @@ fn plasma_is_a_varying_field_driven_by_its_parameters() {
 fn plasma_animates_with_show_time() {
     let gpu = software_gpu();
     let tree = ParameterTree::with_defaults();
-    let mut plasma = EffectInstance::new(&gpu, &tree, "/fx/plasma2", &effects::plasma());
-    let at0 = render(&gpu, &mut plasma, &clock_at(0.0));
-    let later = render(&gpu, &mut plasma, &clock_at(1.0));
+    let mut plasma = EffectInstance::new(gpu, &tree, "/fx/plasma2", &effects::plasma());
+    let at0 = render(gpu, &mut plasma, &clock_at(0.0));
+    let later = render(gpu, &mut plasma, &clock_at(1.0));
     assert!(
         at0.iter().zip(&later).any(|(a, b)| (a - b).abs() > 0.05),
         "plasma must evolve over show time"
@@ -141,20 +140,20 @@ fn the_four_core_effects_are_distinguishable_patterns() {
     let gpu = software_gpu();
     let tree = ParameterTree::with_defaults();
 
-    let mut solid = EffectInstance::new(&gpu, &tree, "/fx/s", &effects::solid());
+    let mut solid = EffectInstance::new(gpu, &tree, "/fx/s", &effects::solid());
     for c in ["r", "g", "b"] {
         tree.write_path(&format!("/fx/s/param/{c}"), 0.5, ui());
     }
-    let mut gradient = EffectInstance::new(&gpu, &tree, "/fx/g", &effects::gradient());
-    let mut plasma = EffectInstance::new(&gpu, &tree, "/fx/p", &effects::plasma());
-    let mut wave = EffectInstance::new(&gpu, &tree, "/fx/w", &effects::wave());
+    let mut gradient = EffectInstance::new(gpu, &tree, "/fx/g", &effects::gradient());
+    let mut plasma = EffectInstance::new(gpu, &tree, "/fx/p", &effects::plasma());
+    let mut wave = EffectInstance::new(gpu, &tree, "/fx/w", &effects::wave());
 
     let clock = clock_at(0.0);
     let patterns = [
-        ("solid", render(&gpu, &mut solid, &clock)),
-        ("gradient", render(&gpu, &mut gradient, &clock)),
-        ("plasma", render(&gpu, &mut plasma, &clock)),
-        ("wave", render(&gpu, &mut wave, &clock)),
+        ("solid", render(gpu, &mut solid, &clock)),
+        ("gradient", render(gpu, &mut gradient, &clock)),
+        ("plasma", render(gpu, &mut plasma, &clock)),
+        ("wave", render(gpu, &mut wave, &clock)),
     ];
 
     // Solid is the only flat one; the other three vary.

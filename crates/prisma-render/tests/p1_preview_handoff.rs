@@ -30,12 +30,11 @@ use prisma_render::render_loop::{
     run_render_loop, FrameContent, RenderLoop, RenderLoopConfig, TickOutcome,
 };
 use prisma_render::sample::{SamplePlan, Sampler};
-use prisma_render::{AdapterPreference, Gpu};
-use uuid::Uuid;
+mod common;
 
-fn software_gpu() -> Gpu {
-    Gpu::new(AdapterPreference::Software).expect("software (lavapipe) adapter must be available")
-}
+use common::software_gpu;
+use prisma_render::Gpu;
+use uuid::Uuid;
 
 /// Two RGB pixels in a 2x1 matrix, in two overlapping zones so solo has something
 /// to silence.
@@ -178,11 +177,11 @@ fn pump_one_frame(s: &mut Setup, gpu: &Gpu, clock: &mut MasterClock, content: &m
         .tick(gpu, &clock.tick(), &s.zones, &overlap, content);
     assert_eq!(outcome, TickOutcome::Rendered);
 
-    // A generous safety net against a genuinely hung readback, NOT a latency
-    // assertion (the preview is not on the §1.5 budget). It must be slack enough to
-    // survive lavapipe device contention when the whole workspace's GPU test
-    // binaries run in parallel — a 2 s bound flaked there.
-    let deadline = Instant::now() + Duration::from_secs(30);
+    // A safety net against a genuinely hung readback, NOT a latency assertion (the
+    // preview is not on the §1.5 budget). With the shared GPU (tests/common) there
+    // is no bring-up contention, so the readback lands in well under a millisecond;
+    // this bound only has to catch a real hang, which is what it is for.
+    let deadline = Instant::now() + Duration::from_secs(5);
     while !s.preview.advance() {
         s.engine.poll_and_drain(gpu);
         assert!(Instant::now() < deadline, "preview frame never arrived");
@@ -198,11 +197,11 @@ fn one_render_feeds_both_output_and_preview() {
     let mut zones = ZoneStates::new(2);
     zones.set_dimmer(0, 1.0);
     zones.set_dimmer(1, 1.0);
-    let mut s = setup(&gpu, zones);
+    let mut s = setup(gpu, zones);
     let mut clock = MasterClock::new(Arc::new(SystemClock::new()));
     let mut content = FlatContent { value: 0.5 };
 
-    pump_one_frame(&mut s, &gpu, &mut clock, &mut content);
+    pump_one_frame(&mut s, gpu, &mut clock, &mut content);
 
     let out = s.output.current();
     let pv = s.preview.current();
@@ -244,7 +243,7 @@ fn the_active_mask_uses_is_active_not_contributes_pixels() {
     zones.set_dimmer(0, 1.0);
     zones.set_dimmer(1, 1.0);
     zones.set_solo(0, true);
-    let mut s = setup(&gpu, zones);
+    let mut s = setup(gpu, zones);
     let mut clock = MasterClock::new(Arc::new(SystemClock::new()));
     let mut content = FlatContent { value: 0.5 };
 
@@ -255,7 +254,7 @@ fn the_active_mask_uses_is_active_not_contributes_pixels() {
         "silenced zone contributes no pixels"
     );
 
-    pump_one_frame(&mut s, &gpu, &mut clock, &mut content);
+    pump_one_frame(&mut s, gpu, &mut clock, &mut content);
     let pv = s.preview.current();
 
     assert!(pv.zone_active.is_active(0), "soloed zone is active");
@@ -274,11 +273,11 @@ fn a_preview_frame_carries_the_snapshot_of_its_own_frame() {
     let mut zones = ZoneStates::new(2);
     zones.set_dimmer(0, 1.0);
     // zone 1 down for the first frame.
-    let mut s = setup(&gpu, zones);
+    let mut s = setup(gpu, zones);
     let mut clock = MasterClock::new(Arc::new(SystemClock::new()));
     let mut content = FlatContent { value: 0.5 };
 
-    pump_one_frame(&mut s, &gpu, &mut clock, &mut content);
+    pump_one_frame(&mut s, gpu, &mut clock, &mut content);
     let first = s.preview.current();
     assert!(first.zone_active.is_active(0));
     assert!(!first.zone_active.is_active(1), "zone 1 was down");
@@ -286,7 +285,7 @@ fn a_preview_frame_carries_the_snapshot_of_its_own_frame() {
 
     // Bring zone 1 up and render again.
     s.zones.set_dimmer(1, 1.0);
-    pump_one_frame(&mut s, &gpu, &mut clock, &mut content);
+    pump_one_frame(&mut s, gpu, &mut clock, &mut content);
     let second = s.preview.current();
     assert!(second.zone_active.is_active(1), "zone 1 now up");
     assert!(
@@ -302,10 +301,10 @@ fn no_preview_attached_costs_nothing_and_still_feeds_output() {
     let patch = two_zone_patch();
     let index = patch.compile().unwrap();
     let plan = SamplePlan::compile(&patch, &index);
-    let sampler = Sampler::new(&gpu, &plan);
+    let sampler = Sampler::new(gpu, &plan);
     let (producer, mut output) = frame_handoff(index.master_buffer_len());
     let mut engine = RenderLoop::new(
-        &gpu,
+        gpu,
         sampler,
         producer,
         (patch.matrix_size[0], patch.matrix_size[1]),
@@ -321,7 +320,7 @@ fn no_preview_attached_costs_nothing_and_still_feeds_output() {
     let mut content = FlatContent { value: 0.25 };
 
     let stats = run_render_loop(
-        &gpu,
+        gpu,
         &mut engine,
         &mut clock,
         &mut counter,
