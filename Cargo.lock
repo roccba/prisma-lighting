@@ -965,6 +965,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "prisma-preview"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "half",
+ "prisma-core",
+ "prisma-output",
+ "prisma-patch",
+ "uuid",
+]
+
+[[package]]
 name = "prisma-render"
 version = "0.1.0"
 dependencies = [
@@ -975,6 +987,7 @@ dependencies = [
  "prisma-core",
  "prisma-output",
  "prisma-patch",
+ "prisma-preview",
  "uuid",
  "wgpu",
 ]

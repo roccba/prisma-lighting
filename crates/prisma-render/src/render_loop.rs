@@ -32,6 +32,8 @@ use prisma_core::{ClockSnapshot, MasterClock, OverlapSnapshot};
 use prisma_output::frame::FrameProducer;
 use prisma_patch::LayoutGeneration;
 
+use prisma_preview::frame::{PreviewProducer, ZoneActiveMask};
+
 use crate::overlap::OverlapCounter;
 use crate::readback_ring::{ReadbackRing, DEFAULT_SLOTS};
 use crate::sample::Sampler;
@@ -132,6 +134,12 @@ pub struct RenderLoop {
     producer: FrameProducer,
     generation: LayoutGeneration,
     stats: RenderStats,
+    /// Optional second consumer of the master buffer (M6). `None` costs nothing:
+    /// no mask update, no second publish.
+    preview: Option<PreviewProducer>,
+    /// Refreshed at each frame boundary from the same `ZoneStates` the overlap
+    /// counter synced from, and stamped onto every published preview frame.
+    zone_active: ZoneActiveMask,
 }
 
 impl RenderLoop {
@@ -153,7 +161,27 @@ impl RenderLoop {
             producer,
             generation,
             stats: RenderStats::default(),
+            preview: None,
+            zone_active: ZoneActiveMask::new(0),
         }
+    }
+
+    /// Attach a preview handoff (M6). The loop then publishes every frame to the
+    /// preview as well — **after** the output publish, and with its own `f32→f16`
+    /// conversion, so the path that feeds the wire is byte-for-byte the work it was
+    /// before and cannot be slowed down by switching the preview on.
+    ///
+    /// `zone_count` sizes the [`ZoneActiveMask`]; it is the patch's zone count, the
+    /// same coordinate the overlap counter and the Parameter Tree use.
+    pub fn attach_preview(&mut self, preview: PreviewProducer, zone_count: usize) {
+        self.preview = Some(preview);
+        self.zone_active = ZoneActiveMask::new(zone_count);
+    }
+
+    /// Whether a preview handoff is attached.
+    #[inline]
+    pub fn has_preview(&self) -> bool {
+        self.preview.is_some()
     }
 
     pub fn with_default_slots(
@@ -190,6 +218,13 @@ impl RenderLoop {
         content: &mut impl FrameContent,
     ) -> TickOutcome {
         let tick_at = Instant::now();
+
+        // The preview's zone mask is settled here, at the frame boundary, from the
+        // same state the counter synced from — so the mask, the classification and
+        // the content all describe one instant.
+        if self.preview.is_some() {
+            self.zone_active.update_from(zones);
+        }
 
         // Claim BEFORE doing any work, so a stall costs nothing and adds no GPU
         // load at the moment the GPU is already behind.
@@ -232,6 +267,8 @@ impl RenderLoop {
             producer,
             generation,
             stats,
+            preview,
+            zone_active,
             ..
         } = self;
         let now = Instant::now();
@@ -245,6 +282,18 @@ impl RenderLoop {
                     *dst = f16::from_f32(src);
                 }
             });
+
+            // The preview goes SECOND and pays for itself: its own conversion, its
+            // own copy. The output publish above is untouched by its presence.
+            if let Some(preview) = preview.as_mut() {
+                preview.set_layout_generation(*generation);
+                preview.set_overlap(meta.overlap.clone());
+                preview.publish(zone_active, meta.frame, |px| {
+                    for (dst, &src) in px.iter_mut().zip(data.iter()) {
+                        *dst = f16::from_f32(src);
+                    }
+                });
+            }
             (
                 meta.readback_latency(),
                 now.saturating_duration_since(meta.tick_at),

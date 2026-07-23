@@ -1,0 +1,20 @@
+[package]
+name = "prisma-preview"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The preview is a *second consumer of the master buffer*, not a second renderer:
+# it needs the patch layout, the frame's overlap classification, and the output
+# stage's scalar maths — nothing GPU. Hence no wgpu, and no dependency in the
+# other direction (`prisma-output` must not learn about the preview).
+[dependencies]
+prisma-patch = { path = "../prisma-patch" }  # layout, positions, LayoutGeneration (M2)
+prisma-core = { path = "../prisma-core" }    # OverlapSnapshot: the frame's classification (§5.2.1)
+prisma-output = { path = "../prisma-output" } # FlatParams + the SHARED scale_component (§5.2 step 6)
+half = "2"                # the canonical master buffer is linear-light f16 (§5.2)
+glam = "0.29"             # pixel positions, as in prisma-patch
+
+[dev-dependencies]
+uuid = { version = "1", features = ["v4"] }  # building test patches

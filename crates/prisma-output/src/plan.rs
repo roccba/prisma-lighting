@@ -165,6 +165,55 @@ impl FlatParams {
     }
 }
 
+/// Apply the output stage's flat parameters to one linear-light component
+/// (CLAUDE.md §5.2 step 6): per-zone scale where the frame's snapshot allows the
+/// shortcut, then master scale unconditionally. Stays in **linear light** — the
+/// transfer curve (fixture gamma for the wire, sRGB for the preview) is the
+/// caller's, and always comes after.
+///
+/// # Every consumer of the master buffer MUST call this — do not duplicate it
+///
+/// Both the wire encoder ([`OutputPlan::encode_into`]) and the M6 preview
+/// (`prisma-preview`) apply this stage, and they must apply *exactly* the same
+/// one. The reason is not tidiness:
+///
+/// - The master buffer is the state **before** flat parameters. A consumer that
+///   skips this stage shows neither the master fader nor a zone fader on the
+///   pixels that take the §1.5 shortcut — while overlapped pixels, already dimmed
+///   in render (step 4), *would* move. The §5.2.1 asymmetry then reads as a bug in
+///   the engine rather than the design it is.
+/// - A consumer that reimplements it drifts. The zone scale is conditional on
+///   `zone_at_output`, in *this* precise way, or the "exactly one stage" invariant
+///   breaks: dim twice (one-frame darkening) or zero times (one-frame flash).
+///
+/// So: one function, called from both. If a third consumer of the master buffer
+/// appears, it calls this too.
+///
+/// `src` is the component's offset in the canonical master buffer — the same
+/// coordinate [`OverlapSnapshot::zone_at_output`] is indexed by. `channel` is the
+/// canonical component index (`0 = R, 1 = G, 2 = B, 3 = W`).
+#[inline]
+pub fn scale_component(
+    lin: f32,
+    src: usize,
+    channel: usize,
+    overlap: Option<&OverlapSnapshot>,
+    flat: &FlatParams,
+) -> f32 {
+    // Per-zone first, and only for the components the frame's snapshot marks as
+    // taking the shortcut: everything else was already dimmed in render (step 4),
+    // and dimming it again here is precisely the double-dim the "exactly one
+    // stage" invariant forbids.
+    let mut lin = lin;
+    if let Some(snapshot) = overlap {
+        if let Some(slot) = snapshot.zone_at_output(src) {
+            lin *= flat.zone_scale(slot as usize, channel);
+        }
+    }
+    // Master applies to every pixel, unconditionally.
+    lin * flat.master_scale(channel)
+}
+
 /// A patch compiled into per-universe, per-channel wire instructions, tagged with
 /// the [`LayoutGeneration`] it was built against.
 #[derive(Debug, Clone)]
@@ -248,7 +297,7 @@ impl OutputPlan {
             }
             // Linear-light sample (0.0 for an out-of-range read — bounds-safe like
             // M1's field stance).
-            let mut lin = master
+            let raw = master
                 .get(map.src as usize)
                 .map(|h| h.to_f32())
                 .unwrap_or(0.0);
@@ -256,17 +305,8 @@ impl OutputPlan {
 
             // --- Flat parameters, in linear light, BEFORE gamma (§5.2 step 6) ---
             //
-            // Per-zone first, and only for the components the frame's snapshot
-            // marks as taking the shortcut: everything else was already dimmed in
-            // render (step 4), and dimming it again here is precisely the
-            // double-dim the "exactly one stage" invariant forbids.
-            if let Some(snapshot) = overlap {
-                if let Some(slot) = snapshot.zone_at_output(map.src as usize) {
-                    lin *= flat.zone_scale(slot as usize, channel);
-                }
-            }
-            // Master applies to every pixel, unconditionally.
-            lin *= flat.master_scale(channel);
+            // Shared with the preview by construction — see [`scale_component`].
+            let lin = scale_component(raw, map.src as usize, channel, overlap, flat);
 
             // --- Then, and only then, the single quantization to the wire ---
             //
