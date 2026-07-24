@@ -17,11 +17,36 @@ manually-verified shell on top of it.
 
 ## Building it (on a machine with the desktop toolchain)
 
+System dependencies (verified on Fedora KDE, `fc44`):
+
 ```sh
-# Fedora: sudo dnf install webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel
-# Debian/Ubuntu: sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev
+sudo dnf install webkit2gtk4.1-devel gtk3-devel librsvg2-devel openssl-devel \
+                 libappindicator-gtk3-devel curl wget file \
+                 dbus-devel pkgconf-pkg-config \
+                 glib2-devel cairo-devel pango-devel gdk-pixbuf2-devel atk-devel
+sudo dnf group install "c-development"
+```
+
+If `libappindicator-gtk3-devel` is not found on your Fedora, use the Ayatana
+replacement: `libayatana-appindicator-gtk3-devel`.
+
+Debian/Ubuntu equivalents: `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
+libglib2.0-dev libcairo2-dev libpango1.0-dev libgdk-pixbuf-2.0-dev libatk1.0-dev
+libdbus-1-dev pkg-config build-essential`.
+
+Then, from the repo root:
+
+```sh
 cargo run --manifest-path app/Cargo.toml
 ```
+
+The first build compiles ~480 crates (tauri, wry, webkit-sys) and takes a few
+minutes. No Node or `cargo tauri` needed — the frontend is a static `ui/index.html`
+and `build.rs` runs `tauri-build`. A 1280×800 "Prisma" window opens with the engine
+running behind it; closing it prints the clean-shutdown line to the terminal.
+
+`app/icons/icon.png` is required by Tauri at compile time and is committed (a
+provisional placeholder — replace with real branding later).
 
 ## What S1 wires here
 

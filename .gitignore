@@ -1,7 +1,11 @@
 # Rust / Cargo build artifacts
 /target/
+/app/target/
 **/*.rs.bk
 *.pdb
+
+# Tauri-generated capability schemas (regenerated on every build)
+/app/gen/schemas/
 
 # Cargo.lock is committed: this workspace produces binaries (the Tauri app,
 # probes), and a committed lock file makes their builds reproducible.
