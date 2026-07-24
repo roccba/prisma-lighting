@@ -124,13 +124,20 @@ export function Canvas({ patch, selection, onSelectionChange, activeZone, viewMo
     }
 
     // --- Pass 2: direction arrows (signal flow), medium zoom+ ---
+    // A SHORT arrow contained at the fixture's END, not a spine along its whole
+    // length — a full line competes with the pixels on long (e.g. vertical) tubes.
     if (scale >= ARROW_MIN_SCALE) {
       for (const f of patch.fixtures) {
         if (emphasis(f.zone) !== "full") continue;
         if (f.pixels.length < 2) continue;
         const a = f.pixels[0].position;
         const b = f.pixels[f.pixels.length - 1].position;
-        drawArrow(ctx, sx(a[0]), sy(a[1]), sx(b[0]), sy(b[1]));
+        const ex = sx(b[0]), ey = sy(b[1]);
+        const dx = b[0] - a[0], dy = b[1] - a[1];
+        const wlen = Math.hypot(dx, dy) || 1;
+        const ux = dx / wlen, uy = dy / wlen; // unit direction (screen == world dir)
+        const stub = Math.min(wlen * scale * 0.5, 15); // capped length in px
+        drawArrow(ctx, ex - ux * stub, ey - uy * stub, ex, ey);
       }
     }
 
