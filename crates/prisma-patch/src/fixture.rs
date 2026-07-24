@@ -172,4 +172,21 @@ pub struct Fixture {
     pub name: String,
     pub profile: FixtureProfile,
     pub pixels: Vec<Pixel>,
+    /// The zone this fixture belongs to — **fixture→zone ownership**, the single
+    /// source of truth for zone membership as the editor sees it (M7 spec §2.2,
+    /// §3.1). A fixture belongs to exactly one zone; the editor manipulates this
+    /// field ("move this tube to the Booth zone"), and it is what selects the
+    /// [`Zone::mapping_size`](crate::zone::Zone::mapping_size) a pixel's position
+    /// is read in.
+    ///
+    /// Distinct from [`Zone::members`](crate::zone::Zone::members), which is the
+    /// engine's *overlap* membership (a pixel may be in several zones). Ownership
+    /// is one-to-one; overlap membership is many-to-many.
+    ///
+    /// `#[serde(default)]` → `Uuid::nil()` ("unassigned") so a partial or
+    /// programmatic patch loads; the v1→v2 migration derives a real owner for
+    /// legacy files, and the editor keeps it valid. Not consumed by the render or
+    /// output pipeline yet (§ M7 debt), so a nil owner is tolerated there.
+    #[serde(default)]
+    pub zone: Uuid,
 }

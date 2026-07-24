@@ -58,6 +58,7 @@ fn two_pixel_patch(gamma: f32) -> Patch {
                     color_order: ColorOrder::Rgb,
                 })
                 .collect(),
+            zone: Uuid::nil(),
         }],
         zones: vec![],
     }

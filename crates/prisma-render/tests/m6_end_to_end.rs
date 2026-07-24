@@ -86,6 +86,7 @@ fn build_patch() -> Patch {
                     color_order: ColorOrder::Rgb,
                 })
                 .collect(),
+            zone: Uuid::from_u128(0xA),
         }],
         zones: vec![
             Zone {
@@ -95,6 +96,9 @@ fn build_patch() -> Patch {
                 bounds: None,
                 z_order: 0,
                 blend_mode: prisma_patch::BlendMode::Normal,
+                mapping_size: [4, 1, 1],
+                display_color: [128, 128, 128],
+                world_transform: None,
             },
             Zone {
                 id: Uuid::from_u128(0xB),
@@ -103,6 +107,9 @@ fn build_patch() -> Patch {
                 bounds: None,
                 z_order: 1,
                 blend_mode: prisma_patch::BlendMode::Normal,
+                mapping_size: [4, 1, 1],
+                display_color: [128, 128, 128],
+                world_transform: None,
             },
         ],
     }

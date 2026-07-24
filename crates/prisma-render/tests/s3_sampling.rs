@@ -232,6 +232,7 @@ fn two_pixels_one_cell() -> Patch {
                     color_order: ColorOrder::Rgb,
                 },
             ],
+            zone: Uuid::nil(),
         }],
         zones: vec![],
     }

@@ -64,6 +64,7 @@ fn two_pixel_patch(gamma: f32, components: ComponentSet, order: ColorOrder) -> P
                     color_order: order,
                 })
                 .collect(),
+            zone: Uuid::nil(),
         }],
         zones: vec![],
     }

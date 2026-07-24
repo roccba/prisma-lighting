@@ -47,6 +47,7 @@ fn patch() -> Patch {
                     color_order: ColorOrder::Rgb,
                 })
                 .collect(),
+            zone: Uuid::nil(),
         }],
         zones: (0..2)
             .map(|i| Zone {
@@ -56,6 +57,9 @@ fn patch() -> Patch {
                 bounds: None,
                 z_order: 0,
                 blend_mode: BlendMode::Normal,
+                mapping_size: [2, 1, 1],
+                display_color: [128, 128, 128],
+                world_transform: None,
             })
             .collect(),
     }

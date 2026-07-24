@@ -44,6 +44,35 @@ pub fn cell_of(position: Vec3) -> Option<[i64; 3]> {
     ])
 }
 
+/// Where a zone's local mapping space sits in the shared world/venue space
+/// (M7 spec §2.4). **Optional** on a zone: only cross-zone effects (a wave
+/// sweeping from the patio to the dance floor) need it; a patch that never uses
+/// them leaves it `None` and zones fall back to a default arrangement.
+///
+/// The field exists from day one on purpose — adding it later would force every
+/// pre-existing patch to be reopened and re-positioned (§2.4).
+///
+/// *Not yet consumed by render:* the render gather still samples one global
+/// `matrix_size` (CLAUDE.md §5.2 step 5; per-zone world placement is wired in M8,
+/// see the M7 explicit-debt note). This type only stores the placement.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WorldTransform {
+    /// The zone local origin's position in world space.
+    pub position: Vec3,
+    /// Per-axis scale of the zone's local mapping space into world space.
+    pub scale: Vec3,
+}
+
+impl Default for WorldTransform {
+    /// Identity placement: origin at the world origin, unit scale.
+    fn default() -> Self {
+        Self {
+            position: Vec3::ZERO,
+            scale: Vec3::ONE,
+        }
+    }
+}
+
 /// A cached 2D axis-aligned bounding box (`Zone::bounds`, CLAUDE.md §4.1). Stored
 /// as `min`/`max` corners so it round-trips exactly and is trivial to grow when
 /// accumulating over a zone's pixels.

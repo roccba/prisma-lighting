@@ -65,6 +65,7 @@ fn two_zone_patch() -> Patch {
                     color_order: ColorOrder::Rgb,
                 })
                 .collect(),
+            zone: Uuid::from_u128(0x1),
         }],
         zones: vec![
             Zone {
@@ -74,6 +75,9 @@ fn two_zone_patch() -> Patch {
                 bounds: None,
                 z_order: 0,
                 blend_mode: BlendMode::Normal,
+                mapping_size: [2, 1, 1],
+                display_color: [128, 128, 128],
+                world_transform: None,
             },
             Zone {
                 id: Uuid::from_u128(0x2),
@@ -82,6 +86,9 @@ fn two_zone_patch() -> Patch {
                 bounds: None,
                 z_order: 1,
                 blend_mode: BlendMode::Normal,
+                mapping_size: [2, 1, 1],
+                display_color: [128, 128, 128],
+                world_transform: None,
             },
         ],
     }

@@ -39,6 +39,7 @@ fn sample_patch() -> (Patch, Uuid, Uuid) {
                 color_order: ColorOrder::Grb,
             })
             .collect(),
+        zone: Uuid::from_u128(0x10), // owned by sector-a
     };
 
     let fixture_b = Fixture {
@@ -58,6 +59,7 @@ fn sample_patch() -> (Patch, Uuid, Uuid) {
                 color_order: ColorOrder::Rgb,
             })
             .collect(),
+        zone: Uuid::from_u128(0x11), // owned by sector-b
     };
 
     let all_a: Vec<PixelRef> = (0..3)
@@ -87,6 +89,9 @@ fn sample_patch() -> (Patch, Uuid, Uuid) {
                 bounds: None,
                 z_order: 0,
                 blend_mode: BlendMode::Normal,
+                mapping_size: [3, 1, 1],
+                display_color: [0xE6, 0x39, 0x46],
+                world_transform: None,
             },
             Zone {
                 id: Uuid::from_u128(0x11),
@@ -95,6 +100,9 @@ fn sample_patch() -> (Patch, Uuid, Uuid) {
                 bounds: None,
                 z_order: 0,
                 blend_mode: BlendMode::Normal,
+                mapping_size: [2, 1, 1],
+                display_color: [0x45, 0x7B, 0x9D],
+                world_transform: None,
             },
             Zone {
                 id: Uuid::from_u128(0x12),
@@ -103,6 +111,9 @@ fn sample_patch() -> (Patch, Uuid, Uuid) {
                 bounds: None,
                 z_order: 10,
                 blend_mode: BlendMode::Add,
+                mapping_size: [3, 2, 1],
+                display_color: [0x2A, 0x9D, 0x8F],
+                world_transform: None,
             },
         ],
     };

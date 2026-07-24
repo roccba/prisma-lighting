@@ -300,6 +300,7 @@ mod tests {
                     start_channel: 1,
                     color_order: ColorOrder::Rgb,
                 }],
+                zone: Uuid::nil(),
             }],
             zones: vec![],
         };

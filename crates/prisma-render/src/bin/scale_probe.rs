@@ -87,6 +87,9 @@ fn build_patch(pixels: u32) -> Patch {
                 bounds: None,
                 z_order: 0,
                 blend_mode: BlendMode::Normal,
+                mapping_size: [WIDTH, height, 1],
+                display_color: [128, 128, 128],
+                world_transform: None,
             }
         })
         .collect();
@@ -98,6 +101,9 @@ fn build_patch(pixels: u32) -> Patch {
         bounds: None,
         z_order: 100,
         blend_mode: BlendMode::Add,
+        mapping_size: [WIDTH, height, 1],
+        display_color: [128, 128, 128],
+        world_transform: None,
     });
 
     Patch {
@@ -113,6 +119,7 @@ fn build_patch(pixels: u32) -> Patch {
                 gamma: GammaCalibration::default(),
             },
             pixels: pixel_defs,
+            zone: Uuid::nil(),
         }],
         zones,
     }

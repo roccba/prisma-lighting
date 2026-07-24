@@ -69,6 +69,7 @@ fn build_patch(width: u32, xs: &[f32], zones: &[(&str, Vec<u32>, i32, BlendMode)
                     color_order: ColorOrder::Rgb,
                 })
                 .collect(),
+            zone: Uuid::nil(),
         }],
         zones: zones
             .iter()
@@ -86,6 +87,9 @@ fn build_patch(width: u32, xs: &[f32], zones: &[(&str, Vec<u32>, i32, BlendMode)
                 bounds: None,
                 z_order: *z,
                 blend_mode: *mode,
+                mapping_size: [width, 1, 1],
+                display_color: [128, 128, 128],
+                world_transform: None,
             })
             .collect(),
     }

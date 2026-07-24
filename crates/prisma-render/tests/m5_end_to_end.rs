@@ -91,6 +91,7 @@ fn build_patch() -> Patch {
                     color_order: ColorOrder::Rgb,
                 })
                 .collect(),
+            zone: Uuid::nil(),
         }],
         zones: vec![
             zone(0x10, "left", fixture_id, &[0, 1], 0, BlendMode::Normal),
@@ -119,6 +120,9 @@ fn zone(id: u128, name: &str, fixture: Uuid, pixels: &[u32], z: i32, mode: Blend
         bounds: None,
         z_order: z,
         blend_mode: mode,
+        mapping_size: [WIDTH, 1, 1],
+        display_color: [128, 128, 128],
+        world_transform: None,
     }
 }
 

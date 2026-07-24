@@ -47,6 +47,7 @@ fn one_zone_patch() -> Patch {
                 start_channel: 1,
                 color_order: ColorOrder::Rgb,
             }],
+            zone: Uuid::from_u128(0x1),
         }],
         zones: vec![Zone {
             id: Uuid::from_u128(0x1),
@@ -58,6 +59,9 @@ fn one_zone_patch() -> Patch {
             bounds: None,
             z_order: 0,
             blend_mode: prisma_patch::BlendMode::Normal,
+            mapping_size: [1, 1, 1],
+            display_color: prisma_patch::default_display_color(),
+            world_transform: None,
         }],
     }
 }

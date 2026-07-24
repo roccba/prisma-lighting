@@ -59,6 +59,7 @@ fn grb_patch() -> Patch {
                     color_order: ColorOrder::Grb,
                 },
             ],
+            zone: Uuid::nil(),
         }],
         zones: vec![],
     }

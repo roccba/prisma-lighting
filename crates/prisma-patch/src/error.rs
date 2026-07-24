@@ -59,6 +59,10 @@ pub enum PatchError {
         position: [f32; 3],
         matrix_size: [u32; 3],
     },
+    /// A zone's own local mapping matrix (`Zone::mapping_size`, M7 spec §2.4) has
+    /// a zero axis. A matrix must have at least one cell on every axis to hold any
+    /// content, so a zero is a construction/edit error refused at load.
+    ZoneMappingSizeZero { zone: Uuid, mapping_size: [u32; 3] },
 }
 
 impl fmt::Display for PatchError {
@@ -126,6 +130,11 @@ impl fmt::Display for PatchError {
                 f,
                 "fixture {fixture} pixel {pixel} at position {position:?} falls outside the \
                  virtual matrix {matrix_size:?} — it could never receive content"
+            ),
+            PatchError::ZoneMappingSizeZero { zone, mapping_size } => write!(
+                f,
+                "zone {zone} has a zero axis in its mapping size {mapping_size:?} \
+                 (every axis must be >= 1)"
             ),
         }
     }

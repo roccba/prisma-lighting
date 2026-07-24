@@ -38,8 +38,8 @@ pub use error::PatchError;
 pub use fixture::{
     ColorOrder, ComponentSet, Fixture, FixtureProfile, GammaCalibration, Pixel, WireOrder,
 };
-pub use geometry::{cell_of, Rect};
+pub use geometry::{cell_of, Rect, WorldTransform};
 pub use index::{LayoutGeneration, PatchIndex, ZoneMembership};
 pub use patch::Patch;
 pub use version::{load_patch, save_patch, CURRENT_SCHEMA_VERSION, FORMAT_ID};
-pub use zone::{BlendMode, PixelRef, Zone};
+pub use zone::{default_display_color, BlendMode, DisplayColor, PixelRef, Zone};

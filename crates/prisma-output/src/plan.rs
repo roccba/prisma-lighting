@@ -511,6 +511,7 @@ mod tests {
                 start_channel: start,
                 color_order: order,
             }],
+            zone: Uuid::nil(),
         }
     }
 
@@ -592,6 +593,9 @@ mod tests {
                 bounds: None,
                 z_order: 0,
                 blend_mode: BlendMode::Normal,
+                mapping_size: [1, 1, 1],
+                display_color: prisma_patch::default_display_color(),
+                world_transform: None,
             }],
         };
         let index = patch.compile().unwrap();

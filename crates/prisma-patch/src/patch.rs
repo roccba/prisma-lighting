@@ -39,6 +39,7 @@ impl Patch {
         self.validate_addresses()?;
         self.validate_positions()?;
         self.validate_zone_refs()?;
+        self.validate_zone_mapping_sizes()?;
         Ok(())
     }
 
@@ -132,6 +133,23 @@ impl Patch {
                         matrix_size: self.matrix_size,
                     });
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Every zone's own local mapping matrix (§2.4) must have at least one cell on
+    /// every axis. `Z = 1` is the norm for the current 2D rig. This validates the
+    /// zone's *own* space; pixel positions are still checked against the global
+    /// `matrix_size` in [`validate_positions`](Self::validate_positions) until the
+    /// per-zone gather lands in M8 (see the M7 debt note in CLAUDE.md).
+    fn validate_zone_mapping_sizes(&self) -> Result<(), PatchError> {
+        for zone in &self.zones {
+            if zone.mapping_size.contains(&0) {
+                return Err(PatchError::ZoneMappingSizeZero {
+                    zone: zone.id,
+                    mapping_size: zone.mapping_size,
+                });
             }
         }
         Ok(())
