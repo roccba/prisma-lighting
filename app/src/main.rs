@@ -75,11 +75,23 @@ fn default_patch() -> Patch {
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
-            // Dev/default routing: Art-Net broadcast on the standard port. Real
-            // per-node routing arrives with the network-config milestone.
-            let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::BROADCAST), 6454);
-            let config = EngineConfig::new(AdapterPreference::HighPerformance, target);
-            let engine = Engine::start(default_patch(), config)?;
+            // Dev/default routing: Art-Net to loopback on the standard port.
+            // Loopback (not broadcast) avoids needing SO_BROADCAST and never sprays
+            // the LAN; real per-node routing arrives with the network-config
+            // milestone. Nothing need be listening — unheard packets are harmless.
+            let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6454);
+            // Prefer the real GPU; fall back to the software adapter (lavapipe) so
+            // the window still opens on a box without a configured Vulkan driver.
+            let engine = match Engine::start(
+                default_patch(),
+                EngineConfig::new(AdapterPreference::HighPerformance, target),
+            ) {
+                Ok(engine) => engine,
+                Err(_) => Engine::start(
+                    default_patch(),
+                    EngineConfig::new(AdapterPreference::Software, target),
+                )?,
+            };
             app.manage(EngineState(Mutex::new(Some(engine))));
             Ok(())
         })

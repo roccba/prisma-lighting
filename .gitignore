@@ -18,6 +18,3 @@ Thumbs.db
 
 # Playwright MCP scratch (viewer smoke-checks)
 .playwright-mcp/
-
-# professional consoles visual references — kept locally, not tracked (see docs/M7-SPEC.md §5)
-/Screenshots/
