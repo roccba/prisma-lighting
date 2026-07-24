@@ -1,0 +1,118 @@
+:root {
+  color-scheme: dark;
+  --bg: #0e0f13;
+  --panel: #16181f;
+  --panel-2: #1c1f28;
+  --line: #2a2d38;
+  --text: #d6d9e0;
+  --muted: #8a8f9c;
+  --accent: #6aa8ff;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 13px;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.fatal {
+  display: grid;
+  place-items: center;
+  height: 100vh;
+  color: var(--muted);
+}
+
+.editor {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.topbar {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.topbar .title { font-weight: 600; }
+.topbar .sub { color: var(--muted); font-size: 12px; }
+
+.body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 260px 1fr 260px;
+  min-height: 0;
+}
+
+.left { border-right: 1px solid var(--line); }
+.right { border-left: 1px solid var(--line); }
+.left, .right { background: var(--panel); overflow-y: auto; }
+.center { min-width: 0; position: relative; }
+
+.panel { display: flex; flex-direction: column; }
+.panel-head {
+  padding: 8px 12px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+
+/* Fixture list */
+.fixture-list { list-style: none; margin: 0; padding: 0; }
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+.row:hover { background: var(--panel-2); }
+.row.selected { background: rgba(106, 168, 255, 0.16); }
+.swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  flex: none;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+.fx-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fx-meta { color: var(--muted); font-size: 11px; }
+
+/* Canvas */
+.canvas-wrap { position: absolute; inset: 0; }
+.canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+.canvas-hint {
+  position: absolute;
+  left: 10px;
+  bottom: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  pointer-events: none;
+  background: rgba(14, 15, 19, 0.6);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+/* Properties */
+.prop-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+.prop-label { color: var(--muted); }
+.prop-value { font-variant-numeric: tabular-nums; text-align: right; }
+
+.zones-legend { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.legend-row { display: flex; align-items: center; gap: 8px; color: var(--muted); }

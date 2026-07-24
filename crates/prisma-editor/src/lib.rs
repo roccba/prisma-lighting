@@ -22,6 +22,9 @@
 
 pub mod draft;
 pub mod op;
+pub mod samples;
+pub mod selection;
 
 pub use draft::{GestureId, PatchDraft};
 pub use op::{CoalesceKey, EditError, EditOp, PixelAddress};
+pub use selection::{aggregate, SelectionAggregate};

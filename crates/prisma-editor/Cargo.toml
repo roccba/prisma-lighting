@@ -15,6 +15,10 @@ publish.workspace = true
 prisma-patch = { path = "../prisma-patch" }
 glam = "0.29"
 uuid = { version = "1", features = ["v4"] }
+# Selection aggregates cross the Tauri IPC boundary to the properties panel, so
+# they derive Serialize. The edit ops themselves stay serde-free until the IPC
+# command surface needs them (S5).
+serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 uuid = { version = "1", features = ["v4"] }

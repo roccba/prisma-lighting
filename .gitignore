@@ -7,6 +7,10 @@
 # Tauri-generated capability schemas (regenerated on every build)
 /app/gen/schemas/
 
+# Frontend (ui/) — node modules and the Vite build output (rebuilt with npm)
+/ui/node_modules/
+/ui/dist/
+
 # Cargo.lock is committed: this workspace produces binaries (the Tauri app,
 # probes), and a committed lock file makes their builds reproducible.
 

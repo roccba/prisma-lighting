@@ -2479,7 +2479,7 @@ checksum = "e8cf8e6a8aa66ce33f63993ffc4ea4271eb5b0530a9002db8455ea6050c77bfa"
 name = "prisma-app"
 version = "0.1.0"
 dependencies = [
- "glam",
+ "prisma-editor",
  "prisma-engine",
  "prisma-patch",
  "prisma-render",
@@ -2495,6 +2495,16 @@ name = "prisma-core"
 version = "0.1.0"
 dependencies = [
  "parking_lot",
+]
+
+[[package]]
+name = "prisma-editor"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "prisma-patch",
+ "serde",
+ "uuid",
 ]
 
 [[package]]
