@@ -1,0 +1,30 @@
+[package]
+name = "prisma-engine"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The engine assembly: the one object that owns the running product — clock,
+# Parameter Tree, compiled patch, and the render / output / preview loops — and
+# tears them down in order. It sits at the top of the crate DAG (only the Tauri
+# `app/` shell is above it) and depends on every runtime crate. It is a crate,
+# not code inside `app/`, for two reasons: it must be testable headlessly (boot +
+# clean shutdown on lavapipe, no Tauri), and M8's main window is a second consumer
+# of the same assembly — putting it in the Tauri binary would preclude both.
+[dependencies]
+prisma-core = { path = "../prisma-core" }
+prisma-patch = { path = "../prisma-patch" }
+prisma-render = { path = "../prisma-render" }
+prisma-output = { path = "../prisma-output" }
+prisma-preview = { path = "../prisma-preview" }
+# IdleContent writes zeros into the render target (the "no show loaded" state);
+# it touches the wgpu queue/texture and the canonical f16 buffer staging.
+wgpu = { version = "30", default-features = false, features = ["wgsl", "vulkan"] }
+half = { version = "2", features = ["bytemuck"] }
+
+[dev-dependencies]
+# The headless boot+shutdown test drives a real virtual sink and decodes preview
+# frames, exactly as the M6 acceptance test does.
+uuid = { version = "1", features = ["v4"] }
+glam = "0.29"

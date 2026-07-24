@@ -5,10 +5,16 @@ members = [
     "crates/prisma-render",
     "crates/prisma-output",
     "crates/prisma-preview",
+    "crates/prisma-engine",
     "crates/prisma-midi",
     "crates/prisma-script",
     "crates/prisma-patch",
 ]
+# The Tauri desktop shell is a separate crate, deliberately NOT a workspace member:
+# it needs the desktop toolchain (webkit2gtk-4.1 + gtk3) that headless CI does not
+# have, so building the workspace must not depend on it. It builds on its own on a
+# machine with those system libs. See app/README.md.
+exclude = ["app"]
 
 [workspace.package]
 edition = "2021"

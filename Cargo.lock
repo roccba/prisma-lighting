@@ -969,6 +969,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "prisma-engine"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "half",
+ "prisma-core",
+ "prisma-output",
+ "prisma-patch",
+ "prisma-preview",
+ "prisma-render",
+ "uuid",
+ "wgpu",
+]
+
+[[package]]
 name = "prisma-midi"
 version = "0.1.0"
 

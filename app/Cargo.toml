@@ -1,0 +1,31 @@
+[package]
+name = "prisma-app"
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSED"
+publish = false
+description = "Prisma desktop shell (Tauri): hosts the engine and the patch editor."
+
+# Standalone workspace so this crate resolves independently of the main workspace,
+# which deliberately excludes it (it needs desktop system libs CI lacks). See
+# app/README.md.
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# The engine assembly — the shell's whole reason to exist. Owned for the life of
+# the process, shut down in order on exit.
+prisma-engine = { path = "../crates/prisma-engine" }
+prisma-patch = { path = "../crates/prisma-patch" }
+prisma-render = { path = "../crates/prisma-render" }
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+glam = "0.29"
+
+[features]
+# Tauri's custom-protocol asset serving for release builds.
+custom-protocol = ["tauri/custom-protocol"]
