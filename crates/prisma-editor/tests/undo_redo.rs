@@ -303,6 +303,27 @@ fn a_structural_error_leaves_the_patch_and_history_untouched() {
     assert_eq!(*draft.patch(), start);
 }
 
+#[test]
+fn translate_is_exactly_invertible() {
+    let start = base_patch();
+    let mut draft = PatchDraft::new(start.clone());
+    let ids: Vec<Uuid> = vec![Uuid::from_u128(FA), Uuid::from_u128(FC)];
+    draft
+        .apply(
+            EditOp::TranslateFixtures {
+                ids: ids.clone(),
+                delta: Vec3::new(3.0, -2.0, 0.0),
+            },
+            None,
+        )
+        .unwrap();
+    assert_ne!(*draft.patch(), start, "the move changed positions");
+    // A batch move of two fixtures is a single undo step.
+    assert!(draft.undo());
+    assert_eq!(*draft.patch(), start, "one undo reverses the whole move");
+    assert!(!draft.can_undo());
+}
+
 // ---- Randomised fuzz: many valid ops, then undo all, must equal the start. ----
 
 struct Lcg(u64);
@@ -330,7 +351,7 @@ impl Lcg {
 fn random_op(rng: &mut Lcg, patch: &Patch, fresh_id: &mut u128) -> EditOp {
     // Guard: if there are no fixtures, only insertion is possible.
     let has_fixtures = !patch.fixtures.is_empty();
-    let kind = if has_fixtures { rng.below(7) } else { 6 };
+    let kind = if has_fixtures { rng.below(8) } else { 6 };
     match kind {
         0 => {
             let f = &patch.fixtures[rng.below(patch.fixtures.len())];
@@ -381,6 +402,10 @@ fn random_op(rng: &mut Lcg, patch: &Patch, fresh_id: &mut u128) -> EditOp {
         }
         5 => EditOp::RemoveFixtures {
             ids: vec![patch.fixtures[rng.below(patch.fixtures.len())].id],
+        },
+        7 => EditOp::TranslateFixtures {
+            ids: vec![patch.fixtures[rng.below(patch.fixtures.len())].id],
+            delta: rng.vec3(),
         },
         _ => {
             *fresh_id += 1;

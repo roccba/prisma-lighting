@@ -29,7 +29,7 @@ pub mod selection;
 pub use draft::{GestureId, PatchDraft};
 pub use op::{CoalesceKey, EditError, EditOp, PixelAddress};
 pub use placement::{
-    builtin_fixture_types, next_free_address, plan, FixtureType, Orientation, PlacementError,
-    PlacementSpec,
+    builtin_fixture_types, next_free_address, plan, plan_preview, Direction, FixtureType,
+    PlacementError, PlacementSpec, PreviewRun, Rotation,
 };
 pub use selection::{aggregate, SelectionAggregate};

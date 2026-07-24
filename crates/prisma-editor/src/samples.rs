@@ -87,7 +87,7 @@ fn tube(
     }
 }
 
-fn zone(id: Uuid, name: &str, color: DisplayColor) -> Zone {
+fn zone(id: Uuid, name: &str, color: DisplayColor, mapping_size: [u32; 3]) -> Zone {
     Zone {
         id,
         name: name.into(),
@@ -96,11 +96,38 @@ fn zone(id: Uuid, name: &str, color: DisplayColor) -> Zone {
         z_order: 0,
         blend_mode: BlendMode::Normal,
         // Per-zone mapping space is stored but not yet consumed by render (M7 debt);
-        // the whole matrix is a fine placeholder for each until M8 wires the gather.
-        mapping_size: MATRIX,
+        // here it is the zone's own footprint so the editor can frame it (§5.6).
+        mapping_size,
         display_color: color,
         world_transform: None,
     }
+}
+
+/// The bounding-box size (cells, max−min+1 per axis) of the fixtures owning `zone`.
+fn zone_footprint(fixtures: &[Fixture], zone: Uuid) -> [u32; 3] {
+    let mut lo = [i32::MAX; 3];
+    let mut hi = [i32::MIN; 3];
+    for f in fixtures.iter().filter(|f| f.zone == zone) {
+        for p in &f.pixels {
+            let c = [
+                p.position.x as i32,
+                p.position.y as i32,
+                p.position.z as i32,
+            ];
+            for a in 0..3 {
+                lo[a] = lo[a].min(c[a]);
+                hi[a] = hi[a].max(c[a]);
+            }
+        }
+    }
+    if lo[0] == i32::MAX {
+        return [1, 1, 1];
+    }
+    [
+        (hi[0] - lo[0] + 1).max(1) as u32,
+        (hi[1] - lo[1] + 1).max(1) as u32,
+        (hi[2] - lo[2] + 1).max(1) as u32,
+    ]
 }
 
 /// A wedding venue: DJ booth, dance-floor ceiling, reception patio, bar — four
@@ -177,17 +204,38 @@ pub fn wedding_rig() -> Patch {
         &mut cur,
     ));
 
+    let zones = vec![
+        zone(
+            booth_id,
+            "DJ Booth",
+            [69, 123, 157],
+            zone_footprint(&fixtures, booth_id),
+        ),
+        zone(
+            dance_id,
+            "Dance Floor",
+            [42, 157, 143],
+            zone_footprint(&fixtures, dance_id),
+        ),
+        zone(
+            patio_id,
+            "Patio",
+            [233, 196, 106],
+            zone_footprint(&fixtures, patio_id),
+        ),
+        zone(
+            bar_id,
+            "Bar",
+            [142, 125, 190],
+            zone_footprint(&fixtures, bar_id),
+        ),
+    ];
     Patch {
         id: Uuid::from_u128(0x5EED),
         name: "Wedding — booth · dance floor · patio · bar".into(),
         matrix_size: MATRIX,
         fixtures,
-        zones: vec![
-            zone(booth_id, "DJ Booth", [69, 123, 157]),
-            zone(dance_id, "Dance Floor", [42, 157, 143]),
-            zone(patio_id, "Patio", [233, 196, 106]),
-            zone(bar_id, "Bar", [142, 125, 190]),
-        ],
+        zones,
     }
 }
 

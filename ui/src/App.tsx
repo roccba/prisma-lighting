@@ -3,6 +3,7 @@ import {
   getState,
   removeFixtures,
   selectionAggregate,
+  translateFixtures,
   undo as undoCmd,
   redo as redoCmd,
   type EditorState,
@@ -106,6 +107,7 @@ export default function App() {
             patch={patch}
             selection={selection}
             onSelectionChange={setSelection}
+            onMove={async (ids, delta) => setEditor(await translateFixtures(ids, delta))}
             activeZone={activeZone}
             viewMode={viewMode}
           />

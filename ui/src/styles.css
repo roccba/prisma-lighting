@@ -197,6 +197,23 @@ html, body, #root {
 }
 .modal-count { color: var(--muted); font-size: 12px; }
 .spacer { flex: 1; }
+.modal.wide { width: 720px; }
+.preview-section { padding: 0 16px 12px; }
+.preview-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.preview-canvas {
+  width: 100%;
+  height: 130px;
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+}
 
 .body {
   flex: 1;

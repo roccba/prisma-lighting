@@ -55,7 +55,19 @@ export interface SelectionAggregate {
 }
 
 export type ComponentSet = "Rgb" | "Rgbw";
-export type Orientation = "Horizontal" | "Vertical" | "DiagonalDown" | "DiagonalUp";
+
+/** Signal direction — the way a fixture's pixels are wired (§4.1), all eight. */
+export type Direction =
+  | "Right"
+  | "Left"
+  | "Down"
+  | "Up"
+  | "DownRight"
+  | "DownLeft"
+  | "UpRight"
+  | "UpLeft";
+
+export type Rotation = "R0" | "R90" | "R180" | "R270";
 
 export interface FixtureType {
   name: string;
@@ -68,15 +80,25 @@ export interface PlacementSpec {
   fixture_type: FixtureType;
   name_prefix: string;
   start_number: number;
-  count: [number, number];
-  offset: [number, number];
-  start_position: [number, number];
-  orientation: Orientation;
+  rotation: Rotation;
+  count: [number, number, number];
+  offset: [number, number, number];
+  start_position: [number, number, number];
+  direction: Direction;
   snake: boolean;
   start_universe: number;
   start_channel: number;
+  channel_offset: number;
+  universe_offset: number;
   fixtures_per_universe: number | null;
   zone: string;
+}
+
+/** One instance's run for the placement preview (§4.1). */
+export interface PreviewRun {
+  start: [number, number];
+  end: [number, number];
+  order: number;
 }
 
 export const getState = () => invoke<EditorState>("editor_get_state");
@@ -88,8 +110,14 @@ export const fixtureTypes = () => invoke<FixtureType[]>("editor_fixture_types");
 
 export const nextFreeAddress = () => invoke<[number, number]>("editor_next_free_address");
 
+export const previewPlacement = (spec: PlacementSpec) =>
+  invoke<PreviewRun[]>("editor_preview_placement", { spec });
+
 export const placeFixtures = (spec: PlacementSpec) =>
   invoke<EditorState>("editor_place_fixtures", { spec });
+
+export const translateFixtures = (ids: string[], delta: [number, number, number]) =>
+  invoke<EditorState>("editor_translate_fixtures", { ids, delta });
 
 export const removeFixtures = (ids: string[]) =>
   invoke<EditorState>("editor_remove_fixtures", { ids });

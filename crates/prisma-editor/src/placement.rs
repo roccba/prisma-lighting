@@ -1,12 +1,13 @@
 //! Fixture placement (M7 spec §4): instantiate many fixtures in one action from a
 //! [`PlacementSpec`] — the "count X/Y + offset" grid the placement dialog drives,
-//! plus Prisma's addition of **diagonal stepped** runs (§4.2).
+//! plus Prisma's diagonal stepped runs and the full eight signal directions (§4.1).
 //!
 //! [`plan`] is a pure function (spec → fixtures); it does not touch the patch, so
-//! the placement math — grid positions, the diagonal disjointness requirement,
-//! addressing with universe wrap and the per-universe limit — is unit-testable. The
-//! resulting fixtures are handed to an [`InsertFixtures`](crate::EditOp::InsertFixtures)
-//! op so placement is undoable like any other edit.
+//! the placement math — grid positions, the eight directions, the diagonal
+//! disjointness requirement, addressing with universe wrap and offsets — is
+//! unit-testable. [`plan_preview`] returns the same layout as lightweight runs for
+//! the dialog's live signal-path preview. The fixtures are handed to an
+//! [`InsertFixtures`](crate::EditOp::InsertFixtures) op so placement is undoable.
 
 use glam::Vec3;
 use prisma_patch::{ColorOrder, ComponentSet, Fixture, FixtureProfile, GammaCalibration, Pixel};
@@ -15,8 +16,7 @@ use uuid::Uuid;
 
 /// A reusable fixture definition (§3.2, minimal for M7). The full fixture library —
 /// a separate reusable file, with intra-fixture pixel roles (the hexagon case) —
-/// is later; the model here must not preclude it, so richer arrangement/roles can
-/// be added without breaking this shape.
+/// is later; the model here must not preclude it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FixtureType {
     pub name: String,
@@ -25,27 +25,49 @@ pub struct FixtureType {
     pub color_order: ColorOrder,
 }
 
-/// How a fixture's pixels run from its origin. Prisma adds the two diagonals to
-/// professional consoles's horizontal/vertical (§4.2); diagonals are **stepped** — each pixel
-/// advances one cell on both axes, an honest staircase.
+/// **Signal direction** — which way a fixture's pixels run from its origin, i.e.
+/// the order the data is wired (§4.1). This is deliberately distinct from mere
+/// orientation: a horizontal tube wired left-to-right and right-to-left are
+/// different fixtures (a chase runs the other way), and the model captures that as
+/// the stored pixel order. All eight are reachable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Orientation {
-    Horizontal,
-    Vertical,
-    DiagonalDown,
-    DiagonalUp,
+pub enum Direction {
+    Right,     // →
+    Left,      // ←
+    Down,      // ↓
+    Up,        // ↑
+    DownRight, // ↘
+    DownLeft,  // ↙
+    UpRight,   // ↗
+    UpLeft,    // ↖
 }
 
-impl Orientation {
-    /// The per-pixel cell step.
+impl Direction {
+    /// The per-pixel cell step (x, y), y increasing downward.
     pub fn step(self) -> (i32, i32) {
         match self {
-            Orientation::Horizontal => (1, 0),
-            Orientation::Vertical => (0, 1),
-            Orientation::DiagonalDown => (1, 1),
-            Orientation::DiagonalUp => (1, -1),
+            Direction::Right => (1, 0),
+            Direction::Left => (-1, 0),
+            Direction::Down => (0, 1),
+            Direction::Up => (0, -1),
+            Direction::DownRight => (1, 1),
+            Direction::DownLeft => (-1, 1),
+            Direction::UpRight => (1, -1),
+            Direction::UpLeft => (-1, -1),
         }
     }
+}
+
+/// Fixture rotation (§4.1). Present from day one but **inert for 1-D tubes** —
+/// rotation re-orients a fixture *type*'s internal 2-D pixel map, which M7's
+/// fixture types do not yet have. Kept so adding 2-D fixtures later does not reopen
+/// the placement dialog, exactly like the Z axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Rotation {
+    R0,
+    R90,
+    R180,
+    R270,
 }
 
 /// Everything the placement dialog collects (§4.1).
@@ -55,35 +77,39 @@ pub struct PlacementSpec {
     /// Name prefix; instances are `"{prefix} {n}"` from `start_number`.
     pub name_prefix: String,
     pub start_number: u32,
-    /// Instances along X and Y (2D; Z is deferred with 3D).
-    pub count: [u32; 2],
+    /// Present but inert for 1-D fixtures (see [`Rotation`]).
+    pub rotation: Rotation,
+    /// Instances along X, Y, Z. **Z exists from day one** though M7 is 2-D — it is
+    /// fixed at 1 in the UI while 2-D, so 3-D does not reopen this dialog.
+    pub count: [u32; 3],
     /// Spacing in cells between instance origins, per axis.
-    pub offset: [i32; 2],
+    pub offset: [i32; 3],
     /// Origin of the first instance, in cells.
-    pub start_position: [i32; 2],
-    pub orientation: Orientation,
-    /// Snake mode: alternate rows are addressed in reverse, so the signal path
-    /// wraps back and forth instead of jumping across the matrix each row (§4.1).
+    pub start_position: [i32; 3],
+    /// Signal direction the pixels run (§4.1) — eight options.
+    pub direction: Direction,
+    /// Snake mode: alternate rows are addressed in reverse, folding the path (§4.1).
     pub snake: bool,
     pub start_universe: u16,
     pub start_channel: u16,
+    /// Extra channels left between consecutive fixtures (professional consoles "Desfase"). `0` =
+    /// tight packing.
+    pub channel_offset: u16,
+    /// Extra universes skipped each time addressing wraps to a new universe. `0` =
+    /// the next universe.
+    pub universe_offset: u16,
     /// Maximum fixtures per universe before spilling to the next (§4.1). `None` =
     /// only the 512-channel limit applies.
     pub fixtures_per_universe: Option<u32>,
-    /// The zone placed fixtures belong to — the **active zone** (§4.1, §6). This is
-    /// what makes the zone selector the editor's organising control.
+    /// The zone placed fixtures belong to — the **active zone** (§4.1, §6).
     pub zone: Uuid,
 }
 
 /// Why a placement could not be planned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlacementError {
-    /// Zero instances, or a zero-pixel fixture — nothing to place.
     Empty,
-    /// One fixture's channel span exceeds a whole universe (512), so it can never
-    /// be addressed.
     FixtureTooBig { span: u16 },
-    /// Addressing ran past the last Art-Net universe (65,535).
     OutOfUniverses,
 }
 
@@ -104,12 +130,35 @@ impl std::fmt::Display for PlacementError {
 
 impl std::error::Error for PlacementError {}
 
+/// Instance origins in addressing (snake) order.
+fn instance_origins(spec: &PlacementSpec) -> Vec<(i32, i32, i32)> {
+    let [cx, cy, cz] = spec.count;
+    let mut origins = Vec::with_capacity((cx * cy * cz.max(1)) as usize);
+    for iz in 0..cz.max(1) {
+        for iy in 0..cy {
+            // Snake: reverse X on odd rows so the run folds back.
+            let row: Vec<u32> = if spec.snake && iy % 2 == 1 {
+                (0..cx).rev().collect()
+            } else {
+                (0..cx).collect()
+            };
+            for ix in row {
+                origins.push((
+                    spec.start_position[0] + ix as i32 * spec.offset[0],
+                    spec.start_position[1] + iy as i32 * spec.offset[1],
+                    spec.start_position[2] + iz as i32 * spec.offset[2],
+                ));
+            }
+        }
+    }
+    origins
+}
+
 /// Plan a placement: compute the fixtures it produces, with positions and DMX
 /// addresses. Pure — does not consult the patch.
 pub fn plan(spec: &PlacementSpec) -> Result<Vec<Fixture>, PlacementError> {
-    let (cx, cy) = (spec.count[0], spec.count[1]);
     let n = spec.fixture_type.pixel_count;
-    if cx == 0 || cy == 0 || n == 0 {
+    if spec.count[0] == 0 || spec.count[1] == 0 || n == 0 {
         return Err(PlacementError::Empty);
     }
     let comps = spec.fixture_type.components.count() as u16;
@@ -118,88 +167,107 @@ pub fn plan(spec: &PlacementSpec) -> Result<Vec<Fixture>, PlacementError> {
         return Err(PlacementError::FixtureTooBig { span });
     }
 
-    let (sdx, sdy) = spec.orientation.step();
-    let mut fixtures = Vec::with_capacity((cx * cy) as usize);
+    let (sdx, sdy) = spec.direction.step();
+    let origins = instance_origins(spec);
+    let mut fixtures = Vec::with_capacity(origins.len());
 
-    // Addressing cursor, advanced per fixture in signal-path (snake) order.
     let mut universe = spec.start_universe;
     let mut channel = spec.start_channel.max(1);
     let mut in_universe = 0u32;
-    let mut number = spec.start_number;
 
-    for iy in 0..cy {
-        // Snake: reverse the X order on odd rows so the run folds back.
-        let row: Vec<u32> = if spec.snake && iy % 2 == 1 {
-            (0..cx).rev().collect()
-        } else {
-            (0..cx).collect()
-        };
-        for ix in row {
-            // Per-universe fixture limit.
-            if let Some(lim) = spec.fixtures_per_universe {
-                if lim > 0 && in_universe >= lim {
-                    universe = universe
-                        .checked_add(1)
-                        .ok_or(PlacementError::OutOfUniverses)?;
-                    channel = 1;
-                    in_universe = 0;
-                }
+    let wrap = |universe: &mut u16, channel: &mut u16, in_universe: &mut u32| {
+        let step = 1 + spec.universe_offset;
+        *universe = universe
+            .checked_add(step)
+            .ok_or(PlacementError::OutOfUniverses)?;
+        *channel = 1;
+        *in_universe = 0;
+        Ok::<(), PlacementError>(())
+    };
+
+    for (k, (ox, oy, oz)) in origins.into_iter().enumerate() {
+        let number = spec.start_number + k as u32;
+        if let Some(lim) = spec.fixtures_per_universe {
+            if lim > 0 && in_universe >= lim {
+                wrap(&mut universe, &mut channel, &mut in_universe)?;
             }
-            // Channel fit within the universe.
-            if channel + span > 513 {
-                universe = universe
-                    .checked_add(1)
-                    .ok_or(PlacementError::OutOfUniverses)?;
-                channel = 1;
-                in_universe = 0;
-            }
-
-            let ox = spec.start_position[0] + ix as i32 * spec.offset[0];
-            let oy = spec.start_position[1] + iy as i32 * spec.offset[1];
-            let pixels = (0..n)
-                .map(|i| Pixel {
-                    index: i,
-                    position: Vec3::new(
-                        (ox + sdx * i as i32) as f32,
-                        (oy + sdy * i as i32) as f32,
-                        0.0,
-                    ),
-                    universe,
-                    start_channel: channel + i as u16 * comps,
-                    color_order: spec.fixture_type.color_order,
-                })
-                .collect();
-
-            fixtures.push(Fixture {
-                id: Uuid::new_v4(),
-                name: format!("{} {}", spec.name_prefix, number),
-                profile: FixtureProfile {
-                    name: spec.fixture_type.name.clone(),
-                    components: spec.fixture_type.components,
-                    gamma: GammaCalibration::default(),
-                },
-                pixels,
-                zone: spec.zone,
-            });
-
-            channel += span;
-            in_universe += 1;
-            number += 1;
         }
+        if channel + span > 513 {
+            wrap(&mut universe, &mut channel, &mut in_universe)?;
+        }
+
+        let pixels = (0..n)
+            .map(|i| Pixel {
+                index: i,
+                position: Vec3::new(
+                    (ox + sdx * i as i32) as f32,
+                    (oy + sdy * i as i32) as f32,
+                    oz as f32,
+                ),
+                universe,
+                start_channel: channel + i as u16 * comps,
+                color_order: spec.fixture_type.color_order,
+            })
+            .collect();
+
+        fixtures.push(Fixture {
+            id: Uuid::new_v4(),
+            name: format!("{} {}", spec.name_prefix, number),
+            profile: FixtureProfile {
+                name: spec.fixture_type.name.clone(),
+                components: spec.fixture_type.components,
+                gamma: GammaCalibration::default(),
+            },
+            pixels,
+            zone: spec.zone,
+        });
+
+        channel += span + spec.channel_offset;
+        in_universe += 1;
     }
 
     Ok(fixtures)
 }
 
+/// One instance's run for the dialog's signal-path preview: where its pixels start
+/// and end, and its position in the signal order.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PreviewRun {
+    pub start: [f32; 2],
+    pub end: [f32; 2],
+    pub order: u32,
+}
+
+/// The layout a spec would produce, as lightweight runs — for the live preview
+/// before applying (§4.1). Empty if the spec places nothing.
+pub fn plan_preview(spec: &PlacementSpec) -> Vec<PreviewRun> {
+    let n = spec.fixture_type.pixel_count;
+    if spec.count[0] == 0 || spec.count[1] == 0 || n == 0 {
+        return Vec::new();
+    }
+    let (sdx, sdy) = spec.direction.step();
+    instance_origins(spec)
+        .into_iter()
+        .enumerate()
+        .map(|(order, (ox, oy, _oz))| PreviewRun {
+            start: [ox as f32, oy as f32],
+            end: [
+                (ox + sdx * (n as i32 - 1)) as f32,
+                (oy + sdy * (n as i32 - 1)) as f32,
+            ],
+            order: order as u32,
+        })
+        .collect()
+}
+
 /// Suggest the next free DMX address: just past the highest-addressed pixel in the
-/// patch (append semantics, like professional consoles). `(1, 1)` for an empty patch.
+/// patch (append semantics). `(1, 1)` for an empty patch.
 pub fn next_free_address(patch: &prisma_patch::Patch) -> (u16, u16) {
-    let mut best: Option<(u16, u16)> = None; // (universe, end_channel exclusive)
+    let mut best: Option<(u16, u16)> = None;
     for f in &patch.fixtures {
         let comps = f.profile.component_count() as u16;
         for p in &f.pixels {
-            let end = p.start_channel + comps;
-            let key = (p.universe, end);
+            let key = (p.universe, p.start_channel + comps);
             if best.is_none_or(|b| key > b) {
                 best = Some(key);
             }
@@ -248,13 +316,16 @@ mod tests {
             },
             name_prefix: "Tube".into(),
             start_number: 1,
-            count: [1, 1],
-            offset: [1, 1],
-            start_position: [0, 0],
-            orientation: Orientation::Vertical,
+            rotation: Rotation::R0,
+            count: [1, 1, 1],
+            offset: [1, 1, 1],
+            start_position: [0, 0, 0],
+            direction: Direction::Down,
             snake: false,
             start_universe: 1,
             start_channel: 1,
+            channel_offset: 0,
+            universe_offset: 0,
             fixtures_per_universe: None,
             zone: Uuid::from_u128(0x1),
         }
@@ -263,47 +334,53 @@ mod tests {
     #[test]
     fn count_and_offset_place_a_grid() {
         let mut s = spec();
-        s.count = [3, 2];
-        s.offset = [5, 4];
-        s.orientation = Orientation::Horizontal;
+        s.count = [3, 2, 1];
+        s.offset = [5, 4, 0];
+        s.direction = Direction::Right;
         let f = plan(&s).unwrap();
         assert_eq!(f.len(), 6);
-        // Row-major origins: (0,0),(5,0),(10,0),(0,4),(5,4),(10,4).
         assert_eq!(f[0].pixels[0].position, Vec3::new(0.0, 0.0, 0.0));
         assert_eq!(f[2].pixels[0].position, Vec3::new(10.0, 0.0, 0.0));
         assert_eq!(f[3].pixels[0].position, Vec3::new(0.0, 4.0, 0.0));
-        // Names run from start_number.
         assert_eq!(f[0].name, "Tube 1");
         assert_eq!(f[5].name, "Tube 6");
     }
 
     #[test]
-    fn diagonal_pixels_step_on_both_axes() {
-        let mut s = spec();
-        s.orientation = Orientation::DiagonalDown;
-        let f = plan(&s).unwrap();
-        let p = &f[0].pixels;
-        assert_eq!(p[0].position, Vec3::new(0.0, 0.0, 0.0));
-        assert_eq!(p[1].position, Vec3::new(1.0, 1.0, 0.0));
-        assert_eq!(p[9].position, Vec3::new(9.0, 9.0, 0.0));
+    fn all_eight_directions_set_the_pixel_order() {
+        for (dir, end) in [
+            (Direction::Right, (9.0, 0.0)),
+            (Direction::Left, (-9.0, 0.0)),
+            (Direction::Down, (0.0, 9.0)),
+            (Direction::Up, (0.0, -9.0)),
+            (Direction::DownRight, (9.0, 9.0)),
+            (Direction::DownLeft, (-9.0, 9.0)),
+            (Direction::UpRight, (9.0, -9.0)),
+            (Direction::UpLeft, (-9.0, -9.0)),
+        ] {
+            let mut s = spec();
+            s.start_position = [0, 0, 0];
+            s.direction = dir;
+            let f = plan(&s).unwrap();
+            let last = f[0].pixels[9].position;
+            assert_eq!((last.x, last.y), end, "direction {dir:?} end pixel");
+            // First pixel is always the origin — the signal STARTS there.
+            assert_eq!(f[0].pixels[0].position, Vec3::new(0.0, 0.0, 0.0));
+        }
     }
 
     #[test]
     fn parallel_diagonals_do_not_share_cells() {
-        // The §4.2 requirement: parallel diagonal runs must stay disjoint.
         let mut s = spec();
-        s.orientation = Orientation::DiagonalDown;
-        s.count = [4, 1];
-        s.offset = [3, 0]; // horizontal spacing between the parallel runs
+        s.direction = Direction::DownRight;
+        s.count = [4, 1, 1];
+        s.offset = [3, 0, 0];
         let f = plan(&s).unwrap();
         let mut seen = std::collections::HashSet::new();
         for fixture in &f {
             for p in &fixture.pixels {
                 let cell = (p.position.x as i32, p.position.y as i32);
-                assert!(
-                    seen.insert(cell),
-                    "two parallel diagonal runs shared cell {cell:?}"
-                );
+                assert!(seen.insert(cell), "parallel diagonals shared {cell:?}");
             }
         }
     }
@@ -311,55 +388,74 @@ mod tests {
     #[test]
     fn addressing_is_sequential_and_wraps_universes() {
         let mut s = spec();
-        // 10 RGB px = 30 channels/fixture. 17 fixtures = 510 ch fit in universe 1;
-        // the 18th spills to universe 2.
-        s.count = [18, 1];
+        s.count = [18, 1, 1];
         let f = plan(&s).unwrap();
-        assert_eq!(f[0].pixels[0].universe, 1);
-        assert_eq!(f[0].pixels[0].start_channel, 1);
         assert_eq!(f[1].pixels[0].start_channel, 31);
         assert_eq!(f[16].pixels[0].universe, 1);
-        assert_eq!(f[16].pixels[0].start_channel, 481); // 16*30 + 1
+        assert_eq!(f[16].pixels[0].start_channel, 481);
         assert_eq!(f[17].pixels[0].universe, 2);
         assert_eq!(f[17].pixels[0].start_channel, 1);
     }
 
     #[test]
-    fn fixtures_per_universe_limit_spills_early() {
+    fn channel_offset_leaves_a_gap_and_universe_offset_skips() {
         let mut s = spec();
-        s.count = [5, 1];
-        s.fixtures_per_universe = Some(2);
+        s.count = [3, 1, 1];
+        s.channel_offset = 10; // 30 span + 10 gap = 40 stride
         let f = plan(&s).unwrap();
-        assert_eq!(f[0].pixels[0].universe, 1);
-        assert_eq!(f[1].pixels[0].universe, 1);
-        assert_eq!(f[2].pixels[0].universe, 2); // limit 2 → third spills
-        assert_eq!(f[4].pixels[0].universe, 3);
+        assert_eq!(f[0].pixels[0].start_channel, 1);
+        assert_eq!(f[1].pixels[0].start_channel, 41);
+        assert_eq!(f[2].pixels[0].start_channel, 81);
+
+        // With a per-universe limit and a universe offset, wraps skip universes.
+        let mut u = spec();
+        u.count = [4, 1, 1];
+        u.fixtures_per_universe = Some(1);
+        u.universe_offset = 2; // wrap advances by 1 + 2 = 3 universes
+        let g = plan(&u).unwrap();
+        assert_eq!(g[0].pixels[0].universe, 1);
+        assert_eq!(g[1].pixels[0].universe, 4);
+        assert_eq!(g[2].pixels[0].universe, 7);
     }
 
     #[test]
     fn snake_reverses_addressing_on_odd_rows() {
         let mut s = spec();
-        s.count = [3, 2];
-        s.offset = [2, 2];
-        s.orientation = Orientation::Horizontal;
+        s.count = [3, 2, 1];
+        s.offset = [2, 2, 0];
+        s.direction = Direction::Right;
         s.snake = true;
         let f = plan(&s).unwrap();
-        // Row 0 addressed left→right; row 1 right→left. So the lowest channel of
-        // row 1 (the 4th fixture placed) sits at the RIGHTMOST origin x = 4.
         assert_eq!(f[3].pixels[0].position.x, 4.0);
         assert_eq!(f[5].pixels[0].position.x, 0.0);
-        // Addresses stay monotonically increasing in placement order.
         assert!(f[3].pixels[0].start_channel < f[4].pixels[0].start_channel);
+    }
+
+    #[test]
+    fn preview_matches_the_planned_layout() {
+        let mut s = spec();
+        s.count = [3, 1, 1];
+        s.offset = [4, 0, 0];
+        s.direction = Direction::Down;
+        let runs = plan_preview(&s);
+        let f = plan(&s).unwrap();
+        assert_eq!(runs.len(), f.len());
+        for (r, fix) in runs.iter().zip(&f) {
+            let first = fix.pixels[0].position;
+            let last = fix.pixels[fix.pixels.len() - 1].position;
+            assert_eq!(r.start, [first.x, first.y]);
+            assert_eq!(r.end, [last.x, last.y]);
+        }
     }
 
     #[test]
     fn rejects_empty_and_oversized() {
         let mut s = spec();
-        s.count = [0, 1];
+        s.count = [0, 1, 1];
         assert_eq!(plan(&s), Err(PlacementError::Empty));
 
         let mut big = spec();
-        big.fixture_type.pixel_count = 200; // 600 ch > 512
+        big.fixture_type.pixel_count = 200;
         assert!(matches!(
             plan(&big),
             Err(PlacementError::FixtureTooBig { .. })
@@ -371,7 +467,6 @@ mod tests {
         use crate::samples::wedding_rig;
         let patch = wedding_rig();
         let (u, c) = next_free_address(&patch);
-        // The rig fills into universe 2; the suggestion is past its last pixel.
         assert!(u >= 2);
         assert!((1..=512).contains(&c));
     }

@@ -26,3 +26,5 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # `serde` so Vec<Uuid> command arguments deserialize from the webview.
 uuid = { version = "1", features = ["v4", "serde"] }
+# Vec3 for the drag-move translate delta.
+glam = "0.29"

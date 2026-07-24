@@ -11,9 +11,10 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Mutex;
 
+use glam::Vec3;
 use prisma_editor::{
-    aggregate, builtin_fixture_types, next_free_address, plan, EditOp, FixtureType, PatchDraft,
-    PlacementSpec, SelectionAggregate,
+    aggregate, builtin_fixture_types, next_free_address, plan, plan_preview, EditOp, FixtureType,
+    PatchDraft, PlacementSpec, PreviewRun, SelectionAggregate,
 };
 use prisma_engine::{Engine, EngineConfig, EngineHandle};
 use prisma_patch::Patch;
@@ -98,6 +99,36 @@ fn editor_place_fixtures(state: State<AppState>, spec: PlacementSpec) -> Result<
     Ok(state_of(&draft))
 }
 
+/// Live preview of the signal path a placement would produce (§4.1) — no mutation.
+#[tauri::command]
+fn editor_preview_placement(spec: PlacementSpec) -> Vec<PreviewRun> {
+    plan_preview(&spec)
+}
+
+/// Translate fixtures by a cell delta — the canvas drag-move (§5.5). One undoable
+/// op for the whole selection, so a drag is a single undo step.
+#[tauri::command]
+fn editor_translate_fixtures(
+    state: State<AppState>,
+    ids: Vec<Uuid>,
+    delta: [f32; 3],
+) -> Result<EditorState, String> {
+    let mut draft = state.draft.lock().unwrap();
+    if ids.is_empty() {
+        return Ok(state_of(&draft));
+    }
+    draft
+        .apply(
+            EditOp::TranslateFixtures {
+                ids,
+                delta: Vec3::from(delta),
+            },
+            None,
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(state_of(&draft))
+}
+
 /// Delete the given fixtures (undoable).
 #[tauri::command]
 fn editor_remove_fixtures(state: State<AppState>, ids: Vec<Uuid>) -> Result<EditorState, String> {
@@ -132,7 +163,9 @@ fn main() {
             editor_selection_aggregate,
             editor_fixture_types,
             editor_next_free_address,
+            editor_preview_placement,
             editor_place_fixtures,
+            editor_translate_fixtures,
             editor_remove_fixtures,
             editor_undo,
             editor_redo,

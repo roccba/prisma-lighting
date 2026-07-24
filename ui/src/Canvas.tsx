@@ -2,54 +2,51 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { Patch } from "./api";
 import type { ViewMode } from "./Toolbar";
 
-// S4 layers on top of the raw S3 canvas, each gated by zoom (LOD, §5.2) so the
-// operator judges them at their natural scale — no debug toggles:
-//   • a 1px+ GAP between pixel cells so a tube's pixels read individually;
-//   • a SUBTLE per-fixture shade so adjacent same-zone fixtures separate;
-//   • DIRECTION ARROWS (signal flow) once a fixture is big enough to matter;
-//   • per-pixel DMX detail (U/C) only when zoomed right in;
-//   • a strong selection SILHOUETTE (dark halo + white) — not a weak wash;
-//   • view modes (all / highlight / isolate) around the active zone (§5.3).
+// S4 layers (zoom-gated: gap, contrast, arrows, per-pixel DMX, selection
+// silhouette, view modes) plus S5b additions: a background GRID and the active
+// zone's matrix bounds (§5.6) for spatial reference, and DRAG-to-move (§5.5) —
+// distinct from rubber-band selection — committed as one undo on release.
 
 interface Props {
   patch: Patch;
   selection: Set<string>;
   onSelectionChange: (next: Set<string>) => void;
+  onMove: (ids: string[], delta: [number, number, number]) => void;
   activeZone: string;
   viewMode: ViewMode;
 }
 
 interface View {
-  scale: number; // world units (matrix cells) → CSS pixels
+  scale: number;
   ox: number;
   oy: number;
 }
 
 const BG = "#0e0f13";
 const MATRIX_BORDER = "#2a2d38";
+const GRID = "rgba(255,255,255,0.045)";
 const RUBBER_FILL = "rgba(120, 170, 255, 0.15)";
 const RUBBER_STROKE = "rgba(150, 190, 255, 0.9)";
 
-// LOD thresholds (CSS px per matrix cell).
 const GAP_MIN_SCALE = 4;
 const ARROW_MIN_SCALE = 6;
+const GRID_MIN_SCALE = 9;
 const DMX_MIN_SCALE = 28;
 
 type RGB = [number, number, number];
 
-export function Canvas({ patch, selection, onSelectionChange, activeZone, viewMode }: Props) {
+export function Canvas({ patch, selection, onSelectionChange, onMove, activeZone, viewMode }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const view = useRef<View>({ scale: 8, ox: 20, oy: 20 });
   const drag = useRef<null | {
-    mode: "select" | "pan";
+    mode: "select" | "pan" | "move";
     startX: number; startY: number; lastX: number; lastY: number;
     additive: boolean; subtractive: boolean; moved: boolean;
+    moveIds: string[];
   }>(null);
   const rubber = useRef<null | { x0: number; y0: number; x1: number; y1: number }>(null);
+  const moveDelta = useRef<[number, number]>([0, 0]); // cell delta during a move
 
-  // Per-fixture render colour: the zone colour, modulated by a SUBTLE alternating
-  // shade within the zone so adjacent same-zone fixtures don't merge. Recomputed
-  // only when the patch changes.
   const fixtureColor = useMemo(() => {
     const zoneRgb = new Map<string, RGB>();
     for (const z of patch.zones) zoneRgb.set(z.id, z.display_color);
@@ -59,18 +56,22 @@ export function Canvas({ patch, selection, onSelectionChange, activeZone, viewMo
       const i = perZoneIndex.get(f.zone) ?? 0;
       perZoneIndex.set(f.zone, i + 1);
       const base = zoneRgb.get(f.zone) ?? [136, 136, 136];
-      const k = i % 2 === 0 ? 1.0 : 0.84; // subtle: gap does the heavy lifting
+      const k = i % 2 === 0 ? 1.0 : 0.84;
       out.set(f.id, [base[0] * k, base[1] * k, base[2] * k] as RGB);
     }
     return out;
   }, [patch]);
+
+  const activeZoneColor = useMemo(() => {
+    const z = patch.zones.find((z) => z.id === activeZone);
+    return z ? z.display_color : null;
+  }, [patch, activeZone]);
 
   const canvasSize = () => {
     const c = canvasRef.current!;
     return { w: c.clientWidth, h: c.clientHeight };
   };
 
-  // How a fixture renders under the current view mode / active zone (§5.3).
   const emphasis = useCallback(
     (zone: string): "full" | "dim" | "hidden" => {
       if (viewMode === "isolate") return zone === activeZone ? "full" : "hidden";
@@ -98,8 +99,30 @@ export function Canvas({ patch, selection, onSelectionChange, activeZone, viewMo
     const { scale, ox, oy } = view.current;
     const sx = (wx: number) => wx * scale + ox;
     const sy = (wy: number) => wy * scale + oy;
+    const [dmx, dmy] = drag.current?.mode === "move" ? moveDelta.current : [0, 0];
 
-    // Matrix extent outline — orientation only.
+    // Background grid at cell boundaries (zoom-gated, culled).
+    if (scale >= GRID_MIN_SCALE) {
+      ctx.strokeStyle = GRID;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      const [mx, my] = patch.matrix_size;
+      for (let i = 0; i <= mx; i++) {
+        const x = sx(i - 0.5);
+        if (x < -1 || x > w + 1) continue;
+        ctx.moveTo(x, sy(-0.5));
+        ctx.lineTo(x, sy(my - 0.5));
+      }
+      for (let j = 0; j <= my; j++) {
+        const y = sy(j - 0.5);
+        if (y < -1 || y > h + 1) continue;
+        ctx.moveTo(sx(-0.5), y);
+        ctx.lineTo(sx(mx - 0.5), y);
+      }
+      ctx.stroke();
+    }
+
+    // Matrix extent outline.
     ctx.strokeStyle = MATRIX_BORDER;
     ctx.lineWidth = 1;
     ctx.strokeRect(sx(-0.5), sy(-0.5), patch.matrix_size[0] * scale, patch.matrix_size[1] * scale);
@@ -108,40 +131,40 @@ export function Canvas({ patch, selection, onSelectionChange, activeZone, viewMo
     const cell = Math.max(1, scale - gap);
     const half = cell / 2;
     const onScreen = (x: number, y: number) => x >= -scale && x <= w + scale && y >= -scale && y <= h + scale;
+    const sel = (id: string) => selection.has(id);
 
-    // --- Pass 1: pixel cells ---
+    // Pass 1: pixel cells (selected fixtures offset by the live move delta).
     for (const f of patch.fixtures) {
       const e = emphasis(f.zone);
       if (e === "hidden") continue;
       const [r, g, b] = fixtureColor.get(f.id)!;
       ctx.fillStyle = e === "dim" ? `rgba(${r},${g},${b},0.20)` : `rgb(${r},${g},${b})`;
+      const off = sel(f.id);
       for (const p of f.pixels) {
-        const px = sx(p.position[0]);
-        const py = sy(p.position[1]);
+        const px = sx(p.position[0] + (off ? dmx : 0));
+        const py = sy(p.position[1] + (off ? dmy : 0));
         if (!onScreen(px, py)) continue;
         ctx.fillRect(px - half, py - half, cell, cell);
       }
     }
 
-    // --- Pass 2: direction arrows (signal flow), medium zoom+ ---
-    // A SHORT arrow contained at the fixture's END, not a spine along its whole
-    // length — a full line competes with the pixels on long (e.g. vertical) tubes.
+    // Pass 2: contained direction arrows.
     if (scale >= ARROW_MIN_SCALE) {
       for (const f of patch.fixtures) {
         if (emphasis(f.zone) !== "full") continue;
         if (f.pixels.length < 2) continue;
-        const a = f.pixels[0].position;
-        const b = f.pixels[f.pixels.length - 1].position;
-        const ex = sx(b[0]), ey = sy(b[1]);
+        const off = sel(f.id);
+        const a = f.pixels[0].position, b = f.pixels[f.pixels.length - 1].position;
+        const ex = sx(b[0] + (off ? dmx : 0)), ey = sy(b[1] + (off ? dmy : 0));
         const dx = b[0] - a[0], dy = b[1] - a[1];
         const wlen = Math.hypot(dx, dy) || 1;
-        const ux = dx / wlen, uy = dy / wlen; // unit direction (screen == world dir)
-        const stub = Math.min(wlen * scale * 0.5, 15); // capped length in px
+        const ux = dx / wlen, uy = dy / wlen;
+        const stub = Math.min(wlen * scale * 0.5, 15);
         drawArrow(ctx, ex - ux * stub, ey - uy * stub, ex, ey);
       }
     }
 
-    // --- Pass 3: per-pixel DMX detail, zoomed right in ---
+    // Pass 3: per-pixel DMX detail.
     if (scale >= DMX_MIN_SCALE) {
       const fs = Math.max(7, scale * 0.19);
       ctx.font = `${fs}px system-ui, sans-serif`;
@@ -150,9 +173,9 @@ export function Canvas({ patch, selection, onSelectionChange, activeZone, viewMo
       ctx.lineWidth = 3;
       for (const f of patch.fixtures) {
         if (emphasis(f.zone) !== "full") continue;
+        const off = sel(f.id);
         for (const p of f.pixels) {
-          const px = sx(p.position[0]);
-          const py = sy(p.position[1]);
+          const px = sx(p.position[0] + (off ? dmx : 0)), py = sy(p.position[1] + (off ? dmy : 0));
           if (!onScreen(px, py)) continue;
           label(ctx, `U${p.universe}`, px, py - fs * 0.55);
           label(ctx, `${p.start_channel}`, px, py + fs * 0.55);
@@ -160,48 +183,62 @@ export function Canvas({ patch, selection, onSelectionChange, activeZone, viewMo
       }
     }
 
-    // --- Pass 4: selection silhouette (strong: dark halo + white) ---
-    if (selection.size > 0) {
-      const sel = new Set<string>();
+    // Active zone's matrix bounds — frame its footprint (§5.6).
+    if (activeZoneColor) {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for (const f of patch.fixtures) {
-        if (!selection.has(f.id)) continue;
-        for (const p of f.pixels) sel.add(`${Math.round(p.position[0])},${Math.round(p.position[1])}`);
+        if (f.zone !== activeZone) continue;
+        const off = sel(f.id);
+        for (const p of f.pixels) {
+          const x = p.position[0] + (off ? dmx : 0), y = p.position[1] + (off ? dmy : 0);
+          minX = Math.min(minX, x); minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+        }
+      }
+      if (isFinite(minX)) {
+        ctx.save();
+        ctx.strokeStyle = `rgba(${activeZoneColor.join(",")},0.9)`;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([5, 4]);
+        ctx.strokeRect(sx(minX - 0.5), sy(minY - 0.5), (maxX - minX + 1) * scale, (maxY - minY + 1) * scale);
+        ctx.restore();
+      }
+    }
+
+    // Pass 4: selection silhouette.
+    if (selection.size > 0) {
+      const cells = new Set<string>();
+      for (const f of patch.fixtures) {
+        if (!sel(f.id)) continue;
+        for (const p of f.pixels) cells.add(`${Math.round(p.position[0] + dmx)},${Math.round(p.position[1] + dmy)}`);
       }
       const outline = () => {
         ctx.beginPath();
-        for (const key of sel) {
+        for (const key of cells) {
           const [gx, gy] = key.split(",").map(Number);
           const cx = sx(gx), cy = sy(gy), h2 = scale / 2;
-          if (!sel.has(`${gx - 1},${gy}`)) { ctx.moveTo(cx - h2, cy - h2); ctx.lineTo(cx - h2, cy + h2); }
-          if (!sel.has(`${gx + 1},${gy}`)) { ctx.moveTo(cx + h2, cy - h2); ctx.lineTo(cx + h2, cy + h2); }
-          if (!sel.has(`${gx},${gy - 1}`)) { ctx.moveTo(cx - h2, cy - h2); ctx.lineTo(cx + h2, cy - h2); }
-          if (!sel.has(`${gx},${gy + 1}`)) { ctx.moveTo(cx - h2, cy + h2); ctx.lineTo(cx + h2, cy + h2); }
+          if (!cells.has(`${gx - 1},${gy}`)) { ctx.moveTo(cx - h2, cy - h2); ctx.lineTo(cx - h2, cy + h2); }
+          if (!cells.has(`${gx + 1},${gy}`)) { ctx.moveTo(cx + h2, cy - h2); ctx.lineTo(cx + h2, cy + h2); }
+          if (!cells.has(`${gx},${gy - 1}`)) { ctx.moveTo(cx - h2, cy - h2); ctx.lineTo(cx + h2, cy - h2); }
+          if (!cells.has(`${gx},${gy + 1}`)) { ctx.moveTo(cx - h2, cy + h2); ctx.lineTo(cx + h2, cy + h2); }
         }
         ctx.stroke();
       };
       ctx.lineCap = "round";
-      ctx.strokeStyle = "rgba(0,0,0,0.85)";
-      ctx.lineWidth = 4;
-      outline();
-      ctx.strokeStyle = "#ffffff";
-      ctx.lineWidth = 1.75;
-      outline();
+      ctx.strokeStyle = "rgba(0,0,0,0.85)"; ctx.lineWidth = 4; outline();
+      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.75; outline();
     }
 
-    // --- Rubber-band ---
+    // Rubber-band.
     if (rubber.current) {
       const { x0, y0, x1, y1 } = rubber.current;
       const rx = Math.min(x0, x1), ry = Math.min(y0, y1);
       const rw = Math.abs(x1 - x0), rh = Math.abs(y1 - y0);
-      ctx.fillStyle = RUBBER_FILL;
-      ctx.fillRect(rx, ry, rw, rh);
-      ctx.strokeStyle = RUBBER_STROKE;
-      ctx.lineWidth = 1;
-      ctx.strokeRect(rx + 0.5, ry + 0.5, rw, rh);
+      ctx.fillStyle = RUBBER_FILL; ctx.fillRect(rx, ry, rw, rh);
+      ctx.strokeStyle = RUBBER_STROKE; ctx.lineWidth = 1; ctx.strokeRect(rx + 0.5, ry + 0.5, rw, rh);
     }
-  }, [patch, selection, fixtureColor, emphasis]);
+  }, [patch, selection, fixtureColor, emphasis, activeZone, activeZoneColor]);
 
-  // Fit the whole rig into view whenever the patch changes.
   const fit = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -213,8 +250,7 @@ export function Canvas({ patch, selection, onSelectionChange, activeZone, viewMo
         maxX = Math.max(maxX, p.position[0]); maxY = Math.max(maxY, p.position[1]);
       }
     if (!isFinite(minX)) { minX = 0; minY = 0; maxX = patch.matrix_size[0]; maxY = patch.matrix_size[1]; }
-    const spanX = Math.max(1, maxX - minX + 1);
-    const spanY = Math.max(1, maxY - minY + 1);
+    const spanX = Math.max(1, maxX - minX + 1), spanY = Math.max(1, maxY - minY + 1);
     const margin = 40;
     const scale = Math.max(1, Math.min((w - margin) / spanX, (h - margin) / spanY));
     view.current = {
@@ -233,7 +269,6 @@ export function Canvas({ patch, selection, onSelectionChange, activeZone, viewMo
     return () => window.removeEventListener("resize", onResize);
   }, [draw]);
 
-  // --- Interaction ---
   const localXY = (e: React.PointerEvent | React.WheelEvent) => {
     const rect = canvasRef.current!.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
@@ -243,16 +278,34 @@ export function Canvas({ patch, selection, onSelectionChange, activeZone, viewMo
     return { wx: (px - ox) / scale, wy: (py - oy) / scale };
   };
 
+  const fixtureAt = (px: number, py: number): string | null => {
+    const { wx, wy } = worldFromScreen(px, py);
+    for (const f of patch.fixtures) {
+      if (emphasis(f.zone) === "hidden") continue;
+      if (f.pixels.some((p) => Math.abs(p.position[0] - wx) <= 0.5 && Math.abs(p.position[1] - wy) <= 0.5)) return f.id;
+    }
+    return null;
+  };
+
   const onPointerDown = (e: React.PointerEvent) => {
     canvasRef.current!.setPointerCapture(e.pointerId);
     const { x, y } = localXY(e);
-    const pan = e.button === 1 || e.button === 2;
-    drag.current = {
-      mode: pan ? "pan" : "select",
-      startX: x, startY: y, lastX: x, lastY: y,
-      additive: e.shiftKey, subtractive: e.altKey, moved: false,
-    };
-    if (!pan) rubber.current = { x0: x, y0: y, x1: x, y1: y };
+    if (e.button === 1 || e.button === 2) {
+      drag.current = { mode: "pan", startX: x, startY: y, lastX: x, lastY: y, additive: false, subtractive: false, moved: false, moveIds: [] };
+      return;
+    }
+    const hit = e.shiftKey || e.altKey ? null : fixtureAt(x, y);
+    if (hit) {
+      // Move the selection (selecting the hit fixture if it wasn't already).
+      let moveIds: string[];
+      if (selection.has(hit)) moveIds = [...selection];
+      else { moveIds = [hit]; onSelectionChange(new Set([hit])); }
+      moveDelta.current = [0, 0];
+      drag.current = { mode: "move", startX: x, startY: y, lastX: x, lastY: y, additive: false, subtractive: false, moved: false, moveIds };
+    } else {
+      drag.current = { mode: "select", startX: x, startY: y, lastX: x, lastY: y, additive: e.shiftKey, subtractive: e.altKey, moved: false, moveIds: [] };
+      rubber.current = { x0: x, y0: y, x1: x, y1: y };
+    }
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
@@ -261,8 +314,12 @@ export function Canvas({ patch, selection, onSelectionChange, activeZone, viewMo
     const { x, y } = localXY(e);
     if (Math.abs(x - d.startX) + Math.abs(y - d.startY) > 3) d.moved = true;
     if (d.mode === "pan") {
-      view.current.ox += x - d.lastX;
-      view.current.oy += y - d.lastY;
+      view.current.ox += x - d.lastX; view.current.oy += y - d.lastY;
+    } else if (d.mode === "move") {
+      moveDelta.current = [
+        Math.round((x - d.startX) / view.current.scale),
+        Math.round((y - d.startY) / view.current.scale),
+      ];
     } else if (rubber.current) {
       rubber.current.x1 = x; rubber.current.y1 = y;
     }
@@ -275,21 +332,10 @@ export function Canvas({ patch, selection, onSelectionChange, activeZone, viewMo
     const b = worldFromScreen(Math.max(rx0, rx1), Math.max(ry0, ry1));
     const hit = new Set<string>();
     for (const f of patch.fixtures) {
-      if (emphasis(f.zone) === "hidden") continue; // can't select what isn't shown
-      if (f.pixels.some((p) => p.position[0] >= a.wx && p.position[0] <= b.wx && p.position[1] >= a.wy && p.position[1] <= b.wy))
-        hit.add(f.id);
+      if (emphasis(f.zone) === "hidden") continue;
+      if (f.pixels.some((p) => p.position[0] >= a.wx && p.position[0] <= b.wx && p.position[1] >= a.wy && p.position[1] <= b.wy)) hit.add(f.id);
     }
     return hit;
-  };
-
-  const fixtureAt = (px: number, py: number): string | null => {
-    const { wx, wy } = worldFromScreen(px, py);
-    for (const f of patch.fixtures) {
-      if (emphasis(f.zone) === "hidden") continue;
-      if (f.pixels.some((p) => Math.abs(p.position[0] - wx) <= 0.5 && Math.abs(p.position[1] - wy) <= 0.5))
-        return f.id;
-    }
-    return null;
   };
 
   const onPointerUp = (e: React.PointerEvent) => {
@@ -297,16 +343,36 @@ export function Canvas({ patch, selection, onSelectionChange, activeZone, viewMo
     drag.current = null;
     if (!d) return;
     canvasRef.current!.releasePointerCapture(e.pointerId);
+
+    if (d.mode === "move") {
+      const [mx, my] = moveDelta.current;
+      moveDelta.current = [0, 0];
+      if (mx !== 0 || my !== 0) onMove(d.moveIds, [mx, my, 0]);
+      else draw();
+      return;
+    }
     if (d.mode === "pan") { rubber.current = null; draw(); return; }
+
+    // Select mode. A drag is a rectangle; a click hit-tests one fixture (this path
+    // is only reached for empty clicks or shift/alt on a fixture — a plain click on
+    // a fixture went to move mode).
     const { x, y } = localXY(e);
     let hits: Set<string>;
     if (d.moved) hits = fixturesInRect(d.startX, d.startY, x, y);
     else { const f = fixtureAt(x, y); hits = f ? new Set([f]) : new Set(); }
     rubber.current = null;
-    let next: Set<string>;
-    if (d.additive) { next = new Set(selection); for (const id of hits) next.add(id); }
-    else if (d.subtractive) { next = new Set(selection); for (const id of hits) next.delete(id); }
-    else next = hits;
+
+    const next = new Set(selection);
+    if (d.subtractive) {
+      for (const id of hits) next.delete(id);
+    } else if (d.additive) {
+      // shift+click toggles; shift+drag adds.
+      for (const id of hits) (!d.moved && next.has(id)) ? next.delete(id) : next.add(id);
+    } else {
+      // no modifier → replace (only empty click/drag reaches here).
+      onSelectionChange(hits);
+      return;
+    }
     onSelectionChange(next);
   };
 
@@ -333,14 +399,12 @@ export function Canvas({ patch, selection, onSelectionChange, activeZone, viewMo
         onContextMenu={(e) => e.preventDefault()}
       />
       <div className="canvas-hint">
-        drag: select · shift add · alt remove · middle/right drag: pan · wheel: zoom
+        drag fixture: move · drag empty: select · shift/alt add/remove · middle/right: pan · wheel: zoom
       </div>
     </div>
   );
 }
 
-/** A signal-flow arrow from (x0,y0) to (x1,y1): dark halo then light core so it
- *  reads over any zone colour. */
 function drawArrow(ctx: CanvasRenderingContext2D, x0: number, y0: number, x1: number, y1: number) {
   const dx = x1 - x0, dy = y1 - y0;
   const len = Math.hypot(dx, dy) || 1;
@@ -349,27 +413,18 @@ function drawArrow(ctx: CanvasRenderingContext2D, x0: number, y0: number, x1: nu
   const hx = x1 - ux * head, hy = y1 - uy * head;
   const nx = -uy, ny = ux;
   const stroke = (color: string, width: number) => {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = width;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
+    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineCap = "round"; ctx.lineJoin = "round";
     ctx.beginPath();
-    ctx.moveTo(x0, y0);
-    ctx.lineTo(x1, y1);
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(hx + nx * head * 0.5, hy + ny * head * 0.5);
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(hx - nx * head * 0.5, hy - ny * head * 0.5);
+    ctx.moveTo(x0, y0); ctx.lineTo(x1, y1);
+    ctx.moveTo(x1, y1); ctx.lineTo(hx + nx * head * 0.5, hy + ny * head * 0.5);
+    ctx.moveTo(x1, y1); ctx.lineTo(hx - nx * head * 0.5, hy - ny * head * 0.5);
     ctx.stroke();
   };
   stroke("rgba(0,0,0,0.55)", 3);
   stroke("rgba(255,255,255,0.92)", 1.1);
 }
 
-/** Small DMX label with a dark outline for legibility over any cell colour. */
 function label(ctx: CanvasRenderingContext2D, text: string, x: number, y: number) {
-  ctx.strokeStyle = "rgba(0,0,0,0.8)";
-  ctx.strokeText(text, x, y);
-  ctx.fillStyle = "#eef1f6";
-  ctx.fillText(text, x, y);
+  ctx.strokeStyle = "rgba(0,0,0,0.8)"; ctx.strokeText(text, x, y);
+  ctx.fillStyle = "#eef1f6"; ctx.fillText(text, x, y);
 }

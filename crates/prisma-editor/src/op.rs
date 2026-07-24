@@ -50,10 +50,14 @@ pub enum EditOp {
     /// so the inverse ([`InsertFixtures`](EditOp::InsertFixtures)) restores it
     /// exactly.
     RemoveFixtures { ids: Vec<Uuid> },
-    /// Set every pixel's position in a fixture (a move/translate is expressed as
-    /// the resulting absolute positions, captured old for the inverse). Length must
-    /// equal the fixture's pixel count.
+    /// Set every pixel's position in a fixture (the resulting absolute positions,
+    /// captured old for the inverse). Length must equal the fixture's pixel count.
     SetFixturePositions { fixture: Uuid, positions: Vec<Vec3> },
+    /// Translate every pixel of several fixtures by `delta` — the canvas drag-move
+    /// (§5.5). One op for the whole selection, so a drag is **one** undo step. Its
+    /// inverse is the same op with `-delta` (translation is exactly self-inverse), so
+    /// no snapshot is needed.
+    TranslateFixtures { ids: Vec<Uuid>, delta: Vec3 },
     /// Set every pixel's DMX address in a fixture (re-addressing). Length must equal
     /// the fixture's pixel count.
     SetFixtureAddressing {
@@ -145,6 +149,8 @@ impl EditOp {
             EditOp::SetFixtureAddressing { fixture, .. } => {
                 Some(CoalesceKey::FixtureAddressing(*fixture))
             }
+            // Committed once per drag (on release), so no per-move coalescing.
+            EditOp::TranslateFixtures { .. } => None,
             EditOp::AssignFixtureZone { fixture, .. } => Some(CoalesceKey::FixtureZone(*fixture)),
             EditOp::RenameZone { zone, .. } => Some(CoalesceKey::ZoneName(*zone)),
             EditOp::SetZoneColor { zone, .. } => Some(CoalesceKey::ZoneColor(*zone)),
@@ -253,6 +259,21 @@ pub fn apply(patch: &mut Patch, op: EditOp) -> Result<EditOp, EditError> {
                 fixture,
                 addressing: old,
             })
+        }
+
+        EditOp::TranslateFixtures { ids, delta } => {
+            // All ids must resolve before we move anything.
+            for id in &ids {
+                if !patch.fixtures.iter().any(|f| f.id == *id) {
+                    return Err(EditError::FixtureNotFound(*id));
+                }
+            }
+            for fixture in patch.fixtures.iter_mut().filter(|f| ids.contains(&f.id)) {
+                for pixel in &mut fixture.pixels {
+                    pixel.position += delta;
+                }
+            }
+            Ok(EditOp::TranslateFixtures { ids, delta: -delta })
         }
 
         EditOp::AssignFixtureZone { fixture, zone } => {
