@@ -969,6 +969,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "prisma-editor"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "prisma-patch",
+ "uuid",
+]
+
+[[package]]
 name = "prisma-engine"
 version = "0.1.0"
 dependencies = [

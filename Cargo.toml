@@ -6,6 +6,7 @@ members = [
     "crates/prisma-output",
     "crates/prisma-preview",
     "crates/prisma-engine",
+    "crates/prisma-editor",
     "crates/prisma-midi",
     "crates/prisma-script",
     "crates/prisma-patch",

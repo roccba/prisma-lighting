@@ -1,0 +1,20 @@
+[package]
+name = "prisma-editor"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The patch-editor backend: the Rust-side editable draft of a patch, the
+# invertible edit operations, and the undo/redo stack. This is the "single source
+# of truth" the M7 editor works against (Part A decision): structural edits are
+# typed operations over a draft held here, not Parameter-Tree traffic. The Tauri
+# app wraps these methods as IPC commands; keeping the logic in a crate makes it
+# testable headlessly and reusable. It depends only on the patch model.
+[dependencies]
+prisma-patch = { path = "../prisma-patch" }
+glam = "0.29"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+uuid = { version = "1", features = ["v4"] }
