@@ -44,6 +44,58 @@ html, body, #root {
 .topbar .title { font-weight: 600; }
 .topbar .sub { color: var(--muted); font-size: 12px; }
 
+/* Toolbar — zone selector (§6) + view modes (§5.3) */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+}
+.tb-group { display: flex; align-items: center; gap: 8px; }
+.tb-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.tb-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px 8px;
+}
+.tb-select select {
+  background: transparent;
+  color: var(--text);
+  border: none;
+  outline: none;
+  font: inherit;
+  padding: 2px 0;
+}
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.seg {
+  background: var(--bg);
+  color: var(--muted);
+  border: none;
+  padding: 4px 12px;
+  font: inherit;
+  cursor: pointer;
+  border-left: 1px solid var(--line);
+}
+.seg:first-child { border-left: none; }
+.seg:hover { color: var(--text); }
+.seg.active { background: var(--accent); color: #0b0d12; font-weight: 600; }
+
 .body {
   flex: 1;
   display: grid;
