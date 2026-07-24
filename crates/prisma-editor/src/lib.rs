@@ -22,9 +22,14 @@
 
 pub mod draft;
 pub mod op;
+pub mod placement;
 pub mod samples;
 pub mod selection;
 
 pub use draft::{GestureId, PatchDraft};
 pub use op::{CoalesceKey, EditError, EditOp, PixelAddress};
+pub use placement::{
+    builtin_fixture_types, next_free_address, plan, FixtureType, Orientation, PlacementError,
+    PlacementSpec,
+};
 pub use selection::{aggregate, SelectionAggregate};

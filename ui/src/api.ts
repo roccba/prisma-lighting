@@ -34,6 +34,15 @@ export interface Patch {
   zones: Zone[];
 }
 
+/** The editor snapshot after any command (patch + toolbar/validation state). */
+export interface EditorState {
+  patch: Patch;
+  can_undo: boolean;
+  can_redo: boolean;
+  dirty: boolean;
+  validation: string | null;
+}
+
 export interface SelectionAggregate {
   fixture_count: number;
   pixel_count: number;
@@ -45,9 +54,45 @@ export interface SelectionAggregate {
   channel_max: number;
 }
 
-/** The editor's working patch (the draft), as geometry to render. */
-export const getPatch = () => invoke<Patch>("editor_get_patch");
+export type ComponentSet = "Rgb" | "Rgbw";
+export type Orientation = "Horizontal" | "Vertical" | "DiagonalDown" | "DiagonalUp";
 
-/** Aggregate properties of a fixture selection, or null if empty (§5.4). */
+export interface FixtureType {
+  name: string;
+  pixel_count: number;
+  components: ComponentSet;
+  color_order: string;
+}
+
+export interface PlacementSpec {
+  fixture_type: FixtureType;
+  name_prefix: string;
+  start_number: number;
+  count: [number, number];
+  offset: [number, number];
+  start_position: [number, number];
+  orientation: Orientation;
+  snake: boolean;
+  start_universe: number;
+  start_channel: number;
+  fixtures_per_universe: number | null;
+  zone: string;
+}
+
+export const getState = () => invoke<EditorState>("editor_get_state");
+
 export const selectionAggregate = (ids: string[]) =>
   invoke<SelectionAggregate | null>("editor_selection_aggregate", { ids });
+
+export const fixtureTypes = () => invoke<FixtureType[]>("editor_fixture_types");
+
+export const nextFreeAddress = () => invoke<[number, number]>("editor_next_free_address");
+
+export const placeFixtures = (spec: PlacementSpec) =>
+  invoke<EditorState>("editor_place_fixtures", { spec });
+
+export const removeFixtures = (ids: string[]) =>
+  invoke<EditorState>("editor_remove_fixtures", { ids });
+
+export const undo = () => invoke<EditorState>("editor_undo");
+export const redo = () => invoke<EditorState>("editor_redo");

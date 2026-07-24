@@ -18,23 +18,44 @@ interface Props {
   onActiveZone: (id: string) => void;
   viewMode: ViewMode;
   onViewMode: (m: ViewMode) => void;
+  onAddFixtures: () => void;
+  onDelete: () => void;
+  canDelete: boolean;
+  onUndo: () => void;
+  canUndo: boolean;
+  onRedo: () => void;
+  canRedo: boolean;
 }
 
-export function Toolbar({ patch, activeZone, onActiveZone, viewMode, onViewMode }: Props) {
-  const active = patch.zones.find((z) => z.id === activeZone);
+export function Toolbar(p: Props) {
+  const active = p.patch.zones.find((z) => z.id === p.activeZone);
   return (
     <div className="toolbar">
+      <div className="tb-group">
+        <button className="btn" onClick={p.onAddFixtures}>
+          + Add fixtures
+        </button>
+        <button className="btn" onClick={p.onDelete} disabled={!p.canDelete}>
+          Delete
+        </button>
+        <button className="btn" onClick={p.onUndo} disabled={!p.canUndo} title="Undo">
+          ↶
+        </button>
+        <button className="btn" onClick={p.onRedo} disabled={!p.canRedo} title="Redo">
+          ↷
+        </button>
+      </div>
+
+      <div className="tb-sep" />
+
       <label className="tb-group">
         <span className="tb-label">Zone</span>
         <span className="tb-select">
           {active && (
-            <span
-              className="swatch"
-              style={{ background: `rgb(${active.display_color.join(",")})` }}
-            />
+            <span className="swatch" style={{ background: `rgb(${active.display_color.join(",")})` }} />
           )}
-          <select value={activeZone} onChange={(e) => onActiveZone(e.target.value)}>
-            {patch.zones.map((z) => (
+          <select value={p.activeZone} onChange={(e) => p.onActiveZone(e.target.value)}>
+            {p.patch.zones.map((z) => (
               <option key={z.id} value={z.id}>
                 {z.name}
               </option>
@@ -50,8 +71,8 @@ export function Toolbar({ patch, activeZone, onActiveZone, viewMode, onViewMode 
             <button
               key={m.id}
               title={m.title}
-              className={m.id === viewMode ? "seg active" : "seg"}
-              onClick={() => onViewMode(m.id)}
+              className={m.id === p.viewMode ? "seg active" : "seg"}
+              onClick={() => p.onViewMode(m.id)}
             >
               {m.label}
             </button>
