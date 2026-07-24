@@ -124,3 +124,9 @@ export const removeFixtures = (ids: string[]) =>
 
 export const undo = () => invoke<EditorState>("editor_undo");
 export const redo = () => invoke<EditorState>("editor_redo");
+
+/** Serialize the mapping to `path` (a `.prismap`) and clear the dirty flag (§9). */
+export const saveTo = (path: string) => invoke<EditorState>("editor_save_to", { path });
+
+/** Open a `.prismap` from `path` into the editor, migrating an older schema (§9). */
+export const openFrom = (path: string) => invoke<EditorState>("editor_open_from", { path });

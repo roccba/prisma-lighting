@@ -18,6 +18,8 @@ interface Props {
   onActiveZone: (id: string) => void;
   viewMode: ViewMode;
   onViewMode: (m: ViewMode) => void;
+  onOpen: () => void;
+  onSave: () => void;
   onAddFixtures: () => void;
   onDelete: () => void;
   canDelete: boolean;
@@ -31,6 +33,17 @@ export function Toolbar(p: Props) {
   const active = p.patch.zones.find((z) => z.id === p.activeZone);
   return (
     <div className="toolbar">
+      <div className="tb-group">
+        <button className="btn" onClick={p.onOpen} title="Open .prismap (Ctrl+O)">
+          Open
+        </button>
+        <button className="btn" onClick={p.onSave} title="Save .prismap (Ctrl+S)">
+          Save
+        </button>
+      </div>
+
+      <div className="tb-sep" />
+
       <div className="tb-group">
         <button className="btn" onClick={p.onAddFixtures}>
           + Add fixtures

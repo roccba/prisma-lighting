@@ -196,6 +196,7 @@ html, body, #root {
   border-top: 1px solid var(--line);
 }
 .modal-count { color: var(--muted); font-size: 12px; }
+.modal-message { padding: 16px; color: var(--text); line-height: 1.5; }
 .spacer { flex: 1; }
 .modal.wide { width: 720px; }
 .preview-section { padding: 0 16px 12px; }

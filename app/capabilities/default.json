@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Core APIs the editor uses (window close-requested for the unsaved-changes guard) plus native file dialogs for .prismap open/save.",
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:default"]
+}

@@ -17,7 +17,7 @@ use prisma_editor::{
     PatchDraft, PlacementSpec, PreviewRun, SelectionAggregate,
 };
 use prisma_engine::{Engine, EngineConfig, EngineHandle};
-use prisma_patch::Patch;
+use prisma_patch::{load_patch, save_patch, Patch};
 use prisma_render::AdapterPreference;
 use serde::Serialize;
 use tauri::{Manager, RunEvent, State};
@@ -142,6 +142,33 @@ fn editor_remove_fixtures(state: State<AppState>, ids: Vec<Uuid>) -> Result<Edit
     Ok(state_of(&draft))
 }
 
+/// Save the current mapping to a `.prismap` file (§9). The frontend picks the path
+/// with the native dialog; here we serialize through the M2 envelope (which carries
+/// EVERY field — zones' mapping_size/world_transform/colour, fixture ownership) and
+/// write it, then clear the dirty flag.
+#[tauri::command]
+fn editor_save_to(state: State<AppState>, path: String) -> Result<EditorState, String> {
+    let mut draft = state.draft.lock().unwrap();
+    let json = save_patch(draft.patch()).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    draft.mark_saved();
+    Ok(state_of(&draft))
+}
+
+/// Open a `.prismap` into the editor (§9). Migrates an older schema on the way in
+/// (M2 migration chain). Replaces the draft with a fresh, clean history.
+///
+/// Note: this loads into the *editor draft* only; the live engine keeps running the
+/// patch it started with until a recompile (Highlight/close, S9).
+#[tauri::command]
+fn editor_open_from(state: State<AppState>, path: String) -> Result<EditorState, String> {
+    let json = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let patch = load_patch(&json).map_err(|e| e.to_string())?;
+    let mut draft = state.draft.lock().unwrap();
+    *draft = PatchDraft::new(patch);
+    Ok(state_of(&draft))
+}
+
 #[tauri::command]
 fn editor_undo(state: State<AppState>) -> EditorState {
     let mut draft = state.draft.lock().unwrap();
@@ -167,9 +194,12 @@ fn main() {
             editor_place_fixtures,
             editor_translate_fixtures,
             editor_remove_fixtures,
+            editor_save_to,
+            editor_open_from,
             editor_undo,
             editor_redo,
         ])
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // The editor opens on the sample wedding rig — a realistic layout
             // (four zones, varied tube lengths, two diagonal bar runs).
