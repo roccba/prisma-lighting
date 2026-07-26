@@ -103,6 +103,7 @@ fn wire(
         generation: index.generation(),
         overlap,
         flat,
+        highlight: None,
     };
     let pkt = router.encode_universe_with(0, &frame).unwrap().to_vec();
     parse_artdmx(&pkt).unwrap().data.to_vec()

@@ -13,6 +13,7 @@
 
 pub mod affinity;
 pub mod frame;
+pub mod highlight;
 pub mod packet;
 pub mod plan;
 pub mod priority;

@@ -24,7 +24,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::affinity::pin_current_thread;
-use crate::frame::FrameConsumer;
+use crate::frame::{Consumer, FrameConsumer};
+use crate::highlight::{blink_on, HighlightFrame, HighlightState};
 use crate::plan::FlatParams;
 use crate::priority::elevate_current_thread;
 use crate::rate::RatePlan;
@@ -57,6 +58,9 @@ pub struct SchedulerConfig {
     /// Where each output frame's live master/zone dimmer + colour come from.
     /// `None` leaves them at unity, which is exactly the M1 behaviour.
     pub flat_source: Option<Box<dyn FlatParamSource>>,
+    /// The editor's live Highlight selection (§7 / S9), read wait-free each tick.
+    /// `None` = no Highlight capability (M1/M5 behaviour: never overrides output).
+    pub highlight_consumer: Option<Consumer<HighlightState>>,
 }
 
 impl Default for SchedulerConfig {
@@ -67,6 +71,7 @@ impl Default for SchedulerConfig {
             run_for: None,
             zone_count: 0,
             flat_source: None,
+            highlight_consumer: None,
             stop: Arc::new(AtomicBool::new(false)),
             pin_to_core: None,
             artsync_target: None,
@@ -145,6 +150,9 @@ pub fn run_output_loop(
     let mut tick: u64 = 0;
     // Preallocated once; refilled in place every frame from live state.
     let mut flat = FlatParams::identity(config.zone_count);
+    // The Highlight selection, read wait-free each tick (§7 / S9). Owned here so the
+    // borrow of `current()` does not tangle with `config`.
+    let mut highlight = config.highlight_consumer;
 
     loop {
         let deadline = start + Duration::from_nanos(period_ns.saturating_mul(tick));
@@ -164,11 +172,25 @@ pub fn run_output_loop(
         if let Some(source) = &config.flat_source {
             source.read_into(&mut flat);
         }
+
+        // Highlight (§7 / S9): read the latest selection wait-free, resolve the blink
+        // phase from wall-clock (never the show clock, so it works while content is
+        // frozen). `None` unless something is highlighted right now.
+        let highlight_frame = highlight.as_mut().and_then(|consumer| {
+            consumer.advance();
+            let state = consumer.current();
+            state.active.then(|| HighlightFrame {
+                mask: &state.mask,
+                on: blink_on(now.saturating_duration_since(start), state.blink),
+            })
+        });
+
         let output_frame = crate::router::OutputFrame {
             master: pixels,
             generation: master_generation,
             overlap: frame.overlap.as_deref(),
             flat: &flat,
+            highlight: highlight_frame.as_ref(),
         };
 
         for (i, transport) in transports.iter_mut().enumerate() {

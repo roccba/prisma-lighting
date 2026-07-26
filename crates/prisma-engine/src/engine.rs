@@ -1,12 +1,14 @@
 //! [`Engine::start`] — assemble the running product — and [`EngineHandle`] — own
 //! it and tear it down in order.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use half::f16;
+use uuid::Uuid;
 
 use prisma_core::time::SystemClock;
 use prisma_core::tree::ParameterTree;
@@ -16,7 +18,8 @@ use prisma_core::MasterClock;
 use prisma_patch::{LayoutGeneration, Patch, PatchError};
 
 use prisma_output::affinity::pin_current_thread;
-use prisma_output::frame::frame_handoff;
+use prisma_output::frame::{frame_handoff, Producer};
+use prisma_output::highlight::{highlight_handoff, HighlightState};
 use prisma_output::plan::{OutputPlan, PlanError};
 use prisma_output::rate::RatePlan;
 use prisma_output::router::OutputRouter;
@@ -123,8 +126,21 @@ pub struct EngineHandle {
     generation: LayoutGeneration,
     /// Kept so shutdown can release the GPU **last**, after the render thread that
     /// used it has joined. This is the only long-lived strong reference besides the
-    /// render thread's.
+    /// render thread's. Also **reused across a recompile** so the Vulkan device is
+    /// not re-initialized on every editor apply (§7 / S9).
     gpu: Arc<Gpu>,
+    /// Freeze flag shared with the render loop (§7): while set, content holds and the
+    /// output keeps emitting. The editor writes it via [`set_frozen`](Self::set_frozen).
+    freeze: Arc<AtomicBool>,
+    /// Producer half of the Highlight handoff (§7 / S9): the editor publishes the
+    /// selected pixels here and the output thread reads them wait-free.
+    highlight: Producer<HighlightState>,
+    /// Fixture id → its pixels' component offsets in the master buffer, precompiled
+    /// once so [`highlight`](Self::highlight) resolves a selection without walking the
+    /// index each call. Rebuilt by a recompile against the new layout.
+    fixture_components: HashMap<Uuid, Vec<usize>>,
+    /// Length of the master buffer (components), to size/bound the Highlight mask.
+    master_len: usize,
     inner: Option<Running>,
 }
 
@@ -140,6 +156,22 @@ impl Engine {
     /// than hardcoded, and the render thread gets affinity (never RT — it stays below
     /// the output thread, §3.3).
     pub fn start(patch: Patch, config: EngineConfig) -> Result<EngineHandle, EngineError> {
+        // --- GPU: brought up once here (setup path, blocks), shared by reference. ---
+        let gpu = Arc::new(Gpu::new(config.adapter)?);
+        Self::assemble(patch, config, gpu)
+    }
+
+    /// Assemble the running engine on an **existing** GPU. Shared by [`start`] (which
+    /// creates the GPU) and [`EngineHandle::recompile`] (which reuses it, so an editor
+    /// apply does not pay Vulkan re-init). Everything layout-derived is rebuilt from
+    /// `patch`, minting a fresh [`LayoutGeneration`].
+    ///
+    /// [`start`]: Engine::start
+    fn assemble(
+        patch: Patch,
+        config: EngineConfig,
+        gpu: Arc<Gpu>,
+    ) -> Result<EngineHandle, EngineError> {
         // --- Compile the patch: one layout generation shared by every consumer. ---
         let index = patch.compile()?;
         let generation = index.generation();
@@ -147,8 +179,21 @@ impl Engine {
         let zone_count = index.zone_count();
         let matrix = (patch.matrix_size[0], patch.matrix_size[1]);
 
-        // --- GPU: brought up once here (setup path, blocks), shared by reference. ---
-        let gpu = Arc::new(Gpu::new(config.adapter)?);
+        // Fixture → its master-buffer component offsets, for resolving a Highlight
+        // selection (§7 / S9) without walking the index per call.
+        let mut fixture_components: HashMap<Uuid, Vec<usize>> =
+            HashMap::with_capacity(patch.fixtures.len());
+        for fixture in &patch.fixtures {
+            let mut offsets = Vec::with_capacity(fixture.pixels.len() * 4);
+            for local in 0..fixture.pixels.len() as u32 {
+                if let Some(g) = index.global_index(fixture.id, local) {
+                    let start = index.pixel_component_offset(g) as usize;
+                    let count = index.pixel_component_count(g) as usize;
+                    offsets.extend(start..start + count);
+                }
+            }
+            fixture_components.insert(fixture.id, offsets);
+        }
 
         // --- Live state: one Parameter Tree binding feeds render, output AND preview. ---
         let tree = ParameterTree::with_defaults();
@@ -190,6 +235,11 @@ impl Engine {
         let counter = OverlapCounter::new(&patch, &index);
         let clock = MasterClock::new(Arc::new(SystemClock::new()));
 
+        // --- Freeze flag (render pauses the clock) + Highlight handoff (output reads
+        //     the editor's selection wait-free). §7 / S9. ---
+        let freeze = Arc::new(AtomicBool::new(false));
+        let (highlight_producer, highlight_consumer) = highlight_handoff(master_len);
+
         // --- Spawn: output thread (self-elevates to RT — M1). ---
         let output_stop = Arc::new(AtomicBool::new(false));
         let output = {
@@ -209,6 +259,7 @@ impl Engine {
                             run_for: None,
                             zone_count,
                             flat_source: Some(Box::new(flat)),
+                            highlight_consumer: Some(highlight_consumer),
                             stop,
                             pin_to_core: pin,
                             artsync_target: artsync,
@@ -253,6 +304,7 @@ impl Engine {
             let gpu = Arc::clone(&gpu);
             let zones = live.clone();
             let pin = config.render_pin_core;
+            let freeze = Arc::clone(&freeze);
             std::thread::Builder::new()
                 .name("prisma-render".into())
                 .spawn(move || {
@@ -282,6 +334,7 @@ impl Engine {
                             run_for: None,
                             stop,
                             zone_source: Some(Box::new(zones)),
+                            freeze,
                         },
                     );
                     (stats, pinned)
@@ -294,6 +347,10 @@ impl Engine {
             live,
             generation,
             gpu,
+            freeze,
+            highlight: highlight_producer,
+            fixture_components,
+            master_len,
             inner: Some(Running {
                 render,
                 output,
@@ -324,6 +381,82 @@ impl EngineHandle {
     /// stale pairings.
     pub fn generation(&self) -> LayoutGeneration {
         self.generation
+    }
+
+    /// Freeze or resume the show content (§7 / S9). Frozen: effects stop advancing and
+    /// the rig holds its last frame; the output thread keeps emitting, which is what
+    /// makes the editor's Highlight visible without a global flicker. The editor
+    /// freezes while it is open and resumes on close.
+    pub fn set_frozen(&self, frozen: bool) {
+        self.freeze.store(frozen, Ordering::Relaxed);
+    }
+
+    /// Whether content is currently frozen.
+    pub fn is_frozen(&self) -> bool {
+        self.freeze.load(Ordering::Relaxed)
+    }
+
+    /// Light the given fixtures on the live output to identify them on the rig (§7 /
+    /// S9). `blink` chooses the pattern: `true` for a ~2 Hz blink (spot one among
+    /// many), `false` for solid (compare two side by side). An empty selection — or
+    /// fixture ids not in the running layout (e.g. just-placed, not yet recompiled) —
+    /// clears the highlight. Published wait-free; the output thread picks it up on its
+    /// next tick.
+    pub fn highlight(&mut self, fixtures: &[Uuid], blink: bool) {
+        // Resolve the selection against the running layout into a local mask first,
+        // then hand it to the producer — keeps the field borrows cleanly separated.
+        let mut mask = vec![false; self.master_len];
+        let mut active = false;
+        for id in fixtures {
+            if let Some(offsets) = self.fixture_components.get(id) {
+                for &o in offsets {
+                    if let Some(slot) = mask.get_mut(o) {
+                        *slot = true;
+                        active = true;
+                    }
+                }
+            }
+        }
+        let state = self.highlight.input();
+        state.mask.copy_from_slice(&mask);
+        state.active = active;
+        state.blink = blink;
+        self.highlight.publish();
+    }
+
+    /// Clear any Highlight.
+    pub fn clear_highlight(&mut self) {
+        self.highlight(&[], false);
+    }
+
+    /// Apply an edited patch to the live engine (§7 / S9): stop the loops, **reuse the
+    /// GPU** (no Vulkan re-init), and re-assemble everything from `patch`, minting a
+    /// fresh [`LayoutGeneration`]. The generation guard is the safety net — the new
+    /// handoffs stamp the new generation, so the output can never emit a frame from a
+    /// different layout than its plan expects. Returns the new handle; the old one is
+    /// consumed. Highlight is cleared and any freeze is reset to the new engine's
+    /// default (running) — the caller re-applies editor state after.
+    pub fn recompile(
+        mut self,
+        patch: Patch,
+        config: EngineConfig,
+    ) -> Result<EngineHandle, EngineError> {
+        let running = self
+            .inner
+            .take()
+            .expect("recompile: engine already torn down");
+        // Same teardown order as `shutdown`, minus the GPU release: joining render
+        // drops its GPU clone, leaving this handle's Arc as the sole strong reference.
+        running.render_stop.store(true, Ordering::Relaxed);
+        let _ = running.render.join();
+        running.output_stop.store(true, Ordering::Relaxed);
+        running.preview_stop.store(true, Ordering::Relaxed);
+        let _ = running.output.join();
+        let _ = running.preview.join();
+        // Keep the device alive for the fresh assembly; `self` (and its GPU Arc) drops
+        // when this returns, but `gpu` carries the only remaining strong reference.
+        let gpu = Arc::clone(&self.gpu);
+        Engine::assemble(patch, config, gpu)
     }
 
     /// Stop the engine cleanly, **in order**, and report the run.

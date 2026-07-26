@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  applyToLive,
   getState,
+  highlight as highlightCmd,
   openFrom,
   removeFixtures,
   saveTo,
@@ -19,7 +21,7 @@ import { LibraryManager } from "./LibraryManager";
 import { MatrixDialog } from "./MatrixDialog";
 import { PlacementDialog } from "./PlacementDialog";
 import { Properties } from "./Properties";
-import { Toolbar, type ViewMode } from "./Toolbar";
+import { Toolbar, type HighlightMode, type ViewMode } from "./Toolbar";
 import { WireFaults } from "./WireFaults";
 
 const PRISMAP_FILTERS = [{ name: "Prisma map", extensions: ["prismap"] }];
@@ -31,6 +33,7 @@ export default function App() {
   const [aggregate, setAggregate] = useState<SelectionAggregate | null>(null);
   const [activeZone, setActiveZone] = useState<string>("");
   const [viewMode, setViewMode] = useState<ViewMode>("all");
+  const [highlightMode, setHighlightMode] = useState<HighlightMode>("off");
   const [modalOpen, setModalOpen] = useState(false);
   const [matrixOpen, setMatrixOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
@@ -64,6 +67,13 @@ export default function App() {
     if (selection.size === 0) { setAggregate(null); return; }
     selectionAggregate([...selection]).then(setAggregate).catch(() => setAggregate(null));
   }, [selection]);
+
+  // Highlight the live rig (§7): when a mode is chosen, blink/solid the current
+  // selection on the wire; Off clears it. Re-sent whenever the selection or mode changes.
+  useEffect(() => {
+    if (highlightMode === "off") { highlightCmd([], false).catch(() => {}); return; }
+    highlightCmd([...selection], highlightMode === "blink").catch(() => {});
+  }, [highlightMode, selection]);
 
   // --- Persistence (§9) ---
   const doOpen = async () => {
@@ -197,6 +207,9 @@ export default function App() {
         canUndo={editor.can_undo}
         onRedo={async () => setEditor(await redoCmd())}
         canRedo={editor.can_redo}
+        highlightMode={highlightMode}
+        onHighlightMode={setHighlightMode}
+        onApply={async () => { try { await applyToLive(); } catch (e) { setError(String(e)); } }}
       />
 
       <WireFaults

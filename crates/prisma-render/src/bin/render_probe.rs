@@ -225,6 +225,7 @@ fn main() {
             run_for: Some(Duration::from_secs(seconds)),
             stop: Arc::new(AtomicBool::new(false)),
             zone_source: None,
+            freeze: Arc::new(AtomicBool::new(false)),
         },
     );
     let output_report = output.join().expect("output thread");

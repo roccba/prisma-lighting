@@ -212,6 +212,38 @@ fn editor_set_zone_mapping_size(
     Ok(state_of(&draft))
 }
 
+/// Highlight fixtures on the live output to identify them on the rig (§7 / S9). `blink`
+/// chooses blink vs. solid. An empty selection clears the highlight. Writes to the live
+/// engine, not the draft — this is the editor↔engine seam that makes Highlight possible.
+#[tauri::command]
+fn editor_highlight(state: State<AppState>, ids: Vec<Uuid>, blink: bool) {
+    if let Some(engine) = state.engine.lock().unwrap().as_mut() {
+        engine.highlight(&ids, blink);
+    }
+}
+
+/// Apply the current editor draft to the live engine (§7 / S9): recompile the patch,
+/// reusing the GPU. The show "resumes" on the new layout. In M7 (app == editor) this is
+/// an explicit action; in M8 the same recompile runs when the editor window closes.
+#[tauri::command]
+fn editor_apply_to_live(state: State<AppState>) -> Result<(), String> {
+    // Clone the draft patch first so we do not hold the draft lock across the recompile.
+    let patch = state.draft.lock().unwrap().patch().clone();
+    let mut guard = state.engine.lock().unwrap();
+    let engine = guard.take().ok_or("engine is not running")?;
+    // The adapter is ignored on recompile (the GPU is reused); target matches startup.
+    let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6454);
+    let config = EngineConfig::new(AdapterPreference::Software, target);
+    match engine.recompile(patch, config) {
+        Ok(new) => {
+            new.set_frozen(true); // editor still open — keep content frozen (§7)
+            *guard = Some(new);
+            Ok(())
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Delete the given fixtures (undoable).
 #[tauri::command]
 fn editor_remove_fixtures(state: State<AppState>, ids: Vec<Uuid>) -> Result<EditorState, String> {
@@ -281,6 +313,8 @@ fn main() {
             editor_place_fixtures,
             editor_translate_fixtures,
             editor_set_zone_mapping_size,
+            editor_highlight,
+            editor_apply_to_live,
             editor_remove_fixtures,
             editor_save_to,
             editor_open_from,
@@ -307,6 +341,11 @@ fn main() {
                     EngineConfig::new(AdapterPreference::Software, target),
                 )?,
             };
+
+            // The editor is open for the life of the app (M7: app == editor), so freeze
+            // the show content (§7): effects hold, output stays alive for Highlight. In
+            // M8 this brackets the editor *window*'s lifetime instead.
+            engine.set_frozen(true);
 
             // Load the operator's fixture library from the per-user app-config dir
             // (§3.2). First run: seed a few generic types and write the file, so the

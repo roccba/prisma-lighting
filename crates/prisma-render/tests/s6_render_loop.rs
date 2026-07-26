@@ -152,6 +152,88 @@ fn setup(
     (engine, consumer, index, counter, zones, patch)
 }
 
+/// Records the clock state each render, so a test can prove the freeze flag stops
+/// show time from advancing (§7 / S9) while frames keep rendering.
+struct ShowTimeProbe {
+    show_ns: Vec<u64>,
+    playing: Vec<bool>,
+}
+
+impl FrameContent for ShowTimeProbe {
+    fn render_into(
+        &mut self,
+        gpu: &Gpu,
+        clock: &ClockSnapshot,
+        _zones: &ZoneStates,
+        _overlap: &OverlapSnapshot,
+        target: &wgpu::Texture,
+    ) {
+        self.show_ns.push(clock.show_ns);
+        self.playing.push(clock.playing);
+        let size = target.size();
+        let texels: Vec<f16> = vec![f16::ZERO; (size.width * size.height * 4) as usize];
+        gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&texels),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size.width * 4 * 2),
+                rows_per_image: Some(size.height),
+            },
+            size,
+        );
+    }
+}
+
+#[test]
+fn freeze_holds_show_time_while_the_loop_keeps_rendering() {
+    // §7 / S9: while frozen, the render loop pauses the clock — show time (and any
+    // transition on it) holds — but the loop keeps ticking so the output stays alive.
+    let gpu = software_gpu();
+    let (mut engine, _consumer, _index, mut counter, zones, _patch) = setup(gpu, 3);
+    let mut clock = MasterClock::new(Arc::new(SystemClock::new()));
+    let mut content = ShowTimeProbe {
+        show_ns: Vec::new(),
+        playing: Vec::new(),
+    };
+
+    let stats = run_render_loop(
+        gpu,
+        &mut engine,
+        &mut clock,
+        &mut counter,
+        zones,
+        &mut content,
+        RenderLoopConfig {
+            target_rate_hz: 200,
+            run_for: Some(Duration::from_millis(150)),
+            stop: Arc::new(AtomicBool::new(false)),
+            zone_source: None,
+            freeze: Arc::new(AtomicBool::new(true)), // frozen the whole run
+        },
+    );
+
+    assert!(
+        stats.frames_rendered > 5,
+        "the loop must keep rendering while frozen"
+    );
+    assert!(!content.show_ns.is_empty(), "content actually ran");
+    assert!(
+        content.show_ns.iter().all(|&t| t == 0),
+        "show time must not advance while frozen: {:?}",
+        content.show_ns
+    );
+    assert!(
+        content.playing.iter().all(|&p| !p),
+        "the clock must report paused every frame while frozen"
+    );
+}
+
 #[test]
 fn the_loop_renders_and_publishes_frames() {
     let gpu = software_gpu();
@@ -174,6 +256,7 @@ fn the_loop_renders_and_publishes_frames() {
             run_for: Some(Duration::from_millis(150)),
             stop: Arc::new(AtomicBool::new(false)),
             zone_source: None,
+            freeze: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         },
     );
 

@@ -356,6 +356,7 @@ fn m5_zones_run_independent_effects_with_live_dimmer_and_additive_overlap() {
                         run_for: None,
                         stop,
                         zone_source: Some(Box::new(live)),
+                        freeze: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     },
                 )
             })

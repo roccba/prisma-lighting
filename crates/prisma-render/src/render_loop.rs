@@ -334,6 +334,12 @@ pub struct RenderLoopConfig {
     /// Where live zone state comes from each frame. `None` keeps whatever the
     /// caller's initial `ZoneStates` held.
     pub zone_source: Option<Box<dyn ZoneStateSource>>,
+    /// **Freeze the show content** (M7 §7 / S9). While set, the master clock is
+    /// paused: show time (and in-progress transitions) hold, so effects stop
+    /// advancing and the rig holds its last frame — while the output thread keeps
+    /// emitting, which is what makes the editor's Highlight possible. Cleared = the
+    /// clock runs. `None`-equivalent default is "never frozen".
+    pub freeze: Arc<AtomicBool>,
 }
 
 impl Default for RenderLoopConfig {
@@ -343,6 +349,7 @@ impl Default for RenderLoopConfig {
             run_for: None,
             stop: Arc::new(AtomicBool::new(false)),
             zone_source: None,
+            freeze: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -375,8 +382,14 @@ pub fn run_render_loop(
             std::thread::sleep(IDLE_POLL_INTERVAL.min(deadline - now));
         }
 
-        // Frame boundary: advance time, then settle the classification for this
-        // frame before anything reads it (§5.2.1).
+        // Frame boundary: match the clock's run/pause to the freeze flag (§7 / S9),
+        // then advance time. When frozen, `tick()` returns the held show time, so the
+        // content re-renders the same frame and the rig holds — output stays live.
+        if config.freeze.load(Ordering::Relaxed) {
+            clock.pause();
+        } else {
+            clock.play();
+        }
         let snapshot_clock = clock.tick();
         if let Some(source) = &config.zone_source {
             source.read_into(&mut zones);

@@ -193,6 +193,14 @@ export const removeFixtures = (ids: string[]) =>
 export const undo = () => invoke<EditorState>("editor_undo");
 export const redo = () => invoke<EditorState>("editor_redo");
 
+// --- Live engine: Highlight + apply (§7 / S9) ---
+/** Light `ids` on the live rig to identify them; `blink` vs solid. Empty = clear. */
+export const highlight = (ids: string[], blink: boolean) =>
+  invoke<void>("editor_highlight", { ids, blink });
+
+/** Recompile the current draft into the live engine (the show resumes on the new layout). */
+export const applyToLive = () => invoke<void>("editor_apply_to_live");
+
 /** Serialize the mapping to `path` (a `.prismap`) and clear the dirty flag (§9). */
 export const saveTo = (path: string) => invoke<EditorState>("editor_save_to", { path });
 

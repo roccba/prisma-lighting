@@ -338,6 +338,7 @@ fn no_preview_attached_costs_nothing_and_still_feeds_output() {
             run_for: Some(Duration::from_millis(120)),
             stop: Arc::new(AtomicBool::new(false)),
             zone_source: None,
+            freeze: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         },
     );
 

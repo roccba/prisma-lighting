@@ -22,6 +22,8 @@ prisma-preview = { path = "../prisma-preview" }
 # it touches the wgpu queue/texture and the canonical f16 buffer staging.
 wgpu = { version = "30", default-features = false, features = ["wgsl", "vulkan"] }
 half = { version = "2", features = ["bytemuck"] }
+# Fixture ids key the Highlight resolution map (§7 / S9).
+uuid = { version = "1" }
 
 [dev-dependencies]
 # The headless boot+shutdown test drives a real virtual sink and decodes preview

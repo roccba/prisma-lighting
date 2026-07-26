@@ -276,6 +276,7 @@ fn main() {
             run_for: Some(Duration::from_secs(seconds)),
             stop: Arc::clone(&stop),
             zone_source: Some(Box::new(live.clone())),
+            freeze: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         },
     );
 

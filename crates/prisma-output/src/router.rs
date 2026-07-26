@@ -78,6 +78,11 @@ pub struct OutputFrame<'a> {
     pub generation: LayoutGeneration,
     pub overlap: Option<&'a OverlapSnapshot>,
     pub flat: &'a FlatParams,
+    /// The editor's Highlight override (§7 / S9), or `None` when nothing is
+    /// highlighted. Applied last, over the fully scaled value: a highlighted pixel's
+    /// channels emit white (or dark, on the blink's off phase) regardless of content,
+    /// so the operator can identify it on the rig.
+    pub highlight: Option<&'a crate::highlight::HighlightFrame<'a>>,
 }
 
 impl OutputRouter {
@@ -145,6 +150,7 @@ impl OutputRouter {
                 generation: master_generation,
                 overlap: None,
                 flat: &flat,
+                highlight: None,
             },
         )
     }
@@ -176,6 +182,7 @@ impl OutputRouter {
             frame.master,
             frame.overlap,
             frame.flat,
+            frame.highlight,
             &mut self.data,
         );
         ArtDmx {

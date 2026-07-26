@@ -296,6 +296,7 @@ impl OutputPlan {
         master: &[f16],
         overlap: Option<&OverlapSnapshot>,
         flat: &FlatParams,
+        highlight: Option<&crate::highlight::HighlightFrame<'_>>,
         out: &mut Vec<u8>,
     ) {
         let plan = &self.universes[index];
@@ -305,6 +306,16 @@ impl OutputPlan {
             if map.src == SRC_NONE {
                 out.push(0);
                 continue;
+            }
+            // Highlight override (§7 / S9): a highlighted pixel's channels emit white on
+            // the on-phase and dark on the off-phase, over any content — applied before
+            // the normal scale/gamma so identification is unmistakable and content-
+            // independent. Only pixels the editor selected are masked.
+            if let Some(hl) = highlight {
+                if hl.mask.get(map.src as usize).copied().unwrap_or(false) {
+                    out.push(if hl.on { 255 } else { 0 });
+                    continue;
+                }
             }
             // Linear-light sample (0.0 for an out-of-range read — bounds-safe like
             // M1's field stance).
@@ -533,7 +544,7 @@ mod tests {
         // Canonical master: R=10, G=20, B=30.
         let master = norm(&[10, 20, 30]);
         let mut out = Vec::new();
-        plan.encode_into(0, &master, None, &FlatParams::identity(0), &mut out);
+        plan.encode_into(0, &master, None, &FlatParams::identity(0), None, &mut out);
         assert_eq!(out, vec![20, 10, 30], "GRB wire order");
     }
 
@@ -553,10 +564,94 @@ mod tests {
         // gamma 2.0: 128 -> round(255 * (128/255)^2) = round(255*0.2515) = 64.
         let master = norm(&[128, 0, 255]);
         let mut out = Vec::new();
-        plan.encode_into(0, &master, None, &FlatParams::identity(0), &mut out);
+        plan.encode_into(0, &master, None, &FlatParams::identity(0), None, &mut out);
         assert_eq!(out[0], 64);
         assert_eq!(out[1], 0);
         assert_eq!(out[2], 255); // 255 maps to 255 under any gamma
+    }
+
+    #[test]
+    fn highlight_override_emits_white_on_dark_off_and_leaves_others() {
+        use crate::highlight::HighlightFrame;
+        // Two RGB pixels: pixel 0 at ch 1 (components 0..3), pixel 1 at ch 4 (3..6).
+        let f = Fixture {
+            id: Uuid::from_u128(1),
+            name: "t".into(),
+            profile: FixtureProfile {
+                name: "rgb".into(),
+                components: ComponentSet::Rgb,
+                gamma: GammaCalibration::default(),
+            },
+            pixels: (0..2)
+                .map(|i| Pixel {
+                    index: i,
+                    position: glam::Vec3::new(i as f32, 0.0, 0.0),
+                    universe: 1,
+                    start_channel: 1 + (i as u16) * 3,
+                    color_order: ColorOrder::Rgb,
+                })
+                .collect(),
+            zone: Uuid::nil(),
+        };
+        let patch = Patch {
+            id: Uuid::from_u128(0),
+            name: "t".into(),
+            matrix_size: [2, 1, 1],
+            fixtures: vec![f],
+            zones: vec![],
+        };
+        let index = patch.compile().unwrap();
+        let plan = OutputPlan::compile(&patch, &index).unwrap();
+        let master = norm(&[100, 100, 100, 100, 100, 100]);
+        // Highlight only pixel 0's components (0,1,2), not pixel 1's (3,4,5).
+        let mask = vec![true, true, true, false, false, false];
+        let mut out = Vec::new();
+
+        // On-phase: highlighted pixel → white; the other pixel unchanged (content).
+        let on = HighlightFrame {
+            mask: &mask,
+            on: true,
+        };
+        plan.encode_into(
+            0,
+            &master,
+            None,
+            &FlatParams::identity(0),
+            Some(&on),
+            &mut out,
+        );
+        assert_eq!(
+            out,
+            vec![255, 255, 255, 100, 100, 100],
+            "on-phase whites only the masked pixel"
+        );
+
+        // Off-phase (blink): highlighted pixel → dark; the other still unchanged.
+        let off = HighlightFrame {
+            mask: &mask,
+            on: false,
+        };
+        plan.encode_into(
+            0,
+            &master,
+            None,
+            &FlatParams::identity(0),
+            Some(&off),
+            &mut out,
+        );
+        assert_eq!(
+            out,
+            vec![0, 0, 0, 100, 100, 100],
+            "off-phase darkens only the masked pixel"
+        );
+
+        // No highlight → identical to the plain path.
+        plan.encode_into(0, &master, None, &FlatParams::identity(0), None, &mut out);
+        assert_eq!(
+            out,
+            vec![100, 100, 100, 100, 100, 100],
+            "no override leaves content untouched"
+        );
     }
 
     #[test]
@@ -618,7 +713,7 @@ mod tests {
         let plan = OutputPlan::compile(&patch, &index).unwrap();
         let master = norm(&[7, 8, 9]);
         let mut out = Vec::new();
-        plan.encode_into(0, &master, None, &FlatParams::identity(0), &mut out);
+        plan.encode_into(0, &master, None, &FlatParams::identity(0), None, &mut out);
         // channels 1..4 (indices 0..3) are gaps → 0; then R,G,B at 5,6,7.
         assert_eq!(out, vec![0, 0, 0, 0, 7, 8, 9]);
     }
@@ -653,7 +748,7 @@ mod tests {
         // Identity: channel c ← master[source_offset + c].
         let master = norm(&[0, 0, 0, 40, 50, 60]);
         let mut out = Vec::new();
-        plan.encode_into(0, &master, None, &FlatParams::identity(0), &mut out);
+        plan.encode_into(0, &master, None, &FlatParams::identity(0), None, &mut out);
         assert_eq!(out, vec![40, 50, 60]);
     }
 }

@@ -6,10 +6,19 @@ import type { Patch } from "./api";
 
 export type ViewMode = "all" | "highlight" | "isolate";
 
+/** Live-rig identify mode (§7): off, or blink/solid the current selection on the wire. */
+export type HighlightMode = "off" | "solid" | "blink";
+
 const MODES: { id: ViewMode; label: string; title: string }[] = [
   { id: "all", label: "All", title: "Show every zone" },
   { id: "highlight", label: "Highlight", title: "Emphasise the active zone, dim the rest" },
   { id: "isolate", label: "Isolate", title: "Show only the active zone" },
+];
+
+const HIGHLIGHT_MODES: { id: HighlightMode; label: string; title: string }[] = [
+  { id: "off", label: "Off", title: "Do not light the rig" },
+  { id: "solid", label: "Solid", title: "Light the selection solid (compare two without flicker)" },
+  { id: "blink", label: "Blink", title: "Blink the selection (~2 Hz) to spot it among many" },
 ];
 
 interface Props {
@@ -29,6 +38,9 @@ interface Props {
   canUndo: boolean;
   onRedo: () => void;
   canRedo: boolean;
+  highlightMode: HighlightMode;
+  onHighlightMode: (m: HighlightMode) => void;
+  onApply: () => void;
 }
 
 export function Toolbar(p: Props) {
@@ -105,6 +117,36 @@ export function Toolbar(p: Props) {
             </button>
           ))}
         </div>
+      </div>
+
+      <div className="tb-group">
+        <span className="tb-label" title="Light the selected fixtures on the real rig (§7)">
+          Highlight
+        </span>
+        <div className="segmented">
+          {HIGHLIGHT_MODES.map((m) => (
+            <button
+              key={m.id}
+              title={m.title}
+              className={m.id === p.highlightMode ? "seg active" : "seg"}
+              onClick={() => p.onHighlightMode(m.id)}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="tb-sep" />
+
+      <div className="tb-group">
+        <button
+          className="btn"
+          onClick={p.onApply}
+          title="Recompile the edited patch into the live engine (§7)"
+        >
+          Apply to live
+        </button>
       </div>
     </div>
   );

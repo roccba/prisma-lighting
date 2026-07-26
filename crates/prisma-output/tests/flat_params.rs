@@ -118,6 +118,7 @@ fn a_zone_fader_reaches_the_wire_with_no_re_render() {
             generation: index.generation(),
             overlap: Some(&snapshot),
             flat: &flat,
+            highlight: None,
         },
     );
 
@@ -132,6 +133,7 @@ fn a_zone_fader_reaches_the_wire_with_no_re_render() {
             generation: index.generation(),
             overlap: Some(&snapshot),
             flat: &flat,
+            highlight: None,
         },
     );
 
@@ -181,6 +183,7 @@ fn an_overlapped_pixel_ignores_the_fader_until_a_new_render() {
             generation: index.generation(),
             overlap: Some(&snapshot),
             flat: &flat,
+            highlight: None,
         },
     );
 
@@ -194,6 +197,7 @@ fn an_overlapped_pixel_ignores_the_fader_until_a_new_render() {
             generation: index.generation(),
             overlap: Some(&snapshot),
             flat: &flat,
+            highlight: None,
         },
     );
 
@@ -232,6 +236,7 @@ fn master_moves_every_pixel_including_the_overlapped_one() {
             generation: index.generation(),
             overlap: Some(&snapshot),
             flat: &flat,
+            highlight: None,
         },
     );
     assert_eq!(
@@ -264,6 +269,7 @@ fn the_zone_colour_filter_applies_per_channel() {
             generation: index.generation(),
             overlap: Some(&snapshot),
             flat: &flat,
+            highlight: None,
         },
     );
     assert_eq!(&wire[0..3], &[255, 128, 0], "R, G, B scaled independently");
@@ -295,6 +301,7 @@ fn the_scalars_are_applied_before_gamma() {
             generation: index.generation(),
             overlap: Some(&snapshot),
             flat: &flat,
+            highlight: None,
         },
     );
     assert_eq!(
@@ -313,6 +320,7 @@ fn the_scalars_are_applied_before_gamma() {
             generation: index.generation(),
             overlap: Some(&snapshot),
             flat: &flat,
+            highlight: None,
         },
     );
     assert_eq!(&wire[0..3], &[64, 64, 64]);
@@ -338,6 +346,7 @@ fn a_frame_without_a_snapshot_takes_master_scaling_only() {
             generation: index.generation(),
             overlap: None,
             flat: &flat,
+            highlight: None,
         },
     );
     assert_eq!(&wire[0..6], &[128, 128, 128, 128, 128, 128]);
