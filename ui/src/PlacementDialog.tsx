@@ -50,7 +50,13 @@ function NumField(props: { label: string; value: number; onChange?: (n: number) 
   );
 }
 
-/** Small live diagram of the runs a placement would produce (§4.1). */
+/**
+ * The signal path a placement would produce (§4.1), drawn like professional consoles's "Vista previa
+ * de direccionamiento" (screenshot 12): ONE continuous serpentine stroke tracing the
+ * cable's route through every fixture in signal order — up a column, across, down the
+ * next — with a marker at the start end and an arrowhead at the finish. This is what
+ * makes the snake and the starting corner legible; per-fixture arrows are gone.
+ */
 function PreviewCanvas({ runs }: { runs: PreviewRun[] }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
@@ -72,52 +78,56 @@ function PreviewCanvas({ runs }: { runs: PreviewRun[] }) {
       ctx.fillText("nothing to place", w / 2, h / 2);
       return;
     }
+
+    // Signal order: each run is one fixture's start→end; concatenated in order the
+    // vertices form the whole route (the between-fixture segments are the folds).
+    const ordered = [...runs].sort((a, b) => a.order - b.order);
+    const pts: [number, number][] = [];
+    for (const r of ordered) { pts.push(r.start); pts.push(r.end); }
+
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const r of runs)
-      for (const p of [r.start, r.end]) {
-        minX = Math.min(minX, p[0]); minY = Math.min(minY, p[1]);
-        maxX = Math.max(maxX, p[0]); maxY = Math.max(maxY, p[1]);
-      }
-    const m = 16;
+    for (const [x, y] of pts) {
+      minX = Math.min(minX, x); minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+    }
+    const m = 18;
     const s = Math.max(1, Math.min((w - 2 * m) / Math.max(1, maxX - minX), (h - 2 * m) / Math.max(1, maxY - minY)));
     const X = (x: number) => m + (x - minX) * s;
     const Y = (y: number) => m + (y - minY) * s;
 
-    // Snake/signal path between runs (end of one → start of next), faint.
-    ctx.strokeStyle = "rgba(150,190,255,0.35)";
-    ctx.lineWidth = 1;
+    // One continuous stroke, rounded joins like professional consoles's U-bends.
+    ctx.strokeStyle = "#6aa8ff";
+    ctx.lineWidth = 2;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
     ctx.beginPath();
-    for (let i = 0; i < runs.length - 1; i++) {
-      ctx.moveTo(X(runs[i].end[0]), Y(runs[i].end[1]));
-      ctx.lineTo(X(runs[i + 1].start[0]), Y(runs[i + 1].start[1]));
-    }
+    ctx.moveTo(X(pts[0][0]), Y(pts[0][1]));
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(X(pts[i][0]), Y(pts[i][1]));
     ctx.stroke();
 
-    // Each run as an arrow start→end (its signal direction).
-    for (const r of runs) {
-      const x0 = X(r.start[0]), y0 = Y(r.start[1]), x1 = X(r.end[0]), y1 = Y(r.end[1]);
-      ctx.strokeStyle = "#6aa8ff";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(x0, y0);
-      ctx.lineTo(x1, y1);
-      ctx.stroke();
-      // start dot
-      ctx.fillStyle = "#eaf1ff";
-      ctx.beginPath();
-      ctx.arc(x0, y0, 2, 0, Math.PI * 2);
-      ctx.fill();
-      // arrowhead at end
-      const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy) || 1;
-      const ux = dx / len, uy = dy / len, hs = 6;
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x1 - ux * hs - uy * hs * 0.5, y1 - uy * hs + ux * hs * 0.5);
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x1 - ux * hs + uy * hs * 0.5, y1 - uy * hs - ux * hs * 0.5);
-      ctx.strokeStyle = "#6aa8ff";
-      ctx.stroke();
-    }
+    // Start marker — a hollow knob at the signal's origin (professional consoles's rounded start).
+    const [sx0, sy0] = [X(pts[0][0]), Y(pts[0][1])];
+    ctx.fillStyle = "#0e0f13";
+    ctx.strokeStyle = "#eaf1ff";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(sx0, sy0, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Arrowhead at the very end, along the last segment.
+    const [ex, ey] = [X(pts[pts.length - 1][0]), Y(pts[pts.length - 1][1])];
+    const [px, py] = [X(pts[pts.length - 2][0]), Y(pts[pts.length - 2][1])];
+    const dx = ex - px, dy = ey - py, len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len, hs = 7;
+    ctx.strokeStyle = "#6aa8ff";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(ex, ey);
+    ctx.lineTo(ex - ux * hs - uy * hs * 0.5, ey - uy * hs + ux * hs * 0.5);
+    ctx.moveTo(ex, ey);
+    ctx.lineTo(ex - ux * hs + uy * hs * 0.5, ey - uy * hs - ux * hs * 0.5);
+    ctx.stroke();
   }, [runs]);
   return <canvas ref={ref} className="preview-canvas" />;
 }

@@ -24,6 +24,8 @@ export interface Zone {
   id: string;
   name: string;
   display_color: Rgb;
+  /** The zone's own local matrix = its effect render resolution (§2.4). [x, y, z]. */
+  mapping_size: Vec3;
 }
 
 export interface Patch {
@@ -34,13 +36,47 @@ export interface Patch {
   zones: Zone[];
 }
 
-/** The editor snapshot after any command (patch + toolbar/validation state). */
+/** One pixel a diagnostic points at (owning fixture + pixel index within it). */
+export interface Mark {
+  fixture: string;
+  pixel: number;
+}
+
+/**
+ * A physical DMX wire fault the editor surfaces (discreetly), annotated with the pixels
+ * it points at. Discriminated on `kind` — mirrors Rust `prisma_patch::Diagnostic`.
+ * After the S6 replan there are exactly two: an address collision and an out-of-range
+ * channel. Out-of-matrix positions and shared cells are valid choices and are NOT faults
+ * (§2.4/§4.4).
+ */
+export type Diagnostic =
+  | {
+      kind: "AddressCollision";
+      universe: number;
+      channel_start: number;
+      channel_end: number;
+      fixtures: string[];
+      marks: Mark[];
+    }
+  | { kind: "ChannelOutOfRange"; mark: Mark; start: number; span: number };
+
+/** The pixels a diagnostic points at (for canvas marks). */
+export function diagnosticMarks(d: Diagnostic): Mark[] {
+  return d.kind === "AddressCollision" ? d.marks : [d.mark];
+}
+
+/** The fixtures a diagnostic involves (for click-to-select). */
+export function diagnosticFixtures(d: Diagnostic): string[] {
+  return d.kind === "AddressCollision" ? d.fixtures : [d.mark.fixture];
+}
+
+/** The editor snapshot after any command (patch + toolbar state + all problems). */
 export interface EditorState {
   patch: Patch;
   can_undo: boolean;
   can_redo: boolean;
   dirty: boolean;
-  validation: string | null;
+  diagnostics: Diagnostic[];
 }
 
 export interface SelectionAggregate {
@@ -118,6 +154,10 @@ export const placeFixtures = (spec: PlacementSpec) =>
 
 export const translateFixtures = (ids: string[], delta: [number, number, number]) =>
   invoke<EditorState>("editor_translate_fixtures", { ids, delta });
+
+/** Set a zone's matrix (render resolution, §2.4/§2.5). X/Y clamped to 1..=512 in Rust. */
+export const setZoneMappingSize = (zone: string, size: [number, number]) =>
+  invoke<EditorState>("editor_set_zone_mapping_size", { zone, size });
 
 export const removeFixtures = (ids: string[]) =>
   invoke<EditorState>("editor_remove_fixtures", { ids });

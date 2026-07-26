@@ -6,7 +6,7 @@
 //! surface" the Tauri IPC layer wraps (`patch_apply_op`, `patch_undo`,
 //! `patch_redo`, `patch_validate`, …).
 
-use prisma_patch::{Patch, PatchError};
+use prisma_patch::{Diagnostic, Patch, PatchError};
 
 use crate::op::{self, EditError, EditOp};
 
@@ -125,13 +125,21 @@ impl PatchDraft {
         !self.redo.is_empty()
     }
 
-    /// Re-run structural validation on the current draft. The editor calls this
-    /// after each edit to surface problems (collisions, out-of-matrix positions,
-    /// dangling refs) on the canvas — it does **not** block the edit. Returns the
-    /// first problem, or `Ok(())`. (Collecting *all* problems for the overlay is
-    /// S6; the model's one-error `validate` is what exists today.)
+    /// Re-run the compile gate on the current draft: the first structural error, or
+    /// `Ok(())`. Kept for callers that only need a yes/no; the editor's discreet
+    /// notice uses [`wire_faults`](Self::wire_faults) instead.
     pub fn validate(&self) -> Result<(), PatchError> {
         self.patch.validate()
+    }
+
+    /// Collect the current draft's **physical DMX wire faults** (§1, §4.3, S6 replan) —
+    /// address collisions and out-of-range channels — each annotated with the pixels it
+    /// points at, for the editor's discreet notice and canvas marks. Never blocking:
+    /// the editor shows these but the edit that produced them still applied. Out-of-
+    /// matrix positions and shared cells are valid choices and are deliberately **not**
+    /// reported (§2.4, §4.4).
+    pub fn wire_faults(&self) -> Vec<Diagnostic> {
+        self.patch.wire_faults()
     }
 
     /// Whether the draft has unsaved changes.

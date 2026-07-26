@@ -21,6 +21,7 @@ interface Props {
   onOpen: () => void;
   onSave: () => void;
   onAddFixtures: () => void;
+  onEditMatrix: () => void;
   onDelete: () => void;
   canDelete: boolean;
   onUndo: () => void;
@@ -76,6 +77,15 @@ export function Toolbar(p: Props) {
           </select>
         </span>
       </label>
+      {active && (
+        <button
+          className="btn"
+          onClick={p.onEditMatrix}
+          title={`Matrix settings — ${active.mapping_size[0]}×${active.mapping_size[1]} (render resolution)`}
+        >
+          Matrix… {active.mapping_size[0]}×{active.mapping_size[1]}
+        </button>
+      )}
 
       <div className="tb-group">
         <span className="tb-label">View</span>

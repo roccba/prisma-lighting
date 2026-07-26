@@ -21,7 +21,7 @@
 use half::f16;
 use prisma_patch::{
     load_patch, ColorOrder, ComponentSet, Fixture, FixtureProfile, GammaCalibration, Patch,
-    PatchError, PatchIndex, Pixel,
+    PatchIndex, Pixel,
 };
 use prisma_render::readback::create_render_target;
 use prisma_render::sample::{SamplePlan, Sampler};
@@ -274,16 +274,14 @@ fn pixel_outside_matrix() -> Patch {
 }
 
 #[test]
-fn a_position_outside_the_matrix_is_refused_at_compile() {
-    // Primary defence: fail loud at load rather than ship one dark fixture to a
-    // show. Same stance as the layout-generation guard.
-    let err = pixel_outside_matrix()
+fn a_position_outside_the_matrix_compiles_and_gathers_black() {
+    // Out-of-matrix is a VALID placement (M7 spec §2.4): a matrix is a render
+    // resolution, not a fence. Such a pixel falls on no cell and reproduces no
+    // content — it must not fail compile. The gather reads it black (asserted by
+    // `an_out_of_range_pixel_gathers_black_rather_than_a_clamped_texel`).
+    pixel_outside_matrix()
         .compile()
-        .expect_err("a pixel outside the matrix must not validate");
-    match err {
-        PatchError::PositionOutOfMatrix { pixel, .. } => assert_eq!(pixel, 1),
-        other => panic!("expected PositionOutOfMatrix, got {other:?}"),
-    }
+        .expect("an out-of-matrix pixel is legal and must compile");
 }
 
 #[test]

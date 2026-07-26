@@ -15,9 +15,11 @@ import {
 } from "./api";
 import { Canvas } from "./Canvas";
 import { FixtureList } from "./FixtureList";
+import { MatrixDialog } from "./MatrixDialog";
 import { PlacementDialog } from "./PlacementDialog";
 import { Properties } from "./Properties";
 import { Toolbar, type ViewMode } from "./Toolbar";
+import { WireFaults } from "./WireFaults";
 
 const PRISMAP_FILTERS = [{ name: "Prisma map", extensions: ["prismap"] }];
 
@@ -29,6 +31,7 @@ export default function App() {
   const [activeZone, setActiveZone] = useState<string>("");
   const [viewMode, setViewMode] = useState<ViewMode>("all");
   const [modalOpen, setModalOpen] = useState(false);
+  const [matrixOpen, setMatrixOpen] = useState(false);
   const [currentPath, setCurrentPath] = useState<string | null>(null);
   const [unsavedOpen, setUnsavedOpen] = useState(false);
 
@@ -93,6 +96,27 @@ export default function App() {
       if (picked) { setEditor(await saveTo(picked)); setCurrentPath(picked); }
     } catch (e) { setError(String(e)); }
   };
+
+  // --- Disable browser zoom app-wide (§5.7) ---
+  // Ctrl+wheel and trackpad pinch (which the browser reports as a wheel event with
+  // ctrlKey) zoom the entire web UI — fonts, panels, layout — which breaks the editor.
+  // The only zoom is the canvas GRID (plain wheel, handled in Canvas). A non-passive
+  // window listener is required: React's onWheel is passive, so preventDefault there is
+  // ignored. Ctrl +/-/0 keyboard zoom is blocked too.
+  useEffect(() => {
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey) e.preventDefault();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && ["=", "-", "+", "0"].includes(e.key)) e.preventDefault();
+    };
+    window.addEventListener("wheel", onWheel, { passive: false });
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("wheel", onWheel);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, []);
 
   // --- Unsaved-changes guard on window close ---
   useEffect(() => {
@@ -163,6 +187,7 @@ export default function App() {
         onOpen={doOpen}
         onSave={doSave}
         onAddFixtures={() => setModalOpen(true)}
+        onEditMatrix={() => setMatrixOpen(true)}
         onDelete={del}
         canDelete={selection.size > 0}
         onUndo={async () => setEditor(await undoCmd())}
@@ -171,11 +196,11 @@ export default function App() {
         canRedo={editor.can_redo}
       />
 
-      {editor.validation && (
-        <div className="validation-banner" title={editor.validation}>
-          ⚠ Patch has a problem: {editor.validation}
-        </div>
-      )}
+      <WireFaults
+        patch={patch}
+        diagnostics={editor.diagnostics}
+        onSelectFixtures={(ids) => setSelection(new Set(ids))}
+      />
 
       <div className="body">
         <aside className="left">
@@ -189,6 +214,7 @@ export default function App() {
             onMove={async (ids, delta) => setEditor(await translateFixtures(ids, delta))}
             activeZone={activeZone}
             viewMode={viewMode}
+            diagnostics={editor.diagnostics}
           />
         </main>
         <aside className="right">
@@ -202,6 +228,14 @@ export default function App() {
           activeZone={activeZone}
           onPlaced={setEditor}
           onClose={() => setModalOpen(false)}
+        />
+      )}
+
+      {matrixOpen && patch.zones.find((z) => z.id === activeZone) && (
+        <MatrixDialog
+          zone={patch.zones.find((z) => z.id === activeZone)!}
+          onApplied={setEditor}
+          onClose={() => setMatrixOpen(false)}
         />
       )}
 

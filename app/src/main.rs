@@ -17,7 +17,7 @@ use prisma_editor::{
     PatchDraft, PlacementSpec, PreviewRun, SelectionAggregate,
 };
 use prisma_engine::{Engine, EngineConfig, EngineHandle};
-use prisma_patch::{load_patch, save_patch, Patch};
+use prisma_patch::{load_patch, save_patch, Diagnostic, Patch};
 use prisma_render::AdapterPreference;
 use serde::Serialize;
 use tauri::{Manager, RunEvent, State};
@@ -32,17 +32,19 @@ struct AppState {
 }
 
 /// The editor snapshot the UI renders after any command: the patch plus the
-/// history/dirty flags (toolbar state) and the current validation status. Validation
-/// is surfaced, never enforced — the editor shows problems, it does not block edits
-/// (§4.3/§4.4). Collecting *all* problems for the canvas overlay is S6; this is the
-/// model's first-error string for now.
+/// history/dirty flags (toolbar state) and the patch's physical DMX **wire faults**.
+/// Faults are surfaced, never enforced — the editor marks them on the canvas and shows
+/// a discreet notice, it does not block edits (§1, §4.3). `diagnostics` carries each
+/// fault (an address collision or an out-of-range channel) annotated with the pixels it
+/// points at, so a duplicated channel among thousands of pixels cannot hide. Out-of-
+/// matrix positions and shared cells are valid choices and are not reported (§2.4/§4.4).
 #[derive(Serialize)]
 struct EditorState {
     patch: Patch,
     can_undo: bool,
     can_redo: bool,
     dirty: bool,
-    validation: Option<String>,
+    diagnostics: Vec<Diagnostic>,
 }
 
 fn state_of(draft: &PatchDraft) -> EditorState {
@@ -51,7 +53,7 @@ fn state_of(draft: &PatchDraft) -> EditorState {
         can_undo: draft.can_undo(),
         can_redo: draft.can_redo(),
         dirty: draft.is_dirty(),
-        validation: draft.validate().err().map(|e| e.to_string()),
+        diagnostics: draft.wire_faults(),
     }
 }
 
@@ -129,6 +131,33 @@ fn editor_translate_fixtures(
     Ok(state_of(&draft))
 }
 
+/// Set a zone's mapping-matrix size — its effect render resolution (§2.4/§2.5). The
+/// dialog edits X and Y; Z is preserved (it stays 1 while the editor is 2-D). Values are
+/// clamped to `1..=512` (the workspace ceiling, §2.5) so no caller can set a zero axis
+/// (which the model rejects) or an oversized matrix. Undoable.
+#[tauri::command]
+fn editor_set_zone_mapping_size(
+    state: State<AppState>,
+    zone: Uuid,
+    size: [u32; 2],
+) -> Result<EditorState, String> {
+    const MAX_MATRIX: u32 = 512;
+    let mut draft = state.draft.lock().unwrap();
+    let z = draft
+        .patch()
+        .zones
+        .iter()
+        .find(|z| z.id == zone)
+        .map(|z| z.mapping_size[2])
+        .unwrap_or(1);
+    let clamp = |v: u32| v.clamp(1, MAX_MATRIX);
+    let size3 = [clamp(size[0]), clamp(size[1]), z];
+    draft
+        .apply(EditOp::SetZoneMappingSize { zone, size: size3 }, None)
+        .map_err(|e| e.to_string())?;
+    Ok(state_of(&draft))
+}
+
 /// Delete the given fixtures (undoable).
 #[tauri::command]
 fn editor_remove_fixtures(state: State<AppState>, ids: Vec<Uuid>) -> Result<EditorState, String> {
@@ -193,6 +222,7 @@ fn main() {
             editor_preview_placement,
             editor_place_fixtures,
             editor_translate_fixtures,
+            editor_set_zone_mapping_size,
             editor_remove_fixtures,
             editor_save_to,
             editor_open_from,

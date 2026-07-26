@@ -112,16 +112,61 @@ html, body, #root {
 .btn:disabled { opacity: 0.4; cursor: default; }
 .btn.primary { background: var(--accent); color: #0b0d12; border-color: var(--accent); font-weight: 600; }
 
-.validation-banner {
-  padding: 5px 14px;
-  background: #3a2a12;
-  color: #f0c674;
-  border-bottom: 1px solid #5a3f1a;
+/* DMX wire faults (S6 replan): a DISCREET notice, not a red banner. */
+.wirefaults {
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
   font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
+.wirefaults-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 14px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.wirefaults-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ffb454;
+}
+.wirefaults-text { color: #d8b878; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wirefaults-select { color: var(--accent); text-decoration: underline; }
+.wirefaults-select:hover { color: #9cc4ff; }
+.wirefaults-toggle { color: var(--muted); }
+.wirefaults-list {
+  list-style: none;
+  margin: 0;
+  padding: 2px 0 6px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+.wirefaults-item {
+  padding: 3px 14px 3px 29px;
+  cursor: pointer;
+  color: var(--text);
+}
+.wirefaults-item:hover { background: rgba(255, 255, 255, 0.05); }
+
+/* Matrix settings dialog (§2.5) */
+.matrix-modal { width: 420px; }
+.matrix-fields {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 4px 16px 8px;
+}
+.matrix-fields .field { flex: 0 0 96px; }
+.matrix-fields .matrix-x { color: var(--muted); padding-bottom: 6px; }
+.matrix-fields .matrix-cap { color: var(--muted); font-size: 11px; padding-bottom: 6px; margin-left: auto; }
 
 /* Placement modal */
 .modal-backdrop {

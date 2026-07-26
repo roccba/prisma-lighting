@@ -47,18 +47,6 @@ pub enum PatchError {
         first: Uuid,
         second: Uuid,
     },
-    /// A pixel's `position` does not land on a cell inside `matrix_size` (or is
-    /// not finite). Such a pixel can never receive content — the render samples
-    /// the virtual matrix at each pixel's cell (§5.2 step 5) — so this is refused
-    /// at load rather than discovered as one dark fixture on stage. The runtime
-    /// gather is defensive about it anyway (out-of-range samples read black), the
-    /// same belt-and-braces as the layout-generation guard.
-    PositionOutOfMatrix {
-        fixture: Uuid,
-        pixel: u32,
-        position: [f32; 3],
-        matrix_size: [u32; 3],
-    },
     /// A zone's own local mapping matrix (`Zone::mapping_size`, M7 spec §2.4) has
     /// a zero axis. A matrix must have at least one cell on every axis to hold any
     /// content, so a zero is a construction/edit error refused at load.
@@ -120,16 +108,6 @@ impl fmt::Display for PatchError {
             } => write!(
                 f,
                 "fixtures {first} and {second} both claim universe {universe} channel {channel}"
-            ),
-            PatchError::PositionOutOfMatrix {
-                fixture,
-                pixel,
-                position,
-                matrix_size,
-            } => write!(
-                f,
-                "fixture {fixture} pixel {pixel} at position {position:?} falls outside the \
-                 virtual matrix {matrix_size:?} — it could never receive content"
             ),
             PatchError::ZoneMappingSizeZero { zone, mapping_size } => write!(
                 f,

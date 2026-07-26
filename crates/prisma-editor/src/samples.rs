@@ -261,4 +261,16 @@ mod tests {
         let zone_ids: std::collections::HashSet<Uuid> = patch.zones.iter().map(|z| z.id).collect();
         assert!(patch.fixtures.iter().all(|f| zone_ids.contains(&f.zone)));
     }
+
+    #[test]
+    fn wedding_rig_has_no_wire_faults() {
+        // The editor opens on this rig (S6): it must report no DMX wire faults — no
+        // address collisions, no out-of-range channels — so the first thing the
+        // operator sees is not a false alarm.
+        let faults = wedding_rig().wire_faults();
+        assert!(
+            faults.is_empty(),
+            "sample rig must be spotless, got {faults:?}"
+        );
+    }
 }

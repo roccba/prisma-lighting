@@ -27,6 +27,7 @@ pub mod fixture;
 pub mod geometry;
 pub mod index;
 pub mod patch;
+pub mod report;
 pub mod version;
 pub mod zone;
 
@@ -41,5 +42,6 @@ pub use fixture::{
 pub use geometry::{cell_of, Rect, WorldTransform};
 pub use index::{LayoutGeneration, PatchIndex, ZoneMembership};
 pub use patch::Patch;
+pub use report::{Diagnostic, Mark};
 pub use version::{load_patch, save_patch, CURRENT_SCHEMA_VERSION, FORMAT_ID};
 pub use zone::{default_display_color, BlendMode, DisplayColor, PixelRef, Zone};

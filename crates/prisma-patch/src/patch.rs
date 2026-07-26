@@ -37,7 +37,6 @@ impl Patch {
     pub fn validate(&self) -> Result<(), PatchError> {
         self.validate_pixel_indices()?;
         self.validate_addresses()?;
-        self.validate_positions()?;
         self.validate_zone_refs()?;
         self.validate_zone_mapping_sizes()?;
         Ok(())
@@ -108,41 +107,16 @@ impl Patch {
         Ok(())
     }
 
-    /// Every pixel must land on a cell inside the virtual matrix.
-    ///
-    /// A pixel outside `matrix_size` can never receive content: the render samples
-    /// the matrix at each pixel's cell (§5.2 step 5), so such a pixel would simply
-    /// stay dark. Refusing at load beats discovering one dead fixture mid-show —
-    /// the same fail-loud stance as the layout-generation guard. The cell rule is
-    /// [`cell_of`](crate::geometry::cell_of), shared with the render's gather so
-    /// validation and runtime cannot disagree.
-    fn validate_positions(&self) -> Result<(), PatchError> {
-        for fixture in &self.fixtures {
-            for pixel in &fixture.pixels {
-                let out_of_range = match crate::geometry::cell_of(pixel.position) {
-                    // Non-finite position: invalid by construction.
-                    None => true,
-                    Some(cell) => (0..3)
-                        .any(|axis| cell[axis] < 0 || cell[axis] >= self.matrix_size[axis] as i64),
-                };
-                if out_of_range {
-                    return Err(PatchError::PositionOutOfMatrix {
-                        fixture: fixture.id,
-                        pixel: pixel.index,
-                        position: pixel.position.into(),
-                        matrix_size: self.matrix_size,
-                    });
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Every zone's own local mapping matrix (§2.4) must have at least one cell on
     /// every axis. `Z = 1` is the norm for the current 2D rig. This validates the
-    /// zone's *own* space; pixel positions are still checked against the global
-    /// `matrix_size` in [`validate_positions`](Self::validate_positions) until the
-    /// per-zone gather lands in M8 (see the M7 debt note in CLAUDE.md).
+    /// zone's *own* space.
+    ///
+    /// Note there is deliberately **no** check that pixels land inside a matrix: a
+    /// pixel mapped outside its zone's matrix is a valid placement (M7 spec §2.4) —
+    /// it falls on no cell, so the render gather samples nothing and it stays dark
+    /// (the gather reads black out of range, defensively). A matrix is a **render
+    /// resolution**, not a fence; out-of-matrix is not an error, so `compile` must
+    /// not reject it.
     fn validate_zone_mapping_sizes(&self) -> Result<(), PatchError> {
         for zone in &self.zones {
             if zone.mapping_size.contains(&0) {

@@ -16,10 +16,11 @@
 //!
 //! Structural pre-conditions (fixture/zone exists, pixel counts match, indices in
 //! range, ids unique) are checked **before** any mutation, so a rejected op leaves
-//! the patch untouched and the draft consistent. *Validation* (address collisions,
-//! out-of-matrix positions) is deliberately **not** enforced here — the editor
-//! shows those visually and allows transiently-invalid states (M7 spec §4.3/§4.4);
-//! see [`crate::draft::PatchDraft::validate`].
+//! the patch untouched and the draft consistent. DMX **wire faults** (address
+//! collisions, out-of-range channels) are deliberately **not** enforced here — the
+//! editor shows those discreetly and allows transiently-invalid states (M7 spec §1,
+//! §4.3); see [`crate::draft::PatchDraft::wire_faults`]. Out-of-matrix positions and
+//! shared cells are valid choices, not faults at all (§2.4/§4.4).
 
 use glam::Vec3;
 use prisma_patch::{DisplayColor, Fixture, Patch};

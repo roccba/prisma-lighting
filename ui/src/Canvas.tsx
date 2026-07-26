@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import type { Patch } from "./api";
+import { diagnosticMarks, type Diagnostic, type Patch } from "./api";
 import type { ViewMode } from "./Toolbar";
 
 // S4 layers (zoom-gated: gap, contrast, arrows, per-pixel DMX, selection
 // silhouette, view modes) plus S5b additions: a background GRID and the active
 // zone's matrix bounds (§5.6) for spatial reference, and DRAG-to-move (§5.5) —
 // distinct from rubber-band selection — committed as one undo on release.
+//
+// S6 (replanned) adds a DISCREET mark on every pixel a DMX wire fault (address
+// collision / channel out of range) points at — a thin ring, not an alarm — drawn
+// on top and not gated by view mode so the fault is locatable at a glance (§4.3).
 
 interface Props {
   patch: Patch;
@@ -14,6 +18,7 @@ interface Props {
   onMove: (ids: string[], delta: [number, number, number]) => void;
   activeZone: string;
   viewMode: ViewMode;
+  diagnostics: Diagnostic[];
 }
 
 interface View {
@@ -22,8 +27,8 @@ interface View {
   oy: number;
 }
 
-const BG = "#0e0f13";
-const MATRIX_BORDER = "#2a2d38";
+const BG = "#0e0f13"; // the "space beyond the matrix" — the faintest of the three tones
+const MATRIX_FILL = "rgba(150,160,185,0.07)"; // the zone's defined matrix — a light tone
 const GRID = "rgba(255,255,255,0.045)";
 const RUBBER_FILL = "rgba(120, 170, 255, 0.15)";
 const RUBBER_STROKE = "rgba(150, 190, 255, 0.9)";
@@ -32,10 +37,13 @@ const GAP_MIN_SCALE = 4;
 const ARROW_MIN_SCALE = 6;
 const GRID_MIN_SCALE = 9;
 const DMX_MIN_SCALE = 28;
+const FAULT_MIN_PX = 8; // fault rings never shrink below this, so they stay locatable
+
+const FAULT = "#ffb454"; // amber — a discreet "look here", not a red alarm
 
 type RGB = [number, number, number];
 
-export function Canvas({ patch, selection, onSelectionChange, onMove, activeZone, viewMode }: Props) {
+export function Canvas({ patch, selection, onSelectionChange, onMove, activeZone, viewMode, diagnostics }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const view = useRef<View>({ scale: 8, ox: 20, oy: 20 });
   const drag = useRef<null | {
@@ -62,10 +70,38 @@ export function Canvas({ patch, selection, onSelectionChange, onMove, activeZone
     return out;
   }, [patch]);
 
-  const activeZoneColor = useMemo(() => {
-    const z = patch.zones.find((z) => z.id === activeZone);
-    return z ? z.display_color : null;
-  }, [patch, activeZone]);
+  // The matrix the canvas draws (§5.6): the SELECTED zone's, at its declared
+  // `mapping_size`, anchored to the min corner of its fixtures' footprint (world
+  // position is M8 debt). Only when a zone is in focus — All mode shows no matrix.
+  const activeMatrix = useMemo(() => {
+    if (viewMode === "all") return null;
+    const zone = patch.zones.find((z) => z.id === activeZone);
+    if (!zone) return null;
+    let minX = Infinity, minY = Infinity;
+    for (const f of patch.fixtures) {
+      if (f.zone !== activeZone) continue;
+      for (const p of f.pixels) {
+        minX = Math.min(minX, Math.round(p.position[0]));
+        minY = Math.min(minY, Math.round(p.position[1]));
+      }
+    }
+    if (!isFinite(minX)) { minX = 0; minY = 0; } // empty zone → anchor at origin
+    return { ox: minX, oy: minY, mx: zone.mapping_size[0], my: zone.mapping_size[1], color: zone.display_color };
+  }, [patch, activeZone, viewMode]);
+
+  // fixtureId → set of pixel indices that a DMX wire fault points at, for the discreet
+  // canvas marks. One treatment for both fault kinds (collision / out-of-range).
+  const faultPixels = useMemo(() => {
+    const m = new Map<string, Set<number>>();
+    for (const d of diagnostics) {
+      for (const mk of diagnosticMarks(d)) {
+        let inner = m.get(mk.fixture);
+        if (!inner) { inner = new Set(); m.set(mk.fixture, inner); }
+        inner.add(mk.pixel);
+      }
+    }
+    return m;
+  }, [diagnostics]);
 
   const canvasSize = () => {
     const c = canvasRef.current!;
@@ -101,31 +137,36 @@ export function Canvas({ patch, selection, onSelectionChange, onMove, activeZone
     const sy = (wy: number) => wy * scale + oy;
     const [dmx, dmy] = drag.current?.mode === "move" ? moveDelta.current : [0, 0];
 
-    // Background grid at cell boundaries (zoom-gated, culled).
-    if (scale >= GRID_MIN_SCALE) {
-      ctx.strokeStyle = GRID;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      const [mx, my] = patch.matrix_size;
-      for (let i = 0; i <= mx; i++) {
-        const x = sx(i - 0.5);
-        if (x < -1 || x > w + 1) continue;
-        ctx.moveTo(x, sy(-0.5));
-        ctx.lineTo(x, sy(my - 0.5));
+    // Selected zone's matrix — three concentric tones (§5.6): the LIGHT matrix fill
+    // over the fainter background (already filled), a zoom-gated grid inside it, and a
+    // subtle border in the zone colour. Pixels (zone colour) paint on top in pass 1.
+    // Only one zone's matrix at a time; All mode shows none.
+    if (activeMatrix) {
+      const { ox: mox, oy: moy, mx, my, color } = activeMatrix;
+      const x0 = sx(mox - 0.5), y0 = sy(moy - 0.5);
+      const wpx = mx * scale, hpx = my * scale;
+      ctx.fillStyle = MATRIX_FILL;
+      ctx.fillRect(x0, y0, wpx, hpx);
+      if (scale >= GRID_MIN_SCALE) {
+        ctx.strokeStyle = GRID;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let i = 0; i <= mx; i++) {
+          const x = sx(mox + i - 0.5);
+          if (x < -1 || x > w + 1) continue;
+          ctx.moveTo(x, Math.max(y0, -1)); ctx.lineTo(x, Math.min(y0 + hpx, h + 1));
+        }
+        for (let j = 0; j <= my; j++) {
+          const y = sy(moy + j - 0.5);
+          if (y < -1 || y > h + 1) continue;
+          ctx.moveTo(Math.max(x0, -1), y); ctx.lineTo(Math.min(x0 + wpx, w + 1), y);
+        }
+        ctx.stroke();
       }
-      for (let j = 0; j <= my; j++) {
-        const y = sy(j - 0.5);
-        if (y < -1 || y > h + 1) continue;
-        ctx.moveTo(sx(-0.5), y);
-        ctx.lineTo(sx(mx - 0.5), y);
-      }
-      ctx.stroke();
+      ctx.strokeStyle = `rgba(${color.join(",")},0.55)`;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(x0, y0, wpx, hpx);
     }
-
-    // Matrix extent outline.
-    ctx.strokeStyle = MATRIX_BORDER;
-    ctx.lineWidth = 1;
-    ctx.strokeRect(sx(-0.5), sy(-0.5), patch.matrix_size[0] * scale, patch.matrix_size[1] * scale);
 
     const gap = scale >= GAP_MIN_SCALE ? Math.min(3, Math.max(1, scale * 0.14)) : 0;
     const cell = Math.max(1, scale - gap);
@@ -183,28 +224,6 @@ export function Canvas({ patch, selection, onSelectionChange, onMove, activeZone
       }
     }
 
-    // Active zone's matrix bounds — frame its footprint (§5.6).
-    if (activeZoneColor) {
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const f of patch.fixtures) {
-        if (f.zone !== activeZone) continue;
-        const off = sel(f.id);
-        for (const p of f.pixels) {
-          const x = p.position[0] + (off ? dmx : 0), y = p.position[1] + (off ? dmy : 0);
-          minX = Math.min(minX, x); minY = Math.min(minY, y);
-          maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
-        }
-      }
-      if (isFinite(minX)) {
-        ctx.save();
-        ctx.strokeStyle = `rgba(${activeZoneColor.join(",")},0.9)`;
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([5, 4]);
-        ctx.strokeRect(sx(minX - 0.5), sy(minY - 0.5), (maxX - minX + 1) * scale, (maxY - minY + 1) * scale);
-        ctx.restore();
-      }
-    }
-
     // Pass 4: selection silhouette.
     if (selection.size > 0) {
       const cells = new Set<string>();
@@ -229,6 +248,24 @@ export function Canvas({ patch, selection, onSelectionChange, onMove, activeZone
       ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.75; outline();
     }
 
+    // DMX wire-fault marks — topmost, no view-mode gate so the fault is locatable even
+    // in a dimmed/isolated zone (§4.3). Discreet: a thin amber ring, not an alarm.
+    if (faultPixels.size > 0) {
+      const size = Math.max(cell, FAULT_MIN_PX);
+      for (const f of patch.fixtures) {
+        const flags = faultPixels.get(f.id);
+        if (!flags) continue;
+        const off = sel(f.id);
+        for (const p of f.pixels) {
+          if (!flags.has(p.index)) continue;
+          const px = sx(p.position[0] + (off ? dmx : 0));
+          const py = sy(p.position[1] + (off ? dmy : 0));
+          if (!onScreen(px, py)) continue;
+          drawFaultMark(ctx, px, py, size);
+        }
+      }
+    }
+
     // Rubber-band.
     if (rubber.current) {
       const { x0, y0, x1, y1 } = rubber.current;
@@ -237,7 +274,7 @@ export function Canvas({ patch, selection, onSelectionChange, onMove, activeZone
       ctx.fillStyle = RUBBER_FILL; ctx.fillRect(rx, ry, rw, rh);
       ctx.strokeStyle = RUBBER_STROKE; ctx.lineWidth = 1; ctx.strokeRect(rx + 0.5, ry + 0.5, rw, rh);
     }
-  }, [patch, selection, fixtureColor, emphasis, activeZone, activeZoneColor]);
+  }, [patch, selection, fixtureColor, emphasis, activeMatrix, faultPixels]);
 
   const fit = useCallback(() => {
     const canvas = canvasRef.current;
@@ -381,6 +418,9 @@ export function Canvas({ patch, selection, onSelectionChange, onMove, activeZone
     const { x, y } = localXY(e);
     const before = worldFromScreen(x, y);
     const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    // Grid zoom caps at both ends (§5.7): min 0.5 px/cell still shows a full 512-cell
+    // matrix (~256 px); max 80 px/cell is a sensible per-cell zoom-in. Browser zoom
+    // (Ctrl+wheel / pinch) is blocked app-wide in App, so only the grid zooms here.
     view.current.scale = Math.min(80, Math.max(0.5, view.current.scale * factor));
     view.current.ox = x - before.wx * view.current.scale;
     view.current.oy = y - before.wy * view.current.scale;
@@ -427,4 +467,16 @@ function drawArrow(ctx: CanvasRenderingContext2D, x0: number, y0: number, x1: nu
 function label(ctx: CanvasRenderingContext2D, text: string, x: number, y: number) {
   ctx.strokeStyle = "rgba(0,0,0,0.8)"; ctx.strokeText(text, x, y);
   ctx.fillStyle = "#eef1f6"; ctx.fillText(text, x, y);
+}
+
+// A discreet fault mark centred on a cell: a thin amber ring over a dark halo, so it
+// reads against any fixture colour and at any zoom without shouting like a red overlay.
+function drawFaultMark(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number) {
+  const h = size / 2 + 1;
+  ctx.save();
+  ctx.strokeStyle = "rgba(0,0,0,0.7)"; ctx.lineWidth = 2.5;
+  ctx.strokeRect(cx - h, cy - h, h * 2, h * 2);
+  ctx.strokeStyle = FAULT; ctx.lineWidth = 1.25;
+  ctx.strokeRect(cx - h, cy - h, h * 2, h * 2);
+  ctx.restore();
 }
