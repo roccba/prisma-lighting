@@ -112,6 +112,24 @@ impl Default for GammaCalibration {
     }
 }
 
+/// A named subset of a fixture type's pixel **indices** — a *pixel role* (M7 spec
+/// §3.2, the hexagon case). It lets a role's pixels be addressed as a set across every
+/// instance of the type: e.g. "every hexagon's centre pixel" is the role `center` →
+/// `[12]`, distinct from `sides` → `[0..12]`.
+///
+/// **Forward-proof only, not yet consumed.** M7 does not implement pixel roles; this
+/// type exists so the model does not close the door on them (§3.2). Today roles live on
+/// the *fixture type* in the editor's library (`FixtureType::roles`), empty by default.
+/// When roles are implemented, this is the shape a placed fixture's [`FixtureProfile`]
+/// will snapshot — an additive field then — so it is defined here, in the model crate,
+/// from the start.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PixelRole {
+    pub name: String,
+    /// Pixel indices within the fixture that belong to this role.
+    pub pixels: Vec<u32>,
+}
+
 /// The channel layout and calibration a group of pixels shares.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FixtureProfile {

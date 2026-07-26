@@ -10,19 +10,49 @@
 //! [`InsertFixtures`](crate::EditOp::InsertFixtures) op so placement is undoable.
 
 use glam::Vec3;
-use prisma_patch::{ColorOrder, ComponentSet, Fixture, FixtureProfile, GammaCalibration, Pixel};
+use prisma_patch::{
+    ColorOrder, ComponentSet, Fixture, FixtureProfile, GammaCalibration, Pixel, PixelRole,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// A reusable fixture definition (§3.2, minimal for M7). The full fixture library —
-/// a separate reusable file, with intra-fixture pixel roles (the hexagon case) —
-/// is later; the model here must not preclude it.
+/// How a fixture type's pixels are physically laid out (M7 spec §3.2). Our whole
+/// domain is pixel LED — tubes, bars, matrices, custom pixel shapes — so this stays
+/// deliberately small: **no DMX personalities, channel modes or macros**, just the
+/// pixel geometry.
+///
+/// M7 fixtures are 1-D strips (§4.1), so `Strip` is the only variant now; `Matrix` and
+/// `Custom` are the reserved shapes (a matrix is where [`Rotation`] stops being inert).
+/// Kept as an enum from day one so adding them later does not reopen the type model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum FixtureArrangement {
+    /// `pixel_count` pixels in a single line, in signal order. The only M7 shape.
+    #[default]
+    Strip,
+    // Reserved (not implemented): Matrix { cols, rows }, Custom { cells: Vec<[i32; 2]> }.
+}
+
+/// A reusable fixture definition — a fixture-library entry (§3.2). Our domain is only
+/// pixel LED, so a type is exactly: a name, a pixel count, a physical arrangement, a
+/// component set and a colour order — nothing about arbitrary DMX channels or modes.
+///
+/// The editor's fixture library (`crate::library`) is a collection of these in a
+/// separate reusable file. Placement snapshots the resolved profile into each fixture,
+/// so a `.prismap` never references the library (`crate::library` docs).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FixtureType {
     pub name: String,
     pub pixel_count: u32,
     pub components: ComponentSet,
     pub color_order: ColorOrder,
+    /// Physical pixel layout. `#[serde(default)]` = [`FixtureArrangement::Strip`] so a
+    /// library written before this field loads unchanged.
+    #[serde(default)]
+    pub arrangement: FixtureArrangement,
+    /// Intra-fixture pixel roles (§3.2, the hexagon case). **Forward-proof, empty and
+    /// unconsumed in M7** — see [`PixelRole`]. `#[serde(default)]` for older libraries.
+    #[serde(default)]
+    pub roles: Vec<PixelRole>,
 }
 
 /// **Signal direction** — which way a fixture's pixels run from its origin, i.e.
@@ -280,14 +310,17 @@ pub fn next_free_address(patch: &prisma_patch::Patch) -> (u16, u16) {
     }
 }
 
-/// A small built-in set of fixture types for the placement dialog until the fixture
-/// library (§3.2) lands as its own file.
+/// A small set of generic pixel-LED fixture types. Used to **seed a fresh fixture
+/// library** the first time the app runs (`crate::library::seed`), so the placement
+/// dialog is never empty; the operator edits the library from there (§3.2).
 pub fn builtin_fixture_types() -> Vec<FixtureType> {
     let tube = |name: &str, px: u32| FixtureType {
         name: name.into(),
         pixel_count: px,
         components: ComponentSet::Rgb,
         color_order: ColorOrder::Grb,
+        arrangement: FixtureArrangement::Strip,
+        roles: Vec::new(),
     };
     vec![
         tube("Tube 30px (WS2812 GRB)", 30),
@@ -298,6 +331,8 @@ pub fn builtin_fixture_types() -> Vec<FixtureType> {
             pixel_count: 60,
             components: ComponentSet::Rgbw,
             color_order: ColorOrder::Grb,
+            arrangement: FixtureArrangement::Strip,
+            roles: Vec::new(),
         },
     ]
 }
@@ -313,6 +348,8 @@ mod tests {
                 pixel_count: 10,
                 components: ComponentSet::Rgb,
                 color_order: ColorOrder::Rgb,
+                arrangement: FixtureArrangement::Strip,
+                roles: Vec::new(),
             },
             name_prefix: "Tube".into(),
             start_number: 1,

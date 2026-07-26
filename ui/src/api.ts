@@ -91,6 +91,16 @@ export interface SelectionAggregate {
 }
 
 export type ComponentSet = "Rgb" | "Rgbw";
+export type ColorOrder = "Rgb" | "Rbg" | "Grb" | "Gbr" | "Brg" | "Bgr";
+
+/** Physical pixel layout of a fixture type (§3.2). Only `Strip` in M7. */
+export type FixtureArrangement = "Strip";
+
+/** A named subset of a fixture type's pixel indices (§3.2, hexagon). Unused in M7. */
+export interface PixelRole {
+  name: string;
+  pixels: number[];
+}
 
 /** Signal direction — the way a fixture's pixels are wired (§4.1), all eight. */
 export type Direction =
@@ -109,7 +119,16 @@ export interface FixtureType {
   name: string;
   pixel_count: number;
   components: ComponentSet;
-  color_order: string;
+  color_order: ColorOrder;
+  arrangement: FixtureArrangement;
+  roles: PixelRole[];
+}
+
+/** The operator's reusable fixture library (§3.2), stored in its own file. */
+export interface FixtureLibrary {
+  id: string;
+  name: string;
+  types: FixtureType[];
 }
 
 export interface PlacementSpec {
@@ -143,6 +162,15 @@ export const selectionAggregate = (ids: string[]) =>
   invoke<SelectionAggregate | null>("editor_selection_aggregate", { ids });
 
 export const fixtureTypes = () => invoke<FixtureType[]>("editor_fixture_types");
+
+// --- Fixture library CRUD (§3.2). Each mutation persists and returns the library. ---
+export const getLibrary = () => invoke<FixtureLibrary>("editor_library_get");
+export const addFixtureType = (ty: FixtureType) =>
+  invoke<FixtureLibrary>("editor_library_add_type", { ty });
+export const updateFixtureType = (index: number, ty: FixtureType) =>
+  invoke<FixtureLibrary>("editor_library_update_type", { index, ty });
+export const removeFixtureType = (index: number) =>
+  invoke<FixtureLibrary>("editor_library_remove_type", { index });
 
 export const nextFreeAddress = () => invoke<[number, number]>("editor_next_free_address");
 

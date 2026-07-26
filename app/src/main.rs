@@ -9,12 +9,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use glam::Vec3;
 use prisma_editor::{
-    aggregate, builtin_fixture_types, next_free_address, plan, plan_preview, EditOp, FixtureType,
-    PatchDraft, PlacementSpec, PreviewRun, SelectionAggregate,
+    aggregate, load_library, next_free_address, plan, plan_preview, save_library, EditOp,
+    FixtureLibrary, FixtureType, PatchDraft, PlacementSpec, PreviewRun, SelectionAggregate,
 };
 use prisma_engine::{Engine, EngineConfig, EngineHandle};
 use prisma_patch::{load_patch, save_patch, Diagnostic, Patch};
@@ -29,6 +30,22 @@ struct AppState {
     engine: Mutex<Option<EngineHandle>>,
     /// The editor's working patch and its undo history (S2).
     draft: Mutex<PatchDraft>,
+    /// The operator's reusable fixture library (S7, §3.2). Feeds the placement dialog
+    /// and the library manager; persisted to [`library_path`](AppState::library_path)
+    /// on every edit.
+    library: Mutex<FixtureLibrary>,
+    /// Where the library file lives — the per-user app-config dir, not the project or
+    /// the `.prismap`.
+    library_path: PathBuf,
+}
+
+/// Write the library to its file, creating the config directory if needed.
+fn persist_library(path: &Path, library: &FixtureLibrary) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let json = save_library(library).map_err(|e| e.to_string())?;
+    std::fs::write(path, json).map_err(|e| e.to_string())
 }
 
 /// The editor snapshot the UI renders after any command: the patch plus the
@@ -70,10 +87,47 @@ fn editor_selection_aggregate(state: State<AppState>, ids: Vec<Uuid>) -> Option<
     aggregate(state.draft.lock().unwrap().patch(), &ids)
 }
 
-/// The built-in fixture types offered by the placement dialog (§3.2 library later).
+/// The fixture types the placement dialog offers — the operator's library (§3.2).
 #[tauri::command]
-fn editor_fixture_types() -> Vec<FixtureType> {
-    builtin_fixture_types()
+fn editor_fixture_types(state: State<AppState>) -> Vec<FixtureType> {
+    state.library.lock().unwrap().types.clone()
+}
+
+/// The whole fixture library, for the manager UI (§3.2).
+#[tauri::command]
+fn editor_library_get(state: State<AppState>) -> FixtureLibrary {
+    state.library.lock().unwrap().clone()
+}
+
+/// Add a fixture type to the library; persist and return the updated library.
+#[tauri::command]
+fn editor_library_add_type(state: State<AppState>, ty: FixtureType) -> Result<FixtureLibrary, String> {
+    let mut lib = state.library.lock().unwrap();
+    lib.add_type(ty);
+    persist_library(&state.library_path, &lib)?;
+    Ok(lib.clone())
+}
+
+/// Replace the fixture type at `index`; persist and return the updated library.
+#[tauri::command]
+fn editor_library_update_type(
+    state: State<AppState>,
+    index: usize,
+    ty: FixtureType,
+) -> Result<FixtureLibrary, String> {
+    let mut lib = state.library.lock().unwrap();
+    lib.update_type(index, ty).map_err(|e| e.to_string())?;
+    persist_library(&state.library_path, &lib)?;
+    Ok(lib.clone())
+}
+
+/// Remove the fixture type at `index`; persist and return the updated library.
+#[tauri::command]
+fn editor_library_remove_type(state: State<AppState>, index: usize) -> Result<FixtureLibrary, String> {
+    let mut lib = state.library.lock().unwrap();
+    lib.remove_type(index).map_err(|e| e.to_string())?;
+    persist_library(&state.library_path, &lib)?;
+    Ok(lib.clone())
 }
 
 /// Suggest the next free DMX address, to prefill the placement dialog (§4.3).
@@ -218,6 +272,10 @@ fn main() {
             editor_get_state,
             editor_selection_aggregate,
             editor_fixture_types,
+            editor_library_get,
+            editor_library_add_type,
+            editor_library_update_type,
+            editor_library_remove_type,
             editor_next_free_address,
             editor_preview_placement,
             editor_place_fixtures,
@@ -250,9 +308,39 @@ fn main() {
                 )?,
             };
 
+            // Load the operator's fixture library from the per-user app-config dir
+            // (§3.2). First run: seed a few generic types and write the file, so the
+            // placement dialog is never empty. A present-but-invalid file is left
+            // untouched (so a hand-edit mistake is recoverable) and a seeded library is
+            // used in memory for the session.
+            let library_path = app
+                .path()
+                .app_config_dir()
+                .map_err(|e| format!("no app config dir: {e}"))?
+                .join("fixture-library.json");
+            let library = match std::fs::read_to_string(&library_path) {
+                Ok(json) => load_library(&json).unwrap_or_else(|e| {
+                    eprintln!(
+                        "prisma: fixture library at {} is invalid ({e}); \
+                         using a seeded library in memory (file left untouched)",
+                        library_path.display()
+                    );
+                    FixtureLibrary::seed()
+                }),
+                Err(_) => {
+                    let lib = FixtureLibrary::seed();
+                    if let Err(e) = persist_library(&library_path, &lib) {
+                        eprintln!("prisma: could not write seed fixture library: {e}");
+                    }
+                    lib
+                }
+            };
+
             app.manage(AppState {
                 engine: Mutex::new(Some(engine)),
                 draft: Mutex::new(PatchDraft::new(patch)),
+                library: Mutex::new(library),
+                library_path,
             });
             Ok(())
         })

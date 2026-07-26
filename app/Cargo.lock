@@ -2507,6 +2507,7 @@ dependencies = [
  "glam",
  "prisma-patch",
  "serde",
+ "serde_json",
  "uuid",
 ]
 

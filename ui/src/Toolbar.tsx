@@ -22,6 +22,7 @@ interface Props {
   onSave: () => void;
   onAddFixtures: () => void;
   onEditMatrix: () => void;
+  onLibrary: () => void;
   onDelete: () => void;
   canDelete: boolean;
   onUndo: () => void;
@@ -48,6 +49,9 @@ export function Toolbar(p: Props) {
       <div className="tb-group">
         <button className="btn" onClick={p.onAddFixtures}>
           + Add fixtures
+        </button>
+        <button className="btn" onClick={p.onLibrary} title="Manage the fixture library (§3.2)">
+          Library…
         </button>
         <button className="btn" onClick={p.onDelete} disabled={!p.canDelete}>
           Delete

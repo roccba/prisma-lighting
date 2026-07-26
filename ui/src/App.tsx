@@ -15,6 +15,7 @@ import {
 } from "./api";
 import { Canvas } from "./Canvas";
 import { FixtureList } from "./FixtureList";
+import { LibraryManager } from "./LibraryManager";
 import { MatrixDialog } from "./MatrixDialog";
 import { PlacementDialog } from "./PlacementDialog";
 import { Properties } from "./Properties";
@@ -32,6 +33,7 @@ export default function App() {
   const [viewMode, setViewMode] = useState<ViewMode>("all");
   const [modalOpen, setModalOpen] = useState(false);
   const [matrixOpen, setMatrixOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [currentPath, setCurrentPath] = useState<string | null>(null);
   const [unsavedOpen, setUnsavedOpen] = useState(false);
 
@@ -188,6 +190,7 @@ export default function App() {
         onSave={doSave}
         onAddFixtures={() => setModalOpen(true)}
         onEditMatrix={() => setMatrixOpen(true)}
+        onLibrary={() => setLibraryOpen(true)}
         onDelete={del}
         canDelete={selection.size > 0}
         onUndo={async () => setEditor(await undoCmd())}
@@ -238,6 +241,8 @@ export default function App() {
           onClose={() => setMatrixOpen(false)}
         />
       )}
+
+      {libraryOpen && <LibraryManager onClose={() => setLibraryOpen(false)} />}
 
       {unsavedOpen && (
         <div className="modal-backdrop">

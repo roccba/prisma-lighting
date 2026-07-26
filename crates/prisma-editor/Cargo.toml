@@ -19,6 +19,8 @@ uuid = { version = "1", features = ["v4"] }
 # they derive Serialize. The edit ops themselves stay serde-free until the IPC
 # command surface needs them (S5).
 serde = { version = "1", features = ["derive"] }
+# The fixture library (S7) serializes to its own JSON file with a versioned envelope.
+serde_json = "1"
 
 [dev-dependencies]
 uuid = { version = "1", features = ["v4"] }
