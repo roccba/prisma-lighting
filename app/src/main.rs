@@ -111,7 +111,10 @@ fn editor_get_state(state: State<AppState>) -> EditorState {
 
 /// Aggregate properties of a fixture selection (§5.4), or `null` if empty.
 #[tauri::command]
-fn editor_selection_aggregate(state: State<AppState>, ids: Vec<Uuid>) -> Option<SelectionAggregate> {
+fn editor_selection_aggregate(
+    state: State<AppState>,
+    ids: Vec<Uuid>,
+) -> Option<SelectionAggregate> {
     aggregate(state.draft.lock().unwrap().patch(), &ids)
 }
 
@@ -129,7 +132,10 @@ fn editor_library_get(state: State<AppState>) -> FixtureLibrary {
 
 /// Add a fixture type to the library; persist and return the updated library.
 #[tauri::command]
-fn editor_library_add_type(state: State<AppState>, ty: FixtureType) -> Result<FixtureLibrary, String> {
+fn editor_library_add_type(
+    state: State<AppState>,
+    ty: FixtureType,
+) -> Result<FixtureLibrary, String> {
     let mut lib = state.library.lock().unwrap();
     lib.add_type(ty);
     persist_library(&state.library_path, &lib)?;
@@ -151,7 +157,10 @@ fn editor_library_update_type(
 
 /// Remove the fixture type at `index`; persist and return the updated library.
 #[tauri::command]
-fn editor_library_remove_type(state: State<AppState>, index: usize) -> Result<FixtureLibrary, String> {
+fn editor_library_remove_type(
+    state: State<AppState>,
+    index: usize,
+) -> Result<FixtureLibrary, String> {
     let mut lib = state.library.lock().unwrap();
     lib.remove_type(index).map_err(|e| e.to_string())?;
     persist_library(&state.library_path, &lib)?;
@@ -168,7 +177,10 @@ fn editor_next_free_address(state: State<AppState>) -> [u16; 2] {
 /// Place fixtures from the dialog spec (§4). They go into `spec.zone` — the active
 /// zone (§4.1/§6). Appends via an undoable `InsertFixtures` op.
 #[tauri::command]
-fn editor_place_fixtures(state: State<AppState>, spec: PlacementSpec) -> Result<EditorState, String> {
+fn editor_place_fixtures(
+    state: State<AppState>,
+    spec: PlacementSpec,
+) -> Result<EditorState, String> {
     let mut draft = state.draft.lock().unwrap();
     let fixtures = plan(&spec).map_err(|e| e.to_string())?;
     let base = draft.patch().fixtures.len();
