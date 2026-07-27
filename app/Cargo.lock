@@ -2484,6 +2484,7 @@ dependencies = [
  "prisma-editor",
  "prisma-engine",
  "prisma-patch",
+ "prisma-preview",
  "prisma-render",
  "serde",
  "serde_json",

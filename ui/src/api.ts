@@ -201,6 +201,9 @@ export const highlight = (ids: string[], blink: boolean) =>
 /** Recompile the current draft into the live engine (the show resumes on the new layout). */
 export const applyToLive = () => invoke<void>("editor_apply_to_live");
 
+/** The port the live-preview WebSocket is bound to (§M6/S10). Re-query on reconnect. */
+export const previewPort = () => invoke<number>("editor_preview_port");
+
 /** Serialize the mapping to `path` (a `.prismap`) and clear the dirty flag (§9). */
 export const saveTo = (path: string) => invoke<EditorState>("editor_save_to", { path });
 

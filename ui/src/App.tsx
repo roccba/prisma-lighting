@@ -20,6 +20,7 @@ import { FixtureList } from "./FixtureList";
 import { LibraryManager } from "./LibraryManager";
 import { MatrixDialog } from "./MatrixDialog";
 import { PlacementDialog } from "./PlacementDialog";
+import { Preview } from "./Preview";
 import { Properties } from "./Properties";
 import { Toolbar, type HighlightMode, type ViewMode } from "./Toolbar";
 import { WireFaults } from "./WireFaults";
@@ -235,6 +236,7 @@ export default function App() {
         </main>
         <aside className="right">
           <Properties patch={patch} selection={selection} aggregate={aggregate} />
+          <Preview />
         </aside>
       </div>
 

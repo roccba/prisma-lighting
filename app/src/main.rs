@@ -19,6 +19,7 @@ use prisma_editor::{
 };
 use prisma_engine::{Engine, EngineConfig, EngineHandle};
 use prisma_patch::{load_patch, save_patch, Diagnostic, Patch};
+use prisma_preview::sink::WebSocketSink;
 use prisma_render::AdapterPreference;
 use serde::Serialize;
 use tauri::{Manager, RunEvent, State};
@@ -37,6 +38,33 @@ struct AppState {
     /// Where the library file lives — the per-user app-config dir, not the project or
     /// the `.prismap`.
     library_path: PathBuf,
+    /// TCP port the live-preview WebSocket is bound to (§M6/S10). The React preview
+    /// queries it and connects to `ws://127.0.0.1:{port}`. A fresh (OS-assigned) port
+    /// is bound per engine, so a recompile never fights the old bind for a fixed port;
+    /// the viewer re-queries and reconnects.
+    preview_port: Mutex<u16>,
+}
+
+/// Bind a live-preview WebSocket on an OS-assigned port and package it as an engine
+/// config (adapter ignored on a recompile — the GPU is reused). Returns the config and
+/// the bound port, or `None` if the bind failed (the engine then runs without a
+/// preview — never fatal).
+fn preview_config(adapter: AdapterPreference, target: SocketAddr) -> (EngineConfig, Option<u16>) {
+    let mut config = EngineConfig::new(adapter, target);
+    config.output_rate_hz = 44;
+    config.preview_rate_hz = 30;
+    let loopback = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+    match WebSocketSink::bind(loopback) {
+        Ok(ws) => {
+            let port = ws.local_addr().port();
+            config.preview_sink = Some(Box::new(ws));
+            (config, Some(port))
+        }
+        Err(e) => {
+            eprintln!("prisma: live preview unavailable (WebSocket bind failed: {e})");
+            (config, None)
+        }
+    }
 }
 
 /// Write the library to its file, creating the config directory if needed.
@@ -222,6 +250,14 @@ fn editor_highlight(state: State<AppState>, ids: Vec<Uuid>, blink: bool) {
     }
 }
 
+/// The TCP port the live-preview WebSocket is bound to (§M6/S10). The React preview
+/// connects to `ws://127.0.0.1:{port}` and re-queries on reconnect (the port changes
+/// when a recompile rebinds a fresh one).
+#[tauri::command]
+fn editor_preview_port(state: State<AppState>) -> u16 {
+    *state.preview_port.lock().unwrap()
+}
+
 /// Apply the current editor draft to the live engine (§7 / S9): recompile the patch,
 /// reusing the GPU. The show "resumes" on the new layout. In M7 (app == editor) this is
 /// an explicit action; in M8 the same recompile runs when the editor window closes.
@@ -229,15 +265,20 @@ fn editor_highlight(state: State<AppState>, ids: Vec<Uuid>, blink: bool) {
 fn editor_apply_to_live(state: State<AppState>) -> Result<(), String> {
     // Clone the draft patch first so we do not hold the draft lock across the recompile.
     let patch = state.draft.lock().unwrap().patch().clone();
+    // A FRESH preview WebSocket on a new port: binding port 0 never collides with the
+    // still-running old engine's sink, and recompile drops the old one on teardown. The
+    // viewer reconnects to the new port (re-queried on close).
+    let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6454);
+    let (config, port) = preview_config(AdapterPreference::Software, target);
     let mut guard = state.engine.lock().unwrap();
     let engine = guard.take().ok_or("engine is not running")?;
-    // The adapter is ignored on recompile (the GPU is reused); target matches startup.
-    let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6454);
-    let config = EngineConfig::new(AdapterPreference::Software, target);
     match engine.recompile(patch, config) {
         Ok(new) => {
             new.set_frozen(true); // editor still open — keep content frozen (§7)
             *guard = Some(new);
+            if let Some(port) = port {
+                *state.preview_port.lock().unwrap() = port;
+            }
             Ok(())
         }
         Err(e) => Err(e.to_string()),
@@ -315,6 +356,7 @@ fn main() {
             editor_set_zone_mapping_size,
             editor_highlight,
             editor_apply_to_live,
+            editor_preview_port,
             editor_remove_fixtures,
             editor_save_to,
             editor_open_from,
@@ -329,17 +371,16 @@ fn main() {
 
             // Start the live engine on the same patch. Loopback Art-Net (not
             // broadcast); prefer the real GPU, fall back to software so the window
-            // still opens without a configured Vulkan driver.
+            // still opens without a configured Vulkan driver. Each attempt binds its own
+            // preview WebSocket (a failed attempt frees its port before the next binds).
             let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6454);
-            let engine = match Engine::start(
-                patch.clone(),
-                EngineConfig::new(AdapterPreference::HighPerformance, target),
-            ) {
-                Ok(engine) => engine,
-                Err(_) => Engine::start(
-                    patch.clone(),
-                    EngineConfig::new(AdapterPreference::Software, target),
-                )?,
+            let (config_hp, port_hp) = preview_config(AdapterPreference::HighPerformance, target);
+            let (engine, preview_port) = match Engine::start(patch.clone(), config_hp) {
+                Ok(engine) => (engine, port_hp),
+                Err(_) => {
+                    let (config_sw, port_sw) = preview_config(AdapterPreference::Software, target);
+                    (Engine::start(patch.clone(), config_sw)?, port_sw)
+                }
             };
 
             // The editor is open for the life of the app (M7: app == editor), so freeze
@@ -380,6 +421,7 @@ fn main() {
                 draft: Mutex::new(PatchDraft::new(patch)),
                 library: Mutex::new(library),
                 library_path,
+                preview_port: Mutex::new(preview_port.unwrap_or(0)),
             });
             Ok(())
         })

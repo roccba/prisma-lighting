@@ -986,6 +986,7 @@ dependencies = [
  "glam",
  "half",
  "prisma-core",
+ "prisma-editor",
  "prisma-output",
  "prisma-patch",
  "prisma-preview",

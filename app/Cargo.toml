@@ -21,6 +21,9 @@ prisma-engine = { path = "../crates/prisma-engine" }
 prisma-editor = { path = "../crates/prisma-editor" }
 prisma-patch = { path = "../crates/prisma-patch" }
 prisma-render = { path = "../crates/prisma-render" }
+# The live preview streams from the engine to the in-webview React viewer over a
+# local WebSocket (M6's PreviewSink + wire format; S10 adds the React component).
+prisma-preview = { path = "../crates/prisma-preview" }
 tauri = { version = "2", features = [] }
 # Native open/save file dialogs for .prismap (§9). The frontend picks the path;
 # the Rust command does the file I/O and (de)serialization.

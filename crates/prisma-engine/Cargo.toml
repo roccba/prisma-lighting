@@ -30,3 +30,8 @@ uuid = { version = "1" }
 # frames, exactly as the M6 acceptance test does.
 uuid = { version = "1", features = ["v4"] }
 glam = "0.29"
+# The M7 acceptance test walks the real editor flow (build/place/validate/save/
+# reopen) through the same API the Tauri commands wrap, then starts the engine on
+# the reopened patch. A dev-dep only: prisma-editor does not depend on the engine,
+# so this adds no cycle to the runtime graph.
+prisma-editor = { path = "../prisma-editor" }
