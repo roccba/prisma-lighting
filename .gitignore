@@ -26,3 +26,12 @@ Thumbs.db
 
 # Playwright MCP scratch (viewer smoke-checks)
 .playwright-mcp/
+
+# Local UI/design scratch — standalone dark-theme mockups and style experiments
+# feeding the design-system work, plus their reference captures. Deliberately NOT
+# tracked: they are throwaway explorations, not the visual references the spec
+# cites (those live in Screenshots/ and are committed with Screenshots/README.md).
+/index1.html
+/prisma-ui.html
+/prisma-style.css
+/Screenshots/Design/
