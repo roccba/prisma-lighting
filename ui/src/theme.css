@@ -1,0 +1,375 @@
+/* ============================================================================
+   Prisma — Theme
+   Design system extracted from the professional consoles-style mockup.
+   Accent: VS Code blue. Structural greys mirror professional consoles.
+
+   Usage: import once at the app root. Everything keys off the CSS custom
+   properties in :root — never hardcode a colour in a component; reference a
+   token. To retheme (e.g. a light build, or a per-client accent), override
+   the :root block only.
+   ============================================================================ */
+
+:root {
+  /* ---- Accent (VS Code blue) ---- */
+  --accent:        #007ACC;  /* primary accent: active state, selection, fills */
+  --accent-bright: #1F9CFF;  /* hover / active borders / grabbed handles */
+  --accent-dim:    #005A99;  /* pressed / secondary hover backgrounds */
+  --accent-text:   #4FC1FF;  /* numeric values & data on dark — reads brighter */
+
+  /* ---- Structural surfaces ---- */
+  --bg-app:      #0a0a0a;    /* app background */
+  --bg-panel:    #1e1e1e;    /* panel surface */
+  --bg-panel-2:  #2a2a2a;    /* raised surface (dropdown lists, popovers) */
+  --bg-canvas:   #000000;    /* canvas / preview background */
+  --bg-input:    #000000;    /* input & value fields */
+  --menu-bg:     #252525;    /* menu bar & submenus */
+
+  /* ---- Button faces ---- */
+  --btn-face:        linear-gradient(#3a3a3a, #2b2b2b);
+  --btn-face-hover:  linear-gradient(#454545, #333);
+  --btn-face-flat:   #2f2f2f;
+
+  /* ---- Borders ---- */
+  --btn-border:      #555;   /* standard control border */
+  --btn-border-dark: #111;   /* recessed / bottom edge */
+
+  /* ---- Rows & headers ---- */
+  --row-a:     #202020;      /* zebra row A */
+  --row-b:     #262626;      /* zebra row B */
+  --header-bg: #333;         /* table headers */
+  --divider:   #333;         /* separators */
+
+  /* ---- Text ---- */
+  --text:       #d4d4d4;     /* primary text */
+  --text-dim:   #888;        /* secondary / meta */
+  --text-label: #aaa;        /* field labels */
+
+  /* ---- Type ---- */
+  --font-ui:   "Segoe UI", "Roboto Condensed", Tahoma, sans-serif;
+  --font-mono: "Consolas", "DejaVu Sans Mono", monospace;
+  --fs-base: 12px;
+  --fs-small: 11px;
+  --fs-tiny: 10px;
+  --fs-value: 12px;
+
+  /* ---- Radius ---- */
+  --r-sm: 2px;
+  --r-md: 3px;
+}
+
+/* ---- Base ---- */
+* { box-sizing: border-box; }
+body {
+  background: var(--bg-app);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-base);
+  -webkit-font-smoothing: antialiased;
+  margin: 0;
+}
+
+/* ---- Scrollbars (professional consoles-like) ---- */
+::-webkit-scrollbar { width: 14px; height: 14px; }
+::-webkit-scrollbar-track { background: #0d0d0d; }
+::-webkit-scrollbar-thumb {
+  background: var(--btn-face);
+  border: 1px solid var(--btn-border-dark);
+  border-radius: var(--r-sm);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--btn-face-hover); }
+::-webkit-scrollbar-button {
+  background: var(--btn-face);
+  border: 1px solid var(--btn-border-dark);
+  height: 14px;
+}
+
+/* ============================================================
+   Panels
+   ============================================================ */
+.pr-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--btn-border-dark);
+  border-radius: var(--r-md);
+  padding: 14px;
+}
+.pr-panel-title {
+  background: linear-gradient(#3a3a3a, #2d2d2d);
+  border: 1px solid var(--btn-border-dark);
+  color: var(--text-label);
+  font-size: var(--fs-small);
+  padding: 4px 8px;
+  margin: -14px -14px 12px;
+  border-radius: var(--r-md) var(--r-md) 0 0;
+}
+
+/* ============================================================
+   Buttons
+   ============================================================ */
+.pr-btn {
+  background: var(--btn-face);
+  border: 1px solid var(--btn-border);
+  border-top-color: #666;
+  border-bottom-color: var(--btn-border-dark);
+  color: var(--text);
+  padding: 5px 14px;
+  font: inherit;
+  font-size: var(--fs-small);
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  user-select: none;
+}
+.pr-btn:hover  { background: var(--btn-face-hover); }
+.pr-btn:active { background: #222; }
+.pr-btn.is-active {
+  background: var(--accent);
+  border-color: var(--accent-bright);
+  border-top-color: var(--accent-bright);
+  color: #fff;
+  font-weight: 600;
+}
+.pr-btn.is-primary {
+  background: var(--accent);
+  border-color: var(--accent-bright);
+  color: #fff;
+  font-weight: 600;
+}
+.pr-btn.is-primary:hover { background: var(--accent-bright); }
+
+/* segmented tabs (button style) */
+.pr-tabbtn { border-radius: 0; border-right: none; padding: 5px 16px; }
+.pr-tabbtn:last-child { border-right: 1px solid var(--btn-border); }
+
+/* icon + label toolbar button */
+.pr-tbtn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text);
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 5px 10px; min-width: 58px;
+  cursor: pointer; border-radius: var(--r-sm);
+  font-size: var(--fs-tiny);
+}
+.pr-tbtn:hover { background: var(--btn-face); border-color: var(--btn-border); }
+.pr-tbtn.is-active { background: var(--accent); border-color: var(--accent-bright); color: #fff; }
+.pr-tbtn .pr-ic { font-size: 16px; line-height: 1; }
+
+/* ============================================================
+   Numeric inputs
+   ============================================================ */
+.pr-num {
+  display: inline-flex; align-items: stretch;
+  border: 1px solid var(--btn-border-dark);
+  border-radius: var(--r-sm); overflow: hidden; height: 26px;
+}
+.pr-num input {
+  background: var(--bg-input); border: none;
+  color: var(--accent-text);
+  font-family: var(--font-mono); font-size: var(--fs-value);
+  text-align: center; width: 54px; padding: 0 4px; outline: none;
+}
+/* spinner variant (stacked up/down) */
+.pr-num .pr-spin { display: flex; flex-direction: column; border-left: 1px solid var(--btn-border-dark); }
+.pr-num .pr-spin button {
+  background: var(--btn-face); border: none;
+  border-bottom: 1px solid var(--btn-border-dark);
+  color: var(--text); width: 18px; flex: 1; cursor: pointer; font-size: 8px; line-height: 1;
+}
+.pr-num .pr-spin button:last-child { border-bottom: none; }
+.pr-num .pr-spin button:hover { background: var(--btn-face-hover); }
+/* +/- variant (flanking) */
+.pr-num.pr-pm button {
+  background: var(--btn-face); border: none; color: var(--text);
+  width: 24px; cursor: pointer; font-size: 14px;
+}
+.pr-num.pr-pm button:hover { background: var(--btn-face-hover); }
+.pr-num.pr-pm .minus { border-right: 1px solid var(--btn-border-dark); }
+.pr-num.pr-pm .plus  { border-left: 1px solid var(--btn-border-dark); }
+
+/* ============================================================
+   Custom dropdown
+   ============================================================ */
+.pr-dd { position: relative; display: inline-block; min-width: 150px; user-select: none; }
+.pr-dd .pr-dd-head {
+  display: flex; align-items: center; justify-content: space-between;
+  background: var(--bg-input); border: 1px solid var(--btn-border-dark);
+  color: var(--accent-text); height: 26px; padding: 0 4px 0 9px;
+  font-size: var(--fs-small); cursor: pointer; border-radius: var(--r-sm);
+}
+.pr-dd .pr-dd-head:hover { border-color: var(--btn-border); }
+.pr-dd.is-open .pr-dd-head { border-color: var(--accent); }
+.pr-dd .pr-dd-caret {
+  width: 20px; height: 24px; display: flex; align-items: center; justify-content: center;
+  background: var(--btn-face); border-left: 1px solid var(--btn-border-dark);
+  margin-left: 8px; font-size: 9px; color: var(--text);
+}
+.pr-dd .pr-dd-list {
+  position: absolute; top: 27px; left: 0; right: 0;
+  background: var(--bg-panel-2); border: 1px solid var(--btn-border-dark); border-top: none;
+  z-index: 50; display: none; max-height: 200px; overflow-y: auto;
+  box-shadow: 0 6px 14px rgba(0,0,0,.6);
+}
+.pr-dd.is-open .pr-dd-list { display: block; }
+.pr-dd .pr-dd-opt { padding: 5px 9px; font-size: var(--fs-small); color: var(--text); cursor: pointer; border-bottom: 1px solid #1a1a1a; }
+.pr-dd .pr-dd-opt:last-child { border-bottom: none; }
+.pr-dd .pr-dd-opt:hover { background: var(--accent-dim); color: #fff; }
+.pr-dd .pr-dd-opt.is-sel { background: var(--accent); color: #fff; }
+
+/* ============================================================
+   Checkbox & toggle
+   ============================================================ */
+.pr-chk { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: var(--fs-small); user-select: none; }
+.pr-chk .box {
+  width: 16px; height: 16px; background: var(--bg-input);
+  border: 1px solid var(--btn-border); border-radius: var(--r-sm);
+  display: flex; align-items: center; justify-content: center;
+}
+.pr-chk .box .tick { color: #fff; font-size: 11px; display: none; }
+.pr-chk.is-on .box { background: var(--accent); border-color: var(--accent-bright); }
+.pr-chk.is-on .box .tick { display: block; }
+
+.pr-tgl { width: 40px; height: 20px; background: var(--bg-input); border: 1px solid var(--btn-border); border-radius: 11px; position: relative; cursor: pointer; }
+.pr-tgl .knob { position: absolute; top: 1px; left: 1px; width: 16px; height: 16px; border-radius: 50%; background: #666; transition: all .15s; }
+.pr-tgl.is-on { background: var(--accent-dim); border-color: var(--accent); }
+.pr-tgl.is-on .knob { left: 21px; background: var(--accent-bright); }
+
+/* ============================================================
+   Window tabs (pestañas)
+   ============================================================ */
+.pr-wtabs { display: flex; border-bottom: 1px solid var(--accent); }
+.pr-wtab {
+  padding: 6px 16px; font-size: var(--fs-small); cursor: pointer;
+  background: var(--btn-face-flat);
+  border: 1px solid var(--btn-border-dark); border-bottom: none;
+  color: var(--text-dim); margin-right: 2px; border-radius: var(--r-md) var(--r-md) 0 0;
+}
+.pr-wtab:hover { color: var(--text); }
+.pr-wtab.is-active { background: var(--accent); color: #fff; border-color: var(--accent-bright); }
+
+/* ============================================================
+   Menu bar
+   ============================================================ */
+.pr-menubar { background: var(--menu-bg); border: 1px solid var(--btn-border-dark); display: flex; height: 30px; }
+.pr-menubar .mi { padding: 0 14px; display: flex; align-items: center; font-size: var(--fs-base); cursor: pointer; position: relative; }
+.pr-menubar .mi:hover, .pr-menubar .mi.is-open { background: var(--accent); color: #fff; }
+.pr-menubar .submenu {
+  display: none; position: absolute; top: 30px; left: 0;
+  background: var(--menu-bg); border: 1px solid var(--btn-border-dark);
+  min-width: 200px; z-index: 60; box-shadow: 0 8px 18px rgba(0,0,0,.6);
+}
+.pr-menubar .mi.is-open .submenu { display: block; }
+.pr-menubar .subitem { padding: 7px 16px; color: var(--text); display: flex; justify-content: space-between; gap: 30px; cursor: pointer; }
+.pr-menubar .subitem:hover { background: var(--accent-dim); color: #fff; }
+.pr-menubar .subitem .kbd { color: var(--text-dim); font-size: var(--fs-tiny); }
+.pr-menubar .subdivider { height: 1px; background: var(--divider); margin: 3px 0; }
+
+/* ============================================================
+   Toolbar container
+   ============================================================ */
+.pr-toolbar { background: linear-gradient(#2b2b2b, #232323); border: 1px solid var(--btn-border-dark); display: flex; gap: 2px; padding: 4px; }
+.pr-toolbar .sep { border-left: 1px solid var(--divider); margin-left: 4px; padding-left: 14px; }
+
+/* ============================================================
+   Sliders — SHARED console knob (vertical + horizontal)
+   The knob is the signature control: metallic, grip ridges,
+   accent outline when grabbed (professional consoles turns its knob lime; we
+   use the accent).
+   ============================================================ */
+
+/* vertical fader */
+.pr-fader { width: 40px; height: 170px; position: relative; display: flex; justify-content: center; }
+.pr-fader .slot {
+  position: absolute; top: 0; bottom: 0; left: 50%; transform: translateX(-50%);
+  width: 6px; background: #050505; border: 1px solid var(--btn-border-dark);
+  border-radius: var(--r-md); box-shadow: inset 0 0 3px rgba(0,0,0,.8);
+}
+.pr-fader .fill {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 0; width: 6px;
+  background: linear-gradient(var(--accent-bright), var(--accent));
+  border-radius: 0 0 var(--r-md) var(--r-md);
+}
+.pr-fader .ticks { position: absolute; top: 4px; bottom: 4px; left: 0; right: 0; display: flex; flex-direction: column; justify-content: space-between; pointer-events: none; }
+.pr-fader .ticks i { height: 1px; width: 100%; display: flex; justify-content: space-between; }
+.pr-fader .ticks i::before, .pr-fader .ticks i::after { content: ""; width: 7px; height: 1px; background: #4a4a4a; }
+.pr-fader .ticks i.major::before, .pr-fader .ticks i.major::after { width: 11px; background: #666; }
+
+/* the shared knob */
+.pr-knob {
+  background: linear-gradient(#575757 0%, #3d3d3d 50%, #2c2c2c 100%);
+  border: 1px solid #1a1a1a; border-top-color: #6e6e6e;
+  border-radius: var(--r-sm); box-shadow: 0 2px 5px rgba(0,0,0,.7);
+  z-index: 2; cursor: grab;
+  display: flex; justify-content: center; align-items: stretch; gap: 2px; padding: 4px;
+}
+.pr-knob .ridge { background: linear-gradient(#1a1a1a, #000); box-shadow: 0 1px 0 rgba(255,255,255,.10); border-radius: 1px; }
+.pr-knob.is-grabbed {
+  border-color: var(--accent-bright);
+  box-shadow: 0 0 0 1px var(--accent-bright), 0 2px 6px rgba(0,0,0,.7);
+  cursor: grabbing;
+}
+/* vertical knob: horizontal ridges */
+.pr-fader .pr-knob { position: absolute; left: 50%; transform: translateX(-50%); width: 30px; height: 30px; flex-direction: column; }
+.pr-fader .pr-knob .ridge { height: 2px; }
+
+/* horizontal slider: same knob, rotated (vertical ridges) */
+.pr-hslider { position: relative; height: 44px; padding: 0 4px; }
+.pr-hslider .slot { position: absolute; top: 21px; left: 4px; right: 4px; height: 6px; background: #050505; border: 1px solid var(--btn-border-dark); border-radius: var(--r-md); box-shadow: inset 0 0 3px rgba(0,0,0,.8); }
+.pr-hslider .fill { position: absolute; top: 21px; left: 4px; height: 6px; background: linear-gradient(90deg, var(--accent), var(--accent-bright)); border-radius: var(--r-md) 0 0 var(--r-md); }
+.pr-hslider .ticks { position: absolute; top: 30px; left: 4px; right: 4px; display: flex; justify-content: space-between; pointer-events: none; }
+.pr-hslider .ticks i { width: 1px; height: 6px; background: #4a4a4a; }
+.pr-hslider .ticks i.major { height: 10px; background: #666; }
+.pr-hslider .pr-knob { position: absolute; top: 9px; width: 30px; height: 30px; flex-direction: row; background: linear-gradient(90deg, #575757 0%, #3d3d3d 50%, #2c2c2c 100%); border-left-color: #6e6e6e; }
+.pr-hslider .pr-knob .ridge { width: 2px; background: linear-gradient(90deg, #1a1a1a, #000); box-shadow: 1px 0 0 rgba(255,255,255,.10); }
+
+/* value readout under a fader */
+.pr-value {
+  background: var(--bg-input); color: var(--accent-text);
+  font-family: var(--font-mono); border: 1px solid var(--btn-border-dark);
+  padding: 3px 8px; font-size: var(--fs-value); min-width: 44px; text-align: center;
+}
+
+/* ============================================================
+   Transport & meter
+   ============================================================ */
+.pr-transport { display: flex; gap: 4px; }
+.pr-transport .tp {
+  width: 44px; height: 30px; background: var(--btn-face);
+  border: 1px solid var(--btn-border); border-bottom-color: var(--btn-border-dark);
+  color: var(--text); display: flex; align-items: center; justify-content: center;
+  cursor: pointer; border-radius: var(--r-sm); font-size: 13px;
+}
+.pr-transport .tp:hover { background: var(--btn-face-hover); }
+.pr-meter { display: flex; gap: 2px; align-items: flex-end; height: 24px; }
+.pr-meter i { width: 5px; background: var(--accent); display: block; }
+
+/* ============================================================
+   Color field (RGB)
+   ============================================================ */
+.pr-colorfield { display: inline-flex; align-items: stretch; border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); overflow: hidden; height: 30px; }
+.pr-colorfield .sw { width: 60px; border-right: 1px solid var(--btn-border-dark); }
+.pr-colorfield .c { width: 44px; background: var(--bg-input); color: var(--accent-text); font-family: var(--font-mono); display: flex; align-items: center; justify-content: center; border-right: 1px solid #1a1a1a; font-size: var(--fs-value); }
+.pr-colorfield .c.r { border-top: 2px solid #c0392b; }
+.pr-colorfield .c.g { border-top: 2px solid #27ae60; }
+.pr-colorfield .c.b { border-top: 2px solid #2980b9; }
+
+/* ============================================================
+   Data table
+   ============================================================ */
+.pr-table { border-collapse: collapse; width: 100%; font-size: var(--fs-small); }
+.pr-table th { background: var(--header-bg); color: var(--text-label); text-align: left; padding: 4px 8px; font-weight: normal; border: 1px solid var(--btn-border-dark); }
+.pr-table td { padding: 4px 8px; border: 1px solid #1a1a1a; }
+.pr-table tr:nth-child(odd) td  { background: var(--row-a); }
+.pr-table tr:nth-child(even) td { background: var(--row-b); }
+.pr-table tr.is-sel td { background: var(--accent); color: #fff; }
+.pr-table td.num { color: var(--accent-text); font-family: var(--font-mono); text-align: right; }
+.pr-table tr.is-sel td.num { color: #fff; }
+
+/* ============================================================
+   List rows (fixture list, etc.)
+   ============================================================ */
+.pr-listhead { background: var(--header-bg); color: var(--text-label); padding: 4px 10px; font-size: var(--fs-small); display: flex; justify-content: space-between; }
+.pr-listrow { display: flex; align-items: center; gap: 8px; padding: 5px 10px; font-size: var(--fs-small); cursor: pointer; }
+.pr-listrow:nth-child(odd)  { background: var(--row-a); }
+.pr-listrow:nth-child(even) { background: var(--row-b); }
+.pr-listrow.is-sel { background: var(--accent); color: #fff; }
+.pr-listrow .meta { color: var(--text-dim); font-size: var(--fs-tiny); }
+.pr-listrow.is-sel .meta { color: rgba(255,255,255,.7); }
