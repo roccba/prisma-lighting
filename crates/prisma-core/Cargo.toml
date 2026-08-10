@@ -12,3 +12,16 @@ publish.workspace = true
 # Fast, no-poisoning Mutex/RwLock/Condvar for the registry and per-slot
 # arbitration state. Not used on the wait-free read path (that is atomics only).
 parking_lot = "0.12"
+
+# The Show model (M8) embeds a Patch and serializes to `.prisma`. Depending on
+# prisma-patch is allowed — the §7 rule forbids only a dependency on
+# prisma-render; prisma-patch is a pure model/serde crate with no GPU, and it does
+# not depend back on prisma-core (no cycle).
+prisma-patch = { path = "../prisma-patch" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+# Building a Patch in show-model tests needs Vec3 for pixel positions.
+glam = { version = "0.29", features = ["serde"] }

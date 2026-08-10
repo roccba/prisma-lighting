@@ -29,6 +29,7 @@ pub mod clock;
 pub mod descriptor;
 pub mod notify;
 pub mod overlap;
+pub mod show;
 pub mod slot;
 pub mod source;
 pub mod time;
@@ -41,6 +42,10 @@ pub use clock::{ClockShared, ClockSnapshot, MasterClock, MAX_BPM, MIN_BPM};
 pub use descriptor::{Curve, ParamDescriptor, ParamKind, RealRange};
 pub use notify::{Filter, Subscription};
 pub use overlap::{OverlapSnapshot, NO_CELL, NO_ZONE};
+pub use show::{
+    load_show, save_show, Cell, Layer, MasterState, ParamSet, Show, ShowError, Source, ZoneLive,
+    ZoneShow,
+};
 pub use slot::{ParamHandle, ParamId};
 pub use source::{priority, SourceId};
 pub use time::{ManualClock, SystemClock, Tick, TimeSource};
