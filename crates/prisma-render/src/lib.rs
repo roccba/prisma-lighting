@@ -29,6 +29,7 @@ pub mod effect;
 pub mod effects;
 pub mod live_params;
 pub mod overlap;
+pub mod place;
 pub mod probe;
 pub mod readback;
 pub mod readback_ring;
@@ -40,6 +41,7 @@ pub use device::{AdapterPreference, Gpu, GpuError};
 pub use effect::{EffectInstance, EffectManifest, ParamSpec};
 pub use live_params::{LiveParams, MasterHandles, ZoneHandles};
 pub use overlap::{zone_cell_coverage, OverlapCounter};
+pub use place::{Footprint, ZonePlacer};
 pub use readback_ring::{ReadbackRing, ReadyMeta, DEFAULT_SLOTS};
 pub use render_loop::{
     run_render_loop, FrameContent, RenderLoop, RenderLoopConfig, RenderStats, TickOutcome,
