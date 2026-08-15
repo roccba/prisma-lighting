@@ -34,7 +34,9 @@
 pub mod config;
 pub mod content;
 pub mod engine;
+pub mod zone_content;
 
 pub use config::EngineConfig;
 pub use content::IdleContent;
 pub use engine::{Engine, EngineError, EngineHandle, ShutdownReport};
+pub use zone_content::ZoneCompositor;

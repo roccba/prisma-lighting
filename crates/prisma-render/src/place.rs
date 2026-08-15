@@ -35,6 +35,56 @@ impl Footprint {
             size: [world.0 as f32, world.1 as f32],
         }
     }
+
+    /// Whether the footprint covers no cells (a zone that occupies nothing). Such a
+    /// placement writes all black, so the zone contributes nothing.
+    pub fn is_empty(&self) -> bool {
+        self.size[0] <= 0.0 || self.size[1] <= 0.0
+    }
+}
+
+/// Derive a zone's footprint from its **coverage mask** — the integer bounding box
+/// of the world cells the mask marks set.
+///
+/// `mask` is `crate::overlap::zone_cell_coverage`'s per-zone mask: `mask[y*w + x] !=
+/// 0` iff a member pixel of the zone lands in cell `(x, y)`. Deriving the footprint
+/// from **this** array (not from `Zone::bounds`, a cached float `Rect` that can be
+/// `None` or stale) is what guarantees the load-bearing invariant **placement ⊇
+/// coverage** (M8-PARTA §2.3): the footprint is the bbox of exactly the cells the
+/// compositor's coverage confines the zone to, computed from the same `cell_of`
+/// source the gather and the overlap counter use, so the two can never disagree and
+/// a covered cell can never fall outside the placed region (which would leave a
+/// hole — a pixel gathering black).
+///
+/// An all-zero mask (a zone covering nothing) yields an empty footprint
+/// ([`Footprint::is_empty`]). `matrix_w` is the world matrix width the mask is laid
+/// out in row-major (`cell = y * matrix_w + x`).
+pub fn footprint_from_coverage(mask: &[u32], matrix_w: u32) -> Footprint {
+    let w = matrix_w as usize;
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (u32::MAX, u32::MAX, 0u32, 0u32);
+    let mut any = false;
+    for (cell, &set) in mask.iter().enumerate() {
+        if set == 0 {
+            continue;
+        }
+        any = true;
+        let x = (cell % w) as u32;
+        let y = (cell / w) as u32;
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+    }
+    if !any {
+        return Footprint {
+            origin: [0.0, 0.0],
+            size: [0.0, 0.0],
+        };
+    }
+    Footprint {
+        origin: [min_x as f32, min_y as f32],
+        size: [(max_x - min_x + 1) as f32, (max_y - min_y + 1) as f32],
+    }
 }
 
 /// CPU mirror of `PlaceParams` in `shaders/place.wgsl`. 16 bytes.

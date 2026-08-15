@@ -18,7 +18,7 @@ use half::f16;
 use prisma_core::{ClockSnapshot, ParameterTree};
 use prisma_render::effect::EffectInstance;
 use prisma_render::effects;
-use prisma_render::place::{Footprint, ZonePlacer};
+use prisma_render::place::{footprint_from_coverage, Footprint, ZonePlacer};
 use prisma_render::readback::{create_render_target, read_rgba16f, Rgba16};
 use prisma_render::Gpu;
 
@@ -115,6 +115,25 @@ fn identity_placement_is_byte_identical_to_the_m5_direct_render() {
         "identity placement (mapping_size == footprint, identity transform) must be \
          byte-identical to the M5 direct render — M8-PARTA §2.3 no-regression gate",
     );
+}
+
+#[test]
+fn footprint_from_coverage_is_the_bbox_of_the_masked_cells() {
+    // The invariant (M8-PARTA §2.3): the footprint is the integer bbox of exactly
+    // the coverage cells, so placement ⊇ coverage can never be violated. Pure logic,
+    // no GPU. Matrix width 4; mark cells (1,1) and (2,2) → bbox origin (1,1) size (2,2).
+    let w = 4u32;
+    let mut mask = vec![0u32; 4 * 3];
+    mask[4 + 1] = 1; // (x=1, y=1)
+    mask[2 * 4 + 2] = 1; // (x=2, y=2)
+    let fp = footprint_from_coverage(&mask, w);
+    assert_eq!(fp.origin, [1.0, 1.0]);
+    assert_eq!(fp.size, [2.0, 2.0]);
+    assert!(!fp.is_empty());
+
+    // A zone covering nothing → an empty footprint (contributes no light).
+    let empty = footprint_from_coverage(&[0u32; 12], w);
+    assert!(empty.is_empty());
 }
 
 #[test]
