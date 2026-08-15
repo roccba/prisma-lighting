@@ -27,16 +27,128 @@
 //! the clock snapshot with `show_ns` scaled — never the master clock, which would
 //! desync everything ([`scaled_clock`]).
 
+use std::sync::mpsc;
+
+use prisma_core::show::{Show, Source};
+use prisma_core::source::{priority, SourceId};
+use prisma_core::tree::ParameterTree;
 use prisma_core::zone::ZoneStates;
 use prisma_core::{ClockSnapshot, OverlapSnapshot};
 use prisma_patch::{BlendMode, Patch, PatchIndex};
 use prisma_render::blend::Compositor;
 use prisma_render::effect::EffectInstance;
+use prisma_render::live_params::LiveParams;
 use prisma_render::overlap::zone_cell_coverage;
 use prisma_render::place::{footprint_from_coverage, Footprint, ZonePlacer};
 use prisma_render::readback::create_render_target;
 use prisma_render::render_loop::FrameContent;
-use prisma_render::{create_cell_mask, Gpu};
+use prisma_render::{create_cell_mask, manifest_by_id, Gpu};
+
+/// Where the engine writes the Show's initial parameter values from. A load-time
+/// seed at UI priority, so a later MIDI/UI write can take over normally (§4.5).
+fn show_load_source() -> SourceId {
+    SourceId::new(priority::UI, 0)
+}
+
+/// Build each zone's active effect from a Show, indexed by **zone slot** (the
+/// `Patch::zones` / overlap-counter coordinate), ready to hand to
+/// [`ZoneCompositor::new`]. A zone with no active cell, an empty cell, or an
+/// unknown `effect_id` yields `None`.
+///
+/// This resolves the show model's string `effect_id` against the GPU effect
+/// catalogue ([`manifest_by_id`]), builds the [`EffectInstance`] (registering its
+/// params in `tree` under `/zone/{id}/layer/0`), then writes the cell's stored
+/// parameter values over the manifest defaults. The GPU work (pipeline compile)
+/// happens here, at load — not per frame.
+pub fn build_zone_effects(
+    gpu: &Gpu,
+    tree: &ParameterTree,
+    patch: &Patch,
+    index: &PatchIndex,
+    show: &Show,
+) -> Vec<Option<EffectInstance>> {
+    let src = show_load_source();
+    (0..index.zone_count())
+        .map(|slot| {
+            let zone = &patch.zones[slot];
+            let zs = show.zone(zone.id)?;
+            let cell = zs.grid.get(zs.active?)?;
+            let layer = cell.layers.first()?;
+            let (effect_id, params) = match &layer.source {
+                Source::Shader { effect_id, params } => (effect_id, params),
+            };
+            let manifest = manifest_by_id(effect_id)?;
+            let prefix = format!("/zone/{}/layer/0", zone.id);
+            let inst = EffectInstance::new(gpu, tree, &prefix, &manifest);
+            for (name, value) in params.iter() {
+                tree.write_path(&format!("{prefix}/param/{name}"), value, src);
+            }
+            Some(inst)
+        })
+        .collect()
+}
+
+/// Seed the Parameter Tree with a Show's initial **live** state — master
+/// dimmer/colour and each zone's dimmer/colour/speed/solo/blackout — so a loaded
+/// show lights up at the values it was saved with rather than at engine defaults
+/// (dimmer down = dark). Written through the same [`LiveParams`] handles the loops
+/// read, at load-time UI priority.
+pub fn seed_live_from_show(tree: &ParameterTree, live: &LiveParams, patch: &Patch, show: &Show) {
+    let src = show_load_source();
+    let master = live.master();
+    tree.write_real(&master.dimmer, show.master.dimmer, src);
+    for (i, h) in master.color.iter().enumerate() {
+        tree.write_real(h, show.master.color[i], src);
+    }
+    for (slot, zone) in patch.zones.iter().enumerate() {
+        let Some(zs) = show.zone(zone.id) else {
+            continue;
+        };
+        let h = live.zone(slot);
+        let l = &zs.live;
+        tree.write_real(&h.dimmer, l.dimmer, src);
+        for (i, ch) in h.color.iter().enumerate() {
+            tree.write_real(ch, l.color_filter[i], src);
+        }
+        tree.write_real(&h.speed, l.speed_multiplier, src);
+        tree.write_real(&h.solo, if l.solo { 1.0 } else { 0.0 }, src);
+        tree.write_real(&h.blackout, if l.blackout { 1.0 } else { 0.0 }, src);
+    }
+}
+
+/// A structural change to the running content, applied at the **frame boundary**
+/// (M8-PARTA §3, locked decision 3). The expensive part — building an
+/// [`EffectInstance`] (which compiles a GPU pipeline) — happens **off** the render
+/// thread on the sender's side; the command carries the built instance and the
+/// render loop's only work is the pointer swap. That is what makes the swap atomic
+/// per frame: a command sent mid-frame lands in the queue and is applied at the
+/// **top** of the next `render_into`, so frame N renders wholly with the old effect
+/// and frame N+1 wholly with the new one — never a half-and-half frame.
+pub enum ZoneCommand {
+    /// Replace a zone's active effect (`None` clears it to nothing playing).
+    SetEffect {
+        slot: usize,
+        effect: Option<EffectInstance>,
+    },
+}
+
+/// The producer end of the frame-boundary command queue. Cloneable and `Send`, so
+/// the UI/transport threads can drive content changes without touching the render
+/// thread directly. Obtain one from [`ZoneCompositor::command_sender`].
+#[derive(Clone)]
+pub struct ZoneCommandSender {
+    tx: mpsc::Sender<ZoneCommand>,
+}
+
+impl ZoneCommandSender {
+    /// Queue an effect swap for `slot`, applied at the next frame boundary. Returns
+    /// `false` if the compositor has been dropped (the render loop is gone).
+    pub fn set_zone_effect(&self, slot: usize, effect: Option<EffectInstance>) -> bool {
+        self.tx
+            .send(ZoneCommand::SetEffect { slot, effect })
+            .is_ok()
+    }
+}
 
 /// One zone's GPU-side resources, all sized once at construction.
 struct ZoneSlot {
@@ -75,6 +187,11 @@ pub struct ZoneCompositor {
     /// Reused each frame: contributing zones in compositing order. Cleared + refilled
     /// in place, so it allocates only on the first (or a larger) frame.
     contrib: Vec<u32>,
+    /// Frame-boundary command queue (M8-PARTA §3). Drained at the top of every
+    /// `render_into`; `commands_tx` is kept so [`command_sender`](Self::command_sender)
+    /// can hand out cloned producers.
+    commands_rx: mpsc::Receiver<ZoneCommand>,
+    commands_tx: mpsc::Sender<ZoneCommand>,
 }
 
 impl ZoneCompositor {
@@ -121,6 +238,7 @@ impl ZoneCompositor {
             mapped_at_creation: false,
         });
 
+        let (commands_tx, commands_rx) = mpsc::channel();
         ZoneCompositor {
             compositor: Compositor::new(gpu),
             placer: ZonePlacer::new(gpu),
@@ -130,15 +248,41 @@ impl ZoneCompositor {
             ping: create_render_target(gpu, world.0, world.1),
             pong: create_render_target(gpu, world.0, world.1),
             contrib: Vec::new(),
+            commands_rx,
+            commands_tx,
         }
     }
 
-    /// Replace a zone's active effect (`None` clears it). This is the structural
-    /// hot-swap the frame-boundary command queue drives (M8-PARTA §3); building the
-    /// `EffectInstance` happens off-thread, the swap is a pointer move. Textures and
-    /// footprint are unchanged — only the content source moves.
+    /// A producer for the frame-boundary command queue (M8-PARTA §3). Hand these to
+    /// the UI/transport threads; their `set_zone_effect` calls take effect at the
+    /// next frame boundary, never mid-frame.
+    pub fn command_sender(&self) -> ZoneCommandSender {
+        ZoneCommandSender {
+            tx: self.commands_tx.clone(),
+        }
+    }
+
+    /// Replace a zone's active effect directly (`None` clears it). Same swap the
+    /// queue performs, for callers already on the render thread / holding `&mut`.
+    /// Textures and footprint are unchanged — only the content source moves.
     pub fn set_zone_effect(&mut self, slot: usize, effect: Option<EffectInstance>) {
         self.slots[slot].effect = effect;
+    }
+
+    /// Apply every queued command. Called at the **top** of `render_into`, so all
+    /// structural changes land at the frame boundary and the frame is then rendered
+    /// wholly under the post-swap state — never a half-and-half frame. Non-blocking
+    /// (`try_recv`); the render thread never waits on a producer.
+    fn drain_commands(&mut self) {
+        while let Ok(cmd) = self.commands_rx.try_recv() {
+            match cmd {
+                ZoneCommand::SetEffect { slot, effect } => {
+                    if slot < self.slots.len() {
+                        self.slots[slot].effect = effect;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -175,6 +319,12 @@ impl FrameContent for ZoneCompositor {
         overlap: &OverlapSnapshot,
         target: &wgpu::Texture,
     ) {
+        // 0. Frame boundary: apply all queued structural changes (effect swaps)
+        //    BEFORE any rendering this frame. This is the atomic-swap point — the
+        //    whole frame below is rendered under one consistent set of effects, so a
+        //    swap can never split a frame into old-half / new-half (M8-PARTA §3).
+        self.drain_commands();
+
         // 1. Which zones actually contribute this frame, in compositing order. A
         //    zone contributes iff it has live state (contributes_pixels), an active
         //    effect, and a non-empty footprint. Reuses `contrib` in place.

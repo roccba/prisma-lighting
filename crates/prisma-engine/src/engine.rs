@@ -10,6 +10,7 @@ use std::thread::JoinHandle;
 use half::f16;
 use uuid::Uuid;
 
+use prisma_core::show::Show;
 use prisma_core::time::SystemClock;
 use prisma_core::tree::ParameterTree;
 use prisma_core::zone::ZoneStates;
@@ -40,6 +41,20 @@ use prisma_render::{Gpu, GpuError};
 
 use crate::config::EngineConfig;
 use crate::content::IdleContent;
+use crate::zone_content::{
+    build_zone_effects, seed_live_from_show, ZoneCommandSender, ZoneCompositor,
+};
+
+/// What content an assembled engine renders. Chosen by the entry point: [`Engine::
+/// start`] runs [`ContentSource::Idle`] (no show — black, the M5/M7 behaviour),
+/// [`Engine::start_show`] runs a loaded show's per-zone effects.
+enum ContentSource {
+    /// No show loaded — the render target stays black ([`IdleContent`]).
+    Idle,
+    /// A loaded show: its active per-zone cells run as effects. Boxed because a
+    /// `Show` embeds a whole `Patch` — far larger than the `Idle` variant.
+    Show(Box<Show>),
+}
 
 /// Why [`Engine::start`] failed. Bring-up only — once running, the engine reports
 /// runtime state (link loss, generation mismatches) through the loops, not here.
@@ -141,6 +156,10 @@ pub struct EngineHandle {
     fixture_components: HashMap<Uuid, Vec<usize>>,
     /// Length of the master buffer (components), to size/bound the Highlight mask.
     master_len: usize,
+    /// Producer for the render content's frame-boundary command queue (M8-PARTA §3),
+    /// present only when a show is running ([`Engine::start_show`]). The UI drives
+    /// per-zone effect swaps through this; `None` under `IdleContent`.
+    zone_commands: Option<ZoneCommandSender>,
     inner: Option<Running>,
 }
 
@@ -158,7 +177,18 @@ impl Engine {
     pub fn start(patch: Patch, config: EngineConfig) -> Result<EngineHandle, EngineError> {
         // --- GPU: brought up once here (setup path, blocks), shared by reference. ---
         let gpu = Arc::new(Gpu::new(config.adapter)?);
-        Self::assemble(patch, config, gpu)
+        Self::assemble(patch, config, gpu, ContentSource::Idle)
+    }
+
+    /// Like [`start`](Engine::start), but runs a loaded **Show**: the engine renders
+    /// the show's active per-zone effects instead of `IdleContent`, and seeds the
+    /// Parameter Tree with the show's live state so it lights up at its saved values.
+    /// The show embeds its Patch (M8-SPEC §5), so no separate patch is needed. This
+    /// is where the engine stops rendering black and runs real content.
+    pub fn start_show(show: Show, config: EngineConfig) -> Result<EngineHandle, EngineError> {
+        let gpu = Arc::new(Gpu::new(config.adapter)?);
+        let patch = show.patch.clone();
+        Self::assemble(patch, config, gpu, ContentSource::Show(Box::new(show)))
     }
 
     /// Assemble the running engine on an **existing** GPU. Shared by [`start`] (which
@@ -171,6 +201,7 @@ impl Engine {
         patch: Patch,
         config: EngineConfig,
         gpu: Arc<Gpu>,
+        content: ContentSource,
     ) -> Result<EngineHandle, EngineError> {
         // --- Compile the patch: one layout generation shared by every consumer. ---
         let index = patch.compile()?;
@@ -198,6 +229,23 @@ impl Engine {
         // --- Live state: one Parameter Tree binding feeds render, output AND preview. ---
         let tree = ParameterTree::with_defaults();
         let live = LiveParams::register(&tree, &patch);
+
+        // --- Content: black (no show) or the per-zone compositor built from the show.
+        //     Built here on the setup thread — the effect pipelines + zone textures
+        //     compile ONCE at load, never per frame — then moved into the render
+        //     thread. A show also seeds the tree with its saved live state so it
+        //     lights up instead of sitting at engine-default dimmers (dark). ---
+        let (zone_content, zone_commands): (Option<ZoneCompositor>, Option<ZoneCommandSender>) =
+            match content {
+                ContentSource::Idle => (None, None),
+                ContentSource::Show(show) => {
+                    seed_live_from_show(&tree, &live, &patch, &show);
+                    let effects = build_zone_effects(&gpu, &tree, &patch, &index, &show);
+                    let compositor = ZoneCompositor::new(&gpu, &patch, &index, effects);
+                    let sender = compositor.command_sender();
+                    (Some(compositor), Some(sender))
+                }
+            };
 
         // --- Output plan + transports + rate. ---
         let plan = OutputPlan::compile(&patch, &index)?;
@@ -309,7 +357,7 @@ impl Engine {
                 .name("prisma-render".into())
                 .spawn(move || {
                     let pinned = pin.and_then(pin_current_thread);
-                    // Build the GPU-backed pieces on the render thread itself.
+                    // Build the GPU-backed loop pieces on the render thread itself.
                     let sampler = Sampler::new(&gpu, &sample_plan);
                     let mut engine = RenderLoop::with_default_slots(
                         &gpu,
@@ -319,24 +367,40 @@ impl Engine {
                         master_len,
                     );
                     engine.attach_preview(pv_producer, zone_count);
-                    let mut content = IdleContent;
                     let mut clock = clock;
                     let mut counter = counter;
-                    let stats = run_render_loop(
-                        &gpu,
-                        &mut engine,
-                        &mut clock,
-                        &mut counter,
-                        ZoneStates::new(zone_count),
-                        &mut content,
-                        RenderLoopConfig {
-                            target_rate_hz: render_rate,
-                            run_for: None,
-                            stop,
-                            zone_source: Some(Box::new(zones)),
-                            freeze,
-                        },
-                    );
+                    let cfg = RenderLoopConfig {
+                        target_rate_hz: render_rate,
+                        run_for: None,
+                        stop,
+                        zone_source: Some(Box::new(zones)),
+                        freeze,
+                    };
+                    // The content (built at load on the setup thread) was moved in.
+                    // Either arm runs the SAME loop; only the FrameContent type differs.
+                    let stats = match zone_content {
+                        Some(mut compositor) => run_render_loop(
+                            &gpu,
+                            &mut engine,
+                            &mut clock,
+                            &mut counter,
+                            ZoneStates::new(zone_count),
+                            &mut compositor,
+                            cfg,
+                        ),
+                        None => {
+                            let mut idle = IdleContent;
+                            run_render_loop(
+                                &gpu,
+                                &mut engine,
+                                &mut clock,
+                                &mut counter,
+                                ZoneStates::new(zone_count),
+                                &mut idle,
+                                cfg,
+                            )
+                        }
+                    };
                     (stats, pinned)
                 })
                 .expect("spawn render thread")
@@ -351,6 +415,7 @@ impl Engine {
             highlight: highlight_producer,
             fixture_components,
             master_len,
+            zone_commands,
             inner: Some(Running {
                 render,
                 output,
@@ -381,6 +446,14 @@ impl EngineHandle {
     /// stale pairings.
     pub fn generation(&self) -> LayoutGeneration {
         self.generation
+    }
+
+    /// The producer for per-zone effect swaps (M8-PARTA §3), present only when a show
+    /// is running ([`Engine::start_show`]). The UI/scene-grid (M8 step 4) drives cell
+    /// triggering through this; changes apply at the next frame boundary, never
+    /// mid-frame. `None` when the engine runs `IdleContent`.
+    pub fn zone_commands(&self) -> Option<&ZoneCommandSender> {
+        self.zone_commands.as_ref()
     }
 
     /// Freeze or resume the show content (§7 / S9). Frozen: effects stop advancing and
@@ -456,7 +529,10 @@ impl EngineHandle {
         // Keep the device alive for the fresh assembly; `self` (and its GPU Arc) drops
         // when this returns, but `gpu` carries the only remaining strong reference.
         let gpu = Arc::clone(&self.gpu);
-        Engine::assemble(patch, config, gpu)
+        // Recompile (editor apply) rebuilds patch-only content — the show, if any, is
+        // re-applied by the caller afterward (M7 §7 / S9 semantics: recompile resets
+        // to a clean layout; M8 show reload goes through `start_show`).
+        Engine::assemble(patch, config, gpu, ContentSource::Idle)
     }
 
     /// Stop the engine cleanly, **in order**, and report the run.

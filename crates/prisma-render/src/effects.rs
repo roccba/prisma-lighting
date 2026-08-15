@@ -124,3 +124,20 @@ pub fn gradient() -> EffectManifest {
         shader_source: GRADIENT_WGSL,
     }
 }
+
+/// The manifest for a built-in effect by its `effect_id`, or `None` if unknown.
+///
+/// This is the catalogue lookup the show model addresses effects through: a
+/// [`Source::Shader`](prisma_core::show::Source) stores an `effect_id` string, and
+/// the engine resolves it here when it builds a zone's [`crate::EffectInstance`].
+/// Adding an effect means adding its `fn` above and one arm here — no compositor or
+/// UI change (§5.3 / §7: effects are data).
+pub fn manifest_by_id(id: &str) -> Option<EffectManifest> {
+    match id {
+        "solid" => Some(solid()),
+        "gradient" => Some(gradient()),
+        "plasma" => Some(plasma()),
+        "wave" => Some(wave()),
+        _ => None,
+    }
+}

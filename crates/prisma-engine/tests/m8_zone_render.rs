@@ -15,7 +15,7 @@ use half::f16;
 use prisma_core::source::{priority, SourceId};
 use prisma_core::zone::ZoneStates;
 use prisma_core::{ClockSnapshot, ParameterTree};
-use prisma_engine::ZoneCompositor;
+use prisma_engine::{ZoneCommandSender, ZoneCompositor};
 use prisma_patch::{
     BlendMode, ColorOrder, ComponentSet, Fixture, FixtureProfile, GammaCalibration, Patch,
     PatchIndex, Pixel, PixelRef, Zone,
@@ -283,4 +283,76 @@ fn a_dark_zone_contributes_nothing_and_does_not_block_others() {
             i + 4
         );
     }
+}
+
+/// The command queue (M8-PARTA §3): a queued effect swap applies **whole** at the
+/// next frame boundary — never a half-and-half frame. Two zones are swapped in one
+/// batch to also prove the drain applies *all* pending commands before rendering
+/// (not one-per-frame): both flip in the SAME frame, and no pixel is left at the
+/// old value.
+#[test]
+fn a_queued_effect_swap_applies_whole_at_the_next_frame() {
+    let gpu = software_gpu();
+    let tree = ParameterTree::with_defaults();
+    let patch = build_patch(
+        8,
+        &[
+            ("a", &[0, 1, 2, 3], 4, BlendMode::Normal),
+            ("b", &[4, 5, 6, 7], 4, BlendMode::Normal),
+        ],
+    );
+    let index = patch.compile().expect("rig compiles");
+
+    // Both zones start on a flat 0.25 solid.
+    let effects = vec![
+        Some(solid_effect(gpu, &tree, "/q/a0", [0.25, 0.25, 0.25])),
+        Some(solid_effect(gpu, &tree, "/q/b0", [0.25, 0.25, 0.25])),
+    ];
+    let mut content = ZoneCompositor::new(gpu, &patch, &index, effects);
+    let sender = content.command_sender();
+    let zones = lit_zones(2);
+
+    // Frame N: the OLD effect, whole — every pixel 0.25.
+    let frame_n = render_and_gather(gpu, &patch, &index, &mut content, &zones);
+    for (p, pix) in frame_n.iter().enumerate() {
+        assert!(
+            approx(*pix, 0.25),
+            "frame N pixel {p} = old effect, got {pix:?}"
+        );
+    }
+
+    // Queue a swap for BOTH zones. In the app the UI thread builds the
+    // EffectInstance (a pipeline compile) off the render thread and sends it; here
+    // the test thread stands in for that producer.
+    assert!(sender.set_zone_effect(
+        0,
+        Some(solid_effect(gpu, &tree, "/q/a1", [0.75, 0.75, 0.75]))
+    ));
+    assert!(sender.set_zone_effect(1, Some(solid_effect(gpu, &tree, "/q/b1", [0.9, 0.9, 0.9]))));
+
+    // Frame N+1: the swap applied at the boundary. BOTH zones show their NEW effect,
+    // wholly — no pixel remains at 0.25 (a half-and-half frame), and both zones
+    // flipped in this one frame (the drain applied all queued commands first).
+    let frame_np1 = render_and_gather(gpu, &patch, &index, &mut content, &zones);
+    for (p, pix) in frame_np1[0..4].iter().enumerate() {
+        assert!(
+            approx(*pix, 0.75),
+            "frame N+1 zone a pixel {p} = new effect, got {pix:?}"
+        );
+    }
+    for (i, pix) in frame_np1[4..8].iter().enumerate() {
+        assert!(
+            approx(*pix, 0.9),
+            "frame N+1 zone b pixel {} = new effect, got {pix:?}",
+            i + 4
+        );
+    }
+}
+
+/// The producer must be `Send` so the UI/transport threads can drive content
+/// changes — the whole point of a cross-thread frame-boundary queue.
+#[test]
+fn the_command_sender_is_send() {
+    fn is_send<T: Send>() {}
+    is_send::<ZoneCommandSender>();
 }

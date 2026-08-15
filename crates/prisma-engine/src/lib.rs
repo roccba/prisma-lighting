@@ -39,4 +39,6 @@ pub mod zone_content;
 pub use config::EngineConfig;
 pub use content::IdleContent;
 pub use engine::{Engine, EngineError, EngineHandle, ShutdownReport};
-pub use zone_content::ZoneCompositor;
+pub use zone_content::{
+    build_zone_effects, seed_live_from_show, ZoneCommand, ZoneCommandSender, ZoneCompositor,
+};
