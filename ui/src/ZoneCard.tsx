@@ -2,7 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { Fader } from "./Fader";
 import { drawZone } from "./previewDraw";
 import { usePreviewStream } from "./previewStream";
-import { setZoneBlackout, setZoneDimmer, setZoneSolo, type ZoneInfo } from "./api";
+import {
+  setZoneBlackout,
+  setZoneDimmer,
+  setZoneSolo,
+  setZoneStrobe,
+  type ZoneInfo,
+} from "./api";
+import { strobeHz } from "./strobe";
 
 // One zone's card in the zone row (M8-SPEC §3.1): name, a LIVE mini-preview of the
 // zone's own fixtures (a filter over the shared M6 preview stream — only this zone's
@@ -48,6 +55,18 @@ export function ZoneCard({ zone, selected, onSelect }: ZoneCardProps) {
   const [solo, setSolo] = useState(zone.solo);
   const [mute, setMute] = useState(zone.blackout);
 
+  // Per-zone strobe (§3.6). The ⚡ over the mini-preview engages it: HOLD = momentary,
+  // DOUBLE-CLICK = latched. `rate` (0..1) is a separate speed. Engaged ⇒ strobe at
+  // `strobeHz(rate)`; not engaged ⇒ rate 0 (off). Written live to the engine.
+  const [strobeRate, setStrobeRate] = useState(0.4);
+  const [strobeHeld, setStrobeHeld] = useState(false);
+  const [strobeLatched, setStrobeLatched] = useState(false);
+  const strobeOn = strobeHeld || strobeLatched;
+
+  useEffect(() => {
+    setZoneStrobe(zone.id, strobeOn ? strobeHz(strobeRate) : 0, 0.5).catch(() => {});
+  }, [zone.id, strobeOn, strobeRate]);
+
   const swatch = `rgb(${zone.color[0]},${zone.color[1]},${zone.color[2]})`;
 
   const changeDimmer = (v: number) => {
@@ -77,7 +96,26 @@ export function ZoneCard({ zone, selected, onSelect }: ZoneCardProps) {
         <span className="pr-zonecard-swatch" style={{ background: swatch }} />
         <span className="pr-zonecard-name">{zone.name}</span>
       </div>
-      <ZoneMiniPreview zoneId={zone.id} />
+      {/* The mini-preview carries the ⚡ strobe trigger in its corner. HOLD = momentary,
+          DOUBLE-CLICK = latched (fine rate/mapping is meant for MIDI later, §3.6). */}
+      <div className="pr-zonecard-preview">
+        <ZoneMiniPreview zoneId={zone.id} />
+        <button
+          className={`pr-strobe-trigger${strobeOn ? " is-on" : ""}${strobeLatched ? " is-latched" : ""}`}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            setStrobeHeld(true);
+          }}
+          onPointerUp={() => setStrobeHeld(false)}
+          onPointerLeave={() => setStrobeHeld(false)}
+          onDoubleClick={() => setStrobeLatched((l) => !l)}
+          title="Strobo — mantené = momentáneo, doble clic = fijo"
+          aria-label={`${zone.name} strobe`}
+          aria-pressed={strobeOn}
+        >
+          ⚡
+        </button>
+      </div>
       {/* Controls stop the click from bubbling to card-select, so adjusting a fader
           does not re-select (though selecting is harmless — it never changes output). */}
       <div className="pr-zonecard-controls" onPointerDown={(e) => e.stopPropagation()}>
@@ -99,6 +137,24 @@ export function ZoneCard({ zone, selected, onSelect }: ZoneCardProps) {
           </button>
         </div>
       </div>
+      {/* Strobe speed (0..1), separate from the trigger. Coarse on-screen by intent. */}
+      <label
+        className="pr-zonecard-strobe"
+        onPointerDown={(e) => e.stopPropagation()}
+        title="Velocidad del strobo"
+      >
+        <span className="pr-strobe-ico">⚡</span>
+        <input
+          type="range"
+          className="pr-strobe-rate"
+          min={0}
+          max={1}
+          step={0.01}
+          value={strobeRate}
+          onChange={(e) => setStrobeRate(Number(e.target.value))}
+          aria-label={`${zone.name} strobe rate`}
+        />
+      </label>
     </div>
   );
 }

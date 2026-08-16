@@ -584,6 +584,75 @@ fn main_set_zone_blackout(state: State<AppState>, zone: Uuid, on: bool) {
     }
 }
 
+/// Set a zone's strobe: `rate` in Hz (0 = off), `duty` 0..1 (M8-SPEC §3.6). Gates the
+/// zone's non-overlapped pixels at the output stage.
+#[tauri::command]
+fn main_set_zone_strobe(state: State<AppState>, zone: Uuid, rate: f32, duty: f32) {
+    let Some(slot) = zone_slot(&state.zones, zone) else {
+        return;
+    };
+    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        engine.set_zone_strobe(slot, rate, duty);
+    }
+}
+
+// --- Main operation window (M8 step 6): the global operation bar ---
+
+/// The global bar's current master state, so the bar reflects what the engine holds
+/// (a loaded show, or another transport) rather than only the UI's own writes.
+#[derive(Serialize)]
+struct MasterInfo {
+    dimmer: f32,
+    blackout: bool,
+    strobe_rate: f32,
+    strobe_duty: f32,
+}
+
+/// Read the master section (dimmer, blackout, global strobe) for the global bar.
+#[tauri::command]
+fn main_master(state: State<AppState>) -> MasterInfo {
+    let guard = state.engine.lock().unwrap();
+    let Some(engine) = guard.as_ref() else {
+        return MasterInfo {
+            dimmer: 1.0,
+            blackout: false,
+            strobe_rate: 0.0,
+            strobe_duty: 0.5,
+        };
+    };
+    let m = engine.live().master();
+    MasterInfo {
+        dimmer: m.dimmer.read_real().unwrap_or(1.0),
+        blackout: m.blackout.read_real().unwrap_or(0.0) > 0.5,
+        strobe_rate: m.strobe.rate.read_real().unwrap_or(0.0),
+        strobe_duty: m.strobe.duty.read_real().unwrap_or(0.5),
+    }
+}
+
+/// Set the master dimmer (the global-bar fader), real 0..1.
+#[tauri::command]
+fn main_set_master_dimmer(state: State<AppState>, value: f32) {
+    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        engine.set_master_dimmer(value);
+    }
+}
+
+/// Toggle the master blackout (kills all output while holding the fader value).
+#[tauri::command]
+fn main_set_master_blackout(state: State<AppState>, on: bool) {
+    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        engine.set_master_blackout(on);
+    }
+}
+
+/// Set the global strobe: `rate` Hz (0 = off), `duty` 0..1.
+#[tauri::command]
+fn main_set_master_strobe(state: State<AppState>, rate: f32, duty: f32) {
+    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        engine.set_master_strobe(rate, duty);
+    }
+}
+
 // --- Main operation window (M8 step 4): the scene grid ---
 
 /// The effects the picker offers (screenshot 14), grouped by category — the M5 GPU
@@ -820,6 +889,11 @@ fn main() {
             main_set_zone_dimmer,
             main_set_zone_solo,
             main_set_zone_blackout,
+            main_set_zone_strobe,
+            main_master,
+            main_set_master_dimmer,
+            main_set_master_blackout,
+            main_set_master_strobe,
             main_effect_catalogue,
             main_zone_grid,
             main_assign_cell,

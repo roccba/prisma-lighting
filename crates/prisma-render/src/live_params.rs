@@ -34,6 +34,8 @@
 //! linear"). Transports write the **normalized** fader position; the engine
 //! consumes `read_real()`, which applies the curve.
 
+use std::time::Instant;
+
 use prisma_core::descriptor::{Curve, ParamDescriptor, RealRange};
 use prisma_core::zone::ZoneStates;
 use prisma_core::{ParamHandle, ParameterTree};
@@ -47,6 +49,17 @@ use crate::render_loop::ZoneStateSource;
 /// where an operator does the delicate work.
 const DIMMER_GAMMA: f32 = 2.2;
 
+/// Handles for a strobe: a free-running (Hz) on/off gate. `rate == 0` means off
+/// (the gate is a constant 1.0). `duty` is the fraction of each cycle the gate is on.
+/// Applied at the output stage, so master strobe gates every pixel and a zone strobe
+/// gates that zone's non-overlapped pixels (§5.2 step 6). No BPM/beat sync in M8 — the
+/// phase is wall-clock, matching the "global effects apply from above" model.
+#[derive(Clone)]
+pub struct StrobeHandles {
+    pub rate: ParamHandle,
+    pub duty: ParamHandle,
+}
+
 /// Handles for one zone's live parameters.
 #[derive(Clone)]
 pub struct ZoneHandles {
@@ -55,6 +68,7 @@ pub struct ZoneHandles {
     pub speed: ParamHandle,
     pub solo: ParamHandle,
     pub blackout: ParamHandle,
+    pub strobe: StrobeHandles,
 }
 
 /// Handles for the master section.
@@ -62,6 +76,8 @@ pub struct ZoneHandles {
 pub struct MasterHandles {
     pub dimmer: ParamHandle,
     pub color: [ParamHandle; 3],
+    pub blackout: ParamHandle,
+    pub strobe: StrobeHandles,
 }
 
 /// Master + per-zone parameters, resolved once and read wait-free every frame.
@@ -73,6 +89,41 @@ pub struct LiveParams {
     /// Indexed by zone **slot** — the zone's position in `Patch::zones`, the same
     /// coordinate the patch index and the overlap counter use.
     zones: Vec<ZoneHandles>,
+    /// Wall-clock origin for the free-running strobe phase (§ StrobeHandles). Shared
+    /// by whatever reads the flat params (output + preview); each reads `elapsed()`
+    /// on its own thread, so their phases may differ by a sub-frame — fine, a strobe
+    /// is a picture, and with `rate == 0` (the default) the gate is a constant 1.0 so
+    /// they agree exactly (the M6 preview==wire equivalence holds).
+    start: Instant,
+}
+
+/// Free-running strobe gate. `1.0` (full on) when `rate <= 0` (off); otherwise a hard
+/// on/off gate at `rate` Hz, on for the first `duty` fraction of each cycle. Depth is
+/// 100% in M8 (off = black). Phase is computed in `f64` so it stays exact over long
+/// runs (an `f32` product would quantise the phase after minutes).
+fn strobe_gate(elapsed_s: f64, rate: f32, duty: f32) -> f32 {
+    if rate <= 0.0 {
+        return 1.0;
+    }
+    let phase = (elapsed_s * rate as f64).fract();
+    if phase < duty.clamp(0.0, 1.0) as f64 {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+/// Descriptor for a strobe rate (0–30 Hz, linear, default 0 = off).
+fn strobe_rate_descriptor(label: &str) -> ParamDescriptor {
+    ParamDescriptor::level(
+        label,
+        RealRange {
+            min: 0.0,
+            max: 30.0,
+        },
+        Curve::Linear,
+        0.0,
+    )
 }
 
 fn dimmer_descriptor(label: &str, default_norm: f32) -> ParamDescriptor {
@@ -108,6 +159,20 @@ impl LiveParams {
                     ParamDescriptor::unit_level("master.color.b", 1.0),
                 ),
             ],
+            blackout: tree.register(
+                "/master/blackout",
+                ParamDescriptor::toggle("master.blackout", false),
+            ),
+            strobe: StrobeHandles {
+                rate: tree.register(
+                    "/master/strobe/rate",
+                    strobe_rate_descriptor("master.strobe.rate"),
+                ),
+                duty: tree.register(
+                    "/master/strobe/duty",
+                    ParamDescriptor::unit_level("master.strobe.duty", 0.5),
+                ),
+            },
         };
 
         let zones = patch
@@ -151,11 +216,25 @@ impl LiveParams {
                         &format!("{base}/blackout"),
                         ParamDescriptor::toggle("zone.blackout", false),
                     ),
+                    strobe: StrobeHandles {
+                        rate: tree.register(
+                            &format!("{base}/strobe/rate"),
+                            strobe_rate_descriptor("zone.strobe.rate"),
+                        ),
+                        duty: tree.register(
+                            &format!("{base}/strobe/duty"),
+                            ParamDescriptor::unit_level("zone.strobe.duty", 0.5),
+                        ),
+                    },
                 }
             })
             .collect();
 
-        LiveParams { master, zones }
+        LiveParams {
+            master,
+            zones,
+            start: Instant::now(),
+        }
     }
 
     #[inline]
@@ -209,19 +288,44 @@ impl ZoneStateSource for LiveParams {
 /// they apply to (§5.2 step 6).
 impl FlatParamSource for LiveParams {
     fn read_into(&self, into: &mut FlatParams) {
+        // One wall-clock read per output frame drives every strobe's phase; the gate
+        // folds into the dimmer each scale is built from, so `scale_component` (the
+        // shared hot path) is untouched. Master strobe/blackout gate every pixel; a
+        // zone's strobe gates that zone's non-overlapped pixels (overlapped pixels are
+        // dimmed in render, which does not yet apply a zone strobe — the documented
+        // follow-up). `rate == 0` ⇒ gate 1.0, so an idle strobe costs nothing.
+        let t = self.start.elapsed().as_secs_f64();
+
         let m = &self.master;
+        let master_dimmer = if m.blackout.read_bool().unwrap_or(false) {
+            0.0
+        } else {
+            let gate = strobe_gate(
+                t,
+                m.strobe.rate.read_real().unwrap_or(0.0),
+                m.strobe.duty.read_real().unwrap_or(0.5),
+            );
+            m.dimmer.read_real().unwrap_or(1.0) * gate
+        };
         into.set_master(
-            m.dimmer.read_real().unwrap_or(1.0),
+            master_dimmer,
             [
                 m.color[0].read_real().unwrap_or(1.0),
                 m.color[1].read_real().unwrap_or(1.0),
                 m.color[2].read_real().unwrap_or(1.0),
             ],
         );
+
         for slot in 0..self.zones.len() {
+            let z = &self.zones[slot];
+            let gate = strobe_gate(
+                t,
+                z.strobe.rate.read_real().unwrap_or(0.0),
+                z.strobe.duty.read_real().unwrap_or(0.5),
+            );
             into.set_zone(
                 slot,
-                self.zones[slot].dimmer.read_real().unwrap_or(0.0),
+                z.dimmer.read_real().unwrap_or(0.0) * gate,
                 self.zone_color(slot),
             );
         }

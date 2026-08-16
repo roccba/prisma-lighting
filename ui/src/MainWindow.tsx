@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { mainZones, type ZoneInfo } from "./api";
 import { EffectParams } from "./EffectParams";
+import { GlobalBar } from "./GlobalBar";
 import { LargePreview } from "./LargePreview";
 import { PreviewStreamProvider } from "./previewStream";
 import { SceneGrid } from "./SceneGrid";
@@ -94,8 +95,8 @@ export default function MainWindow() {
             )}
           </section>
 
-          <section className="pr-region pr-region-global pr-placeholder">
-            <div className="pr-placeholder-body">Global operation · master · strobe · BPM · step 6</div>
+          <section className="pr-region pr-region-global">
+            <GlobalBar />
           </section>
         </div>
 

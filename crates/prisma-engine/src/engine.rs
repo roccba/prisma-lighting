@@ -504,6 +504,44 @@ impl EngineHandle {
         }
     }
 
+    /// Set the master dimmer (the global-operation-bar fader), real `0..=1`. Applied
+    /// at the output stage over every pixel (§5.2 step 6), so it takes effect on the
+    /// next output frame for the whole rig.
+    pub fn set_master_dimmer(&self, value: f32) {
+        self.tree
+            .write_real(&self.live.master().dimmer, value, ui_control_source());
+    }
+
+    /// Toggle the master blackout — kills all output to black while holding the
+    /// dimmer's value (professional consoles's "Cegar"). Applied at the output stage over every pixel.
+    pub fn set_master_blackout(&self, on: bool) {
+        let v = if on { 1.0 } else { 0.0 };
+        self.tree
+            .write_real(&self.live.master().blackout, v, ui_control_source());
+    }
+
+    /// Set the global strobe: `rate` in Hz (`0` = off) and `duty` `0..=1` (the on
+    /// fraction of each cycle). Free-running (no BPM sync in M8); gates every pixel at
+    /// the output stage.
+    pub fn set_master_strobe(&self, rate_hz: f32, duty: f32) {
+        let s = ui_control_source();
+        let strobe = &self.live.master().strobe;
+        self.tree.write_real(&strobe.rate, rate_hz, s);
+        self.tree.write_real(&strobe.duty, duty, s);
+    }
+
+    /// Set a zone's strobe (`rate` Hz, `duty` `0..=1`). Gates the zone's non-overlapped
+    /// pixels at the output stage (overlapped pixels are a follow-up, §5.2.1). Slot in
+    /// `Patch::zones` order; out-of-range slots are ignored.
+    pub fn set_zone_strobe(&self, slot: usize, rate_hz: f32, duty: f32) {
+        if slot < self.live.zone_count() {
+            let s = ui_control_source();
+            let strobe = &self.live.zone(slot).strobe;
+            self.tree.write_real(&strobe.rate, rate_hz, s);
+            self.tree.write_real(&strobe.duty, duty, s);
+        }
+    }
+
     /// The current live controls for a zone, so the UI can show state it did not set
     /// (the show's loaded values, or another transport). Out-of-range → all-default.
     pub fn zone_live(&self, slot: usize) -> ZoneLiveReadout {

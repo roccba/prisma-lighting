@@ -424,6 +424,29 @@ body {
 .pr-zonecard-btns { display: flex; gap: 3px; flex: 0 0 auto; }
 .pr-zonecard-btns .pr-btn { width: 22px; height: 22px; padding: 0; font-size: var(--fs-small); }
 
+/* --- Per-zone strobe (§3.6): ⚡ over the mini-preview + a 0..1 speed slider --- */
+.pr-zonecard-preview { position: relative; }
+.pr-strobe-trigger { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; line-height: 1; padding: 0; background: rgba(0,0,0,.45); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); color: var(--text-dim); font-size: 12px; cursor: pointer; user-select: none; }
+.pr-strobe-trigger:hover { color: var(--text); border-color: var(--btn-border); }
+/* Engaged (held or latched): bright. Latched adds an inset ring so a "stuck on" strobe
+   still reads as latched even mid-flash. */
+.pr-strobe-trigger.is-on { color: var(--accent-text); border-color: var(--accent); background: rgba(0,122,204,.4); box-shadow: 0 0 6px rgba(0,122,204,.55); }
+.pr-strobe-trigger.is-latched { box-shadow: 0 0 0 1px var(--accent) inset; }
+.pr-zonecard-strobe { display: flex; align-items: center; gap: 5px; }
+.pr-strobe-ico { flex: 0 0 auto; color: var(--text-dim); font-size: var(--fs-small); }
+.pr-strobe-rate { flex: 1 1 auto; height: 4px; -webkit-appearance: none; appearance: none; background: #050505; border: 1px solid var(--btn-border-dark); border-radius: var(--r-md); outline: none; cursor: pointer; }
+.pr-strobe-rate::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 10px; height: 14px; background: linear-gradient(90deg,#575757,#2c2c2c); border: 1px solid #6e6e6e; border-radius: 2px; cursor: pointer; }
+
+/* --- Global operation bar (M8 step 6, §3.6): master + blackout + global strobe --- */
+.pr-globalbar { flex: 1 1 auto; display: flex; align-items: center; gap: 12px; padding: 0 10px; min-width: 0; overflow-x: auto; }
+.pr-globalbar-group { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.pr-globalbar-label { font-size: var(--fs-small); color: var(--text-label); text-transform: uppercase; letter-spacing: .04em; }
+.pr-globalbar-fader { width: 220px; }
+.pr-globalbar-fader .pr-hslider { height: 34px; }
+.pr-globalbar-sep { width: 1px; align-self: stretch; margin: 8px 0; background: var(--divider); flex: 0 0 auto; }
+.pr-strobe-trigger-lg { position: static; width: 30px; height: 26px; font-size: 14px; }
+.pr-globalbar-strobe { width: 130px; }
+
 .pr-mainwin-error { flex: 0 0 auto; color: var(--accent-text); background: var(--bg-panel); border-top: 1px solid var(--btn-border-dark); padding: 6px 10px; font-size: var(--fs-small); font-family: var(--font-mono); }
 
 /* --- Scene grid + effect picker (M8 step 4, §3.3 / §4) --- */
