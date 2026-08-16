@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { mainZones, type ZoneInfo } from "./api";
+import { EffectParams } from "./EffectParams";
+import { LargePreview } from "./LargePreview";
 import { PreviewStreamProvider } from "./previewStream";
 import { SceneGrid } from "./SceneGrid";
 import { ZoneRow } from "./ZoneRow";
@@ -21,6 +23,10 @@ export default function MainWindow() {
   const [zones, setZones] = useState<ZoneInfo[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Bumped whenever the selected zone's active cell changes (fire / assign / clear), so
+  // the effect parameter panel re-fetches the now-active effect and its values. The
+  // large preview follows the stream on its own and needs no signal.
+  const [gridRev, setGridRev] = useState(0);
 
   useEffect(() => {
     mainZones()
@@ -56,22 +62,36 @@ export default function MainWindow() {
                 Grilla{selectedZone ? ` — ${selectedZone.name}` : ""}
               </div>
               {selectedZone ? (
-                <SceneGrid key={selectedZone.id} zoneId={selectedZone.id} />
+                <SceneGrid
+                  key={selectedZone.id}
+                  zoneId={selectedZone.id}
+                  onActiveChange={() => setGridRev((r) => r + 1)}
+                />
               ) : (
                 <div className="pr-placeholder-body">Seleccioná una zona</div>
               )}
             </section>
-            <section className="pr-region pr-region-preview pr-placeholder">
+            <section className="pr-region pr-region-preview">
               <div className="pr-region-title">
                 Preview{selectedZone ? ` — ${selectedZone.name}` : ""}
               </div>
-              <div className="pr-placeholder-body">Large live preview · step 6</div>
+              {selectedZone ? (
+                <LargePreview key={selectedZone.id} zoneId={selectedZone.id} />
+              ) : (
+                <div className="pr-placeholder-body">Seleccioná una zona</div>
+              )}
             </section>
           </div>
 
-          <section className="pr-region pr-region-params pr-placeholder">
-            <div className="pr-region-title">Parámetros</div>
-            <div className="pr-placeholder-body">Effect parameters · step 5</div>
+          <section className="pr-region pr-region-params">
+            <div className="pr-region-title">
+              Parámetros{selectedZone ? ` — ${selectedZone.name}` : ""}
+            </div>
+            {selectedZone ? (
+              <EffectParams zoneId={selectedZone.id} rev={gridRev} />
+            ) : (
+              <div className="pr-placeholder-body">Seleccioná una zona</div>
+            )}
           </section>
 
           <section className="pr-region pr-region-global pr-placeholder">
