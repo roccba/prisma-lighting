@@ -34,7 +34,11 @@ use prisma_preview::preview_loop::{
 };
 use prisma_preview::{preview_handoff, PreviewDescriptor, PreviewPlan};
 
+use prisma_core::show::ParamSet;
+
+use prisma_render::effect::EffectInstance;
 use prisma_render::live_params::LiveParams;
+use prisma_render::manifest_by_id;
 use prisma_render::overlap::OverlapCounter;
 use prisma_render::render_loop::{run_render_loop, RenderLoop, RenderLoopConfig, RenderStats};
 use prisma_render::sample::{SamplePlan, Sampler};
@@ -524,6 +528,50 @@ impl EngineHandle {
     /// mid-frame. `None` when the engine runs `IdleContent`.
     pub fn zone_commands(&self) -> Option<&ZoneCommandSender> {
         self.zone_commands.as_ref()
+    }
+
+    /// Trigger an effect on a zone (M8 step 4 — firing a scene cell). Builds the
+    /// [`EffectInstance`] **here**, on the caller's thread (a pipeline compile, done
+    /// off the render thread by design), then enqueues the swap through the
+    /// frame-boundary command queue (M8-PARTA §3) so it applies whole at the next
+    /// frame — the mini-preview and the wire follow. Registers the effect's params
+    /// under `/zone/{zone_id}/layer/0` and writes the cell's stored values.
+    ///
+    /// Returns `false` if no show is running, the slot is out of range, or the
+    /// `effect_id` is not in the catalogue.
+    pub fn trigger_zone_effect(
+        &self,
+        slot: usize,
+        zone_id: Uuid,
+        effect_id: &str,
+        params: &ParamSet,
+    ) -> bool {
+        let Some(sender) = self.zone_commands.as_ref() else {
+            return false;
+        };
+        if slot >= self.live.zone_count() {
+            return false;
+        }
+        let Some(manifest) = manifest_by_id(effect_id) else {
+            return false;
+        };
+        let prefix = format!("/zone/{zone_id}/layer/0");
+        let effect = EffectInstance::new(&self.gpu, &self.tree, &prefix, &manifest);
+        let src = ui_control_source();
+        for (name, value) in params.iter() {
+            self.tree
+                .write_path(&format!("{prefix}/param/{name}"), value, src);
+        }
+        sender.set_zone_effect(slot, Some(effect))
+    }
+
+    /// Clear a zone's active effect (firing an empty cell / stopping the zone). The
+    /// zone renders nothing from the next frame. Returns `false` if no show is running.
+    pub fn clear_zone_effect(&self, slot: usize) -> bool {
+        match self.zone_commands.as_ref() {
+            Some(sender) => sender.set_zone_effect(slot, None),
+            None => false,
+        }
     }
 
     /// Freeze or resume the show content (§7 / S9). Frozen: effects stop advancing and

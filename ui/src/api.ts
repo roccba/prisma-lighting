@@ -236,3 +236,39 @@ export const setZoneSolo = (zone: string, on: boolean) =>
 /** Toggle a zone's blackout/mute (§3.1). */
 export const setZoneBlackout = (zone: string, on: boolean) =>
   invoke<void>("main_set_zone_blackout", { zone, on });
+
+// --- Main operation window (M8 step 4): the scene grid ---
+
+/** One scene-grid cell of a zone: empty (assignable) or an assigned effect, and
+ *  whether it is the zone's running (active) cell. */
+export interface CellInfo {
+  index: number;
+  effect_id: string | null;
+  effect_name: string | null;
+  active: boolean;
+}
+
+/** One entry the effect picker offers (screenshot 14). */
+export interface EffectListing {
+  id: string;
+  name: string;
+  category: string;
+}
+
+/** The effect catalogue for the picker, grouped by `category` in the UI. */
+export const effectCatalogue = () => invoke<EffectListing[]>("main_effect_catalogue");
+
+/** The scene grid of a zone (its cells + which is running). */
+export const zoneGrid = (zone: string) => invoke<CellInfo[]>("main_zone_grid", { zone });
+
+/** Assign an effect to a cell AND fire it (picking plays it). Returns the new grid. */
+export const assignCell = (zone: string, index: number, effectId: string) =>
+  invoke<CellInfo[]>("main_assign_cell", { zone, index, effectId });
+
+/** Trigger an already-assigned cell (make it the zone's active content). */
+export const triggerCell = (zone: string, index: number) =>
+  invoke<CellInfo[]>("main_trigger_cell", { zone, index });
+
+/** Empty a cell (and stop the zone if it was the running cell). */
+export const clearCell = (zone: string, index: number) =>
+  invoke<CellInfo[]>("main_clear_cell", { zone, index });

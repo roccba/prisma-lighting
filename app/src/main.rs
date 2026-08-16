@@ -18,7 +18,8 @@ use prisma_editor::{
     FixtureLibrary, FixtureType, PatchDraft, PlacementSpec, PreviewRun, SelectionAggregate,
 };
 use prisma_engine::{
-    Cell, Engine, EngineConfig, EngineHandle, Layer, ParamSet, Show, ZoneLiveReadout,
+    Cell, Engine, EngineConfig, EngineHandle, Layer, ParamSet, Show, Source, ZoneLiveReadout,
+    ZoneShow,
 };
 use prisma_patch::{load_patch, save_patch, Diagnostic, Patch};
 use prisma_preview::sink::WebSocketSink;
@@ -46,6 +47,56 @@ struct ZoneInfo {
     blackout: bool,
 }
 
+/// One scene-grid cell of the selected zone (M8 step 4): empty (assignable) or an
+/// assigned effect, and whether it is the zone's running (active) cell.
+#[derive(Serialize)]
+struct CellInfo {
+    index: usize,
+    effect_id: Option<String>,
+    effect_name: Option<String>,
+    active: bool,
+}
+
+/// One entry the effect picker offers (screenshot 14), catalogue-driven (§5.3).
+#[derive(Serialize)]
+struct EffectListingInfo {
+    id: String,
+    name: String,
+    category: String,
+}
+
+/// How many assignable cells each zone's grid seeds with (8 columns × 2 rows). The
+/// first cell holds the zone's initial effect; the rest are empty and assignable.
+const GRID_CELLS: usize = 16;
+
+/// The picker's display name for an `effect_id`, from the catalogue.
+fn effect_display_name(id: &str) -> Option<String> {
+    prisma_render::catalogue()
+        .into_iter()
+        .find(|e| e.id == id)
+        .map(|e| e.name.to_string())
+}
+
+/// The scene grid of one zone as cell DTOs.
+fn grid_dto(zs: &ZoneShow) -> Vec<CellInfo> {
+    zs.grid
+        .iter()
+        .enumerate()
+        .map(|(i, cell)| {
+            let effect_id = cell.layers.first().map(|l| match &l.source {
+                Source::Shader { effect_id, .. } => effect_id.clone(),
+            });
+            let effect_name = effect_id.as_deref().and_then(effect_display_name);
+            CellInfo {
+                index: i,
+                effect_id,
+                effect_name,
+                active: zs.active == Some(i),
+            }
+        })
+        .collect()
+}
+
 /// The M8 test show: the wedding rig with a distinct effect running per zone, so the
 /// zone row's live mini-previews show something worth looking at (not two trivial
 /// zones). The editor writes only fixture→zone *ownership*, so the overlap membership
@@ -54,7 +105,8 @@ fn build_show() -> Show {
     let mut patch = prisma_editor::samples::wedding_rig();
     patch.fill_zone_members_from_ownership();
     let mut show = Show::new("Wedding", patch);
-    // One effect per zone, cycled — enough variety to judge the row at a glance.
+    // One effect per zone, cycled — enough variety to judge the row at a glance. Each
+    // zone gets a grid of assignable cells with its initial effect in cell 0 (active).
     let catalogue = ["plasma", "wave", "gradient", "solid"];
     for (i, zs) in show.zones.iter_mut().enumerate() {
         let effect_id = catalogue[i % catalogue.len()];
@@ -64,7 +116,15 @@ fn build_show() -> Show {
             params.set("g", 0.25);
             params.set("b", 0.5);
         }
-        zs.grid.push(Cell::single(Layer::shader(effect_id, params)));
+        zs.grid = (0..GRID_CELLS)
+            .map(|c| {
+                if c == 0 {
+                    Cell::single(Layer::shader(effect_id, params.clone()))
+                } else {
+                    Cell::empty()
+                }
+            })
+            .collect();
         zs.active = Some(0);
         zs.live.dimmer = 0.8; // lit, so the mini-previews are visible
     }
@@ -78,6 +138,10 @@ struct AppState {
     /// The show's zones in slot order (M8 step 3): identity for the zone row, and the
     /// slot each zone's live controls are addressed by.
     zones: Vec<ZoneMeta>,
+    /// The editable Show — the source of truth for each zone's scene grid (M8 step 4).
+    /// The engine ran a copy at boot; grid edits mutate this and are pushed to the
+    /// engine as effect triggers through the frame-boundary queue.
+    show: Mutex<Show>,
     /// The editor's working patch and its undo history (S2).
     draft: Mutex<PatchDraft>,
     /// The operator's reusable fixture library (S7, §3.2). Feeds the placement dialog
@@ -458,6 +522,124 @@ fn main_set_zone_blackout(state: State<AppState>, zone: Uuid, on: bool) {
     }
 }
 
+// --- Main operation window (M8 step 4): the scene grid ---
+
+/// The effects the picker offers (screenshot 14), grouped by category — the M5 GPU
+/// effects. Catalogue-driven, so the picker is never hardcoded (§5.3).
+#[tauri::command]
+fn main_effect_catalogue() -> Vec<EffectListingInfo> {
+    prisma_render::catalogue()
+        .into_iter()
+        .map(|e| EffectListingInfo {
+            id: e.id.to_string(),
+            name: e.name.to_string(),
+            category: e.category.to_string(),
+        })
+        .collect()
+}
+
+/// The scene grid of a zone (its assignable cells and which is running).
+#[tauri::command]
+fn main_zone_grid(state: State<AppState>, zone: Uuid) -> Vec<CellInfo> {
+    let show = state.show.lock().unwrap();
+    show.zone(zone).map(grid_dto).unwrap_or_default()
+}
+
+/// Assign an effect to a cell AND fire it (picking an effect for a cell plays it):
+/// fill the cell's layer, make it the zone's active cell, and trigger it live through
+/// the frame-boundary queue. Returns the updated grid.
+#[tauri::command]
+fn main_assign_cell(
+    state: State<AppState>,
+    zone: Uuid,
+    index: usize,
+    effect_id: String,
+) -> Vec<CellInfo> {
+    let Some(slot) = zone_slot(&state.zones, zone) else {
+        return Vec::new();
+    };
+    let params = ParamSet::new(); // default params in step 4; parameter editing is step 5
+    let dto = {
+        let mut show = state.show.lock().unwrap();
+        let Some(zs) = show.zones.iter_mut().find(|z| z.zone_id == zone) else {
+            return Vec::new();
+        };
+        if index >= zs.grid.len() {
+            return grid_dto(zs);
+        }
+        zs.grid[index] = Cell::single(Layer::shader(effect_id.clone(), params.clone()));
+        zs.active = Some(index);
+        grid_dto(zs)
+    };
+    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        engine.trigger_zone_effect(slot, zone, &effect_id, &params);
+    }
+    dto
+}
+
+/// Trigger an already-assigned cell (make it the zone's active content). An empty
+/// cell clears the zone (stops it). Returns the updated grid.
+#[tauri::command]
+fn main_trigger_cell(state: State<AppState>, zone: Uuid, index: usize) -> Vec<CellInfo> {
+    let Some(slot) = zone_slot(&state.zones, zone) else {
+        return Vec::new();
+    };
+    let (dto, effect) = {
+        let mut show = state.show.lock().unwrap();
+        let Some(zs) = show.zones.iter_mut().find(|z| z.zone_id == zone) else {
+            return Vec::new();
+        };
+        if index >= zs.grid.len() {
+            return grid_dto(zs);
+        }
+        zs.active = Some(index);
+        let effect = zs.grid[index].layers.first().map(|l| match &l.source {
+            Source::Shader { effect_id, params } => (effect_id.clone(), params.clone()),
+        });
+        (grid_dto(zs), effect)
+    };
+    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        match effect {
+            Some((id, params)) => {
+                engine.trigger_zone_effect(slot, zone, &id, &params);
+            }
+            None => {
+                engine.clear_zone_effect(slot);
+            }
+        }
+    }
+    dto
+}
+
+/// Empty a cell. If it was the running cell, the zone stops (clears its output).
+#[tauri::command]
+fn main_clear_cell(state: State<AppState>, zone: Uuid, index: usize) -> Vec<CellInfo> {
+    let Some(slot) = zone_slot(&state.zones, zone) else {
+        return Vec::new();
+    };
+    let (dto, was_active) = {
+        let mut show = state.show.lock().unwrap();
+        let Some(zs) = show.zones.iter_mut().find(|z| z.zone_id == zone) else {
+            return Vec::new();
+        };
+        if index >= zs.grid.len() {
+            return grid_dto(zs);
+        }
+        zs.grid[index] = Cell::empty();
+        let was_active = zs.active == Some(index);
+        if was_active {
+            zs.active = None;
+        }
+        (grid_dto(zs), was_active)
+    };
+    if was_active {
+        if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+            engine.clear_zone_effect(slot);
+        }
+    }
+    dto
+}
+
 #[tauri::command]
 fn editor_undo(state: State<AppState>) -> EditorState {
     let mut draft = state.draft.lock().unwrap();
@@ -499,6 +681,11 @@ fn main() {
             main_set_zone_dimmer,
             main_set_zone_solo,
             main_set_zone_blackout,
+            main_effect_catalogue,
+            main_zone_grid,
+            main_assign_cell,
+            main_trigger_cell,
+            main_clear_cell,
         ])
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -518,6 +705,9 @@ fn main() {
                     color: z.display_color,
                 })
                 .collect();
+            // Keep an editable copy as the grid's source of truth (step 4); the engine
+            // runs its own copy and follows our triggers through the queue.
+            let show_state = show.clone();
 
             // Loopback Art-Net (not broadcast); prefer the real GPU, fall back to
             // software so the window still opens without a configured Vulkan driver.
@@ -571,6 +761,7 @@ fn main() {
             app.manage(AppState {
                 engine: Mutex::new(Some(engine)),
                 zones,
+                show: Mutex::new(show_state),
                 draft: Mutex::new(PatchDraft::new(patch)),
                 library: Mutex::new(library),
                 library_path,

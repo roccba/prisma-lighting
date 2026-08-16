@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { mainZones, type ZoneInfo } from "./api";
 import { PreviewStreamProvider } from "./previewStream";
+import { SceneGrid } from "./SceneGrid";
 import { ZoneRow } from "./ZoneRow";
 
 // The M8 main operation window (M8-SPEC §3). Step 3 builds the FIXED layout skeleton
@@ -50,11 +51,15 @@ export default function MainWindow() {
           </section>
 
           <div className="pr-mainwin-mid">
-            <section className="pr-region pr-region-grid pr-placeholder">
+            <section className="pr-region pr-region-grid">
               <div className="pr-region-title">
                 Grilla{selectedZone ? ` — ${selectedZone.name}` : ""}
               </div>
-              <div className="pr-placeholder-body">Scene grid · step 4</div>
+              {selectedZone ? (
+                <SceneGrid key={selectedZone.id} zoneId={selectedZone.id} />
+              ) : (
+                <div className="pr-placeholder-body">Seleccioná una zona</div>
+              )}
             </section>
             <section className="pr-region pr-region-preview pr-placeholder">
               <div className="pr-region-title">

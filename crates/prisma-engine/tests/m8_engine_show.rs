@@ -159,6 +159,21 @@ fn engine_runs_a_show_and_lights_the_wire() {
         live.dimmer
     );
 
+    // Firing a scene cell (M8 step 4): trigger a *different* effect through the
+    // frame-boundary queue. The flat solid becomes a gradient — pixel 0 goes dark,
+    // pixel 3 rises (each still x0.5 by the zone fader). Proof the swap reached the
+    // wire, off the render thread.
+    let zone_id = Uuid::from_u128(0x1); // the single zone in build_patch
+    assert!(engine.trigger_zone_effect(0, zone_id, "gradient", &ParamSet::new()));
+    wait_for("the triggered gradient reaches the wire", || {
+        let snap = dev_sink.snapshot();
+        match snap.universes.get(&1) {
+            // pixel 0 ~ 0 (gradient start x 0.5 dimmer), pixel 3 ~ 127 (gradient end x 0.5).
+            Some(u) => u.data.len() >= 12 && u.data[0] < 12 && (118..136).contains(&u.data[9]),
+            None => false,
+        }
+    });
+
     let report = engine.shutdown();
     assert!(
         report.render.frames_published > 0,
