@@ -5,7 +5,7 @@
 //! S1 ships one effect (a gradient) to establish the tree→uniform→pixel seam;
 //! S2+ add plasma, wave/noise, etc. behind the same [`EffectManifest`] contract.
 
-use crate::effect::{EffectManifest, ParamSpec};
+use crate::effect::{ColorChannel, EffectManifest, ParamRole, ParamSpec};
 use prisma_core::{Curve, ParamDescriptor, RealRange};
 
 /// WGSL source for the horizontal grayscale gradient, from the shared shader
@@ -22,9 +22,9 @@ pub fn plasma() -> EffectManifest {
     EffectManifest {
         effect_id: "plasma",
         params: vec![
-            ParamSpec {
-                name: "scale",
-                descriptor: ParamDescriptor::level(
+            ParamSpec::scalar(
+                "scale",
+                ParamDescriptor::level(
                     "effect.plasma.scale",
                     RealRange {
                         min: 1.0,
@@ -33,16 +33,16 @@ pub fn plasma() -> EffectManifest {
                     Curve::Linear,
                     0.25,
                 ),
-            },
-            ParamSpec {
-                name: "speed",
-                descriptor: ParamDescriptor::level(
+            ),
+            ParamSpec::scalar(
+                "speed",
+                ParamDescriptor::level(
                     "effect.plasma.speed",
                     RealRange { min: 0.0, max: 4.0 },
                     Curve::Linear,
                     0.25,
                 ),
-            },
+            ),
         ],
         shader_source: PLASMA_WGSL,
     }
@@ -54,9 +54,9 @@ pub fn wave() -> EffectManifest {
     EffectManifest {
         effect_id: "wave",
         params: vec![
-            ParamSpec {
-                name: "frequency",
-                descriptor: ParamDescriptor::level(
+            ParamSpec::scalar(
+                "frequency",
+                ParamDescriptor::level(
                     "effect.wave.frequency",
                     RealRange {
                         min: 0.0,
@@ -65,16 +65,16 @@ pub fn wave() -> EffectManifest {
                     Curve::Linear,
                     0.1,
                 ),
-            },
-            ParamSpec {
-                name: "speed",
-                descriptor: ParamDescriptor::level(
+            ),
+            ParamSpec::scalar(
+                "speed",
+                ParamDescriptor::level(
                     "effect.wave.speed",
                     RealRange { min: 0.0, max: 4.0 },
                     Curve::Linear,
                     0.0,
                 ),
-            },
+            ),
         ],
         shader_source: WAVE_WGSL,
     }
@@ -86,19 +86,28 @@ pub fn wave() -> EffectManifest {
 pub fn solid() -> EffectManifest {
     EffectManifest {
         effect_id: "solid",
+        // The three channels share one explicit colour group, so the panel presents
+        // them as a single 255-space picker instead of three raw sliders (§3.5). The
+        // values stay linear-light `0..1` in the tree/uniform — only the UI converts.
         params: vec![
-            ParamSpec {
-                name: "r",
-                descriptor: ParamDescriptor::unit_level("effect.solid.r", 0.0),
-            },
-            ParamSpec {
-                name: "g",
-                descriptor: ParamDescriptor::unit_level("effect.solid.g", 0.0),
-            },
-            ParamSpec {
-                name: "b",
-                descriptor: ParamDescriptor::unit_level("effect.solid.b", 0.0),
-            },
+            ParamSpec::color(
+                "r",
+                ParamDescriptor::unit_level("effect.solid.r", 0.0),
+                "color",
+                ColorChannel::R,
+            ),
+            ParamSpec::color(
+                "g",
+                ParamDescriptor::unit_level("effect.solid.g", 0.0),
+                "color",
+                ColorChannel::G,
+            ),
+            ParamSpec::color(
+                "b",
+                ParamDescriptor::unit_level("effect.solid.b", 0.0),
+                "color",
+                ColorChannel::B,
+            ),
         ],
         shader_source: SOLID_WGSL,
     }
@@ -111,15 +120,17 @@ pub fn solid() -> EffectManifest {
 pub fn gradient() -> EffectManifest {
     EffectManifest {
         effect_id: "gradient",
+        // Grayscale edges (scalars), not colours — plain sliders. (When a colour
+        // gradient effect arrives, its two ends become two distinct colour groups.)
         params: vec![
-            ParamSpec {
-                name: "start",
-                descriptor: ParamDescriptor::unit_level("effect.gradient.start", 0.0),
-            },
-            ParamSpec {
-                name: "end",
-                descriptor: ParamDescriptor::unit_level("effect.gradient.end", 1.0),
-            },
+            ParamSpec::scalar(
+                "start",
+                ParamDescriptor::unit_level("effect.gradient.start", 0.0),
+            ),
+            ParamSpec::scalar(
+                "end",
+                ParamDescriptor::unit_level("effect.gradient.end", 1.0),
+            ),
         ],
         shader_source: GRADIENT_WGSL,
     }
@@ -178,6 +189,9 @@ pub struct EffectParam {
     pub min: f32,
     pub max: f32,
     pub default_norm: f32,
+    /// Presentation hint (scalar / colour channel / direction) — which control the
+    /// panel draws for this param (§3.5). The value model is unchanged regardless.
+    pub role: ParamRole,
 }
 
 /// The parameters an effect exposes, in manifest (= uniform) order, for `effect_id`;
@@ -193,6 +207,7 @@ pub fn effect_params(id: &str) -> Vec<EffectParam> {
                     min: p.descriptor.range.min,
                     max: p.descriptor.range.max,
                     default_norm: p.descriptor.default_norm,
+                    role: p.role,
                 })
                 .collect()
         })

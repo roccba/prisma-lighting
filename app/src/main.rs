@@ -23,7 +23,7 @@ use prisma_engine::{
 };
 use prisma_patch::{load_patch, save_patch, Diagnostic, Patch};
 use prisma_preview::sink::WebSocketSink;
-use prisma_render::AdapterPreference;
+use prisma_render::{AdapterPreference, ColorChannel, ParamRole};
 use serde::Serialize;
 use tauri::{Manager, RunEvent, State};
 use uuid::Uuid;
@@ -76,6 +76,14 @@ struct ParamInfo {
     min: f32,
     max: f32,
     value_norm: f32,
+    /// Presentation hint the panel switches on (§3.5): `"scalar"` (a slider),
+    /// `"color"` (a channel of the `group` colour picker) or `"direction"` (the rose).
+    role: &'static str,
+    /// The colour group id, `Some` only for `role == "color"` — several channels
+    /// sharing it are one picker (an effect's two colours use distinct groups).
+    group: Option<String>,
+    /// The colour channel (`"r"`/`"g"`/`"b"`), `Some` only for `role == "color"`.
+    channel: Option<&'static str>,
 }
 
 /// The effect work panel's data for the selected zone (M8 step 5): the zone's active
@@ -99,6 +107,23 @@ fn humanize(name: &str) -> String {
     match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
         None => String::new(),
+    }
+}
+
+/// Flatten a manifest [`ParamRole`] into the serialisable `(role, group, channel)` the
+/// UI switches on. Presentation only — it never changes the value the tree carries.
+fn role_dto(role: &ParamRole) -> (&'static str, Option<String>, Option<&'static str>) {
+    match role {
+        ParamRole::Scalar => ("scalar", None, None),
+        ParamRole::Direction => ("direction", None, None),
+        ParamRole::Color { group, channel } => {
+            let ch = match channel {
+                ColorChannel::R => "r",
+                ColorChannel::G => "g",
+                ColorChannel::B => "b",
+            };
+            ("color", Some((*group).to_string()), Some(ch))
+        }
     }
 }
 
@@ -709,12 +734,18 @@ fn main_effect_panel(state: State<AppState>, zone: Uuid) -> EffectPanelInfo {
     };
     let params = prisma_render::effect_params(&effect_id)
         .into_iter()
-        .map(|p| ParamInfo {
-            value_norm: stored.0.get(&p.name).copied().unwrap_or(p.default_norm),
-            label: humanize(&p.name),
-            name: p.name,
-            min: p.min,
-            max: p.max,
+        .map(|p| {
+            let (role, group, channel) = role_dto(&p.role);
+            ParamInfo {
+                value_norm: stored.0.get(&p.name).copied().unwrap_or(p.default_norm),
+                label: humanize(&p.name),
+                name: p.name,
+                min: p.min,
+                max: p.max,
+                role,
+                group,
+                channel,
+            }
         })
         .collect();
     EffectPanelInfo {
