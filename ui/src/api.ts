@@ -237,6 +237,35 @@ export const setZoneSolo = (zone: string, on: boolean) =>
 export const setZoneBlackout = (zone: string, on: boolean) =>
   invoke<void>("main_set_zone_blackout", { zone, on });
 
+/** Set a zone's strobe: `rate` in Hz (0 = off), `duty` 0..1 (§3.6). */
+export const setZoneStrobe = (zone: string, rate: number, duty: number) =>
+  invoke<void>("main_set_zone_strobe", { zone, rate, duty });
+
+// --- Global operation bar (M8 step 6) ---
+
+/** The master section's live state, for the global bar. */
+export interface MasterInfo {
+  dimmer: number; // 0..1
+  blackout: boolean;
+  strobe_rate: number; // Hz (0 = off)
+  strobe_duty: number; // 0..1
+}
+
+/** Read the master section (dimmer, blackout, global strobe). */
+export const masterState = () => invoke<MasterInfo>("main_master");
+
+/** Set the master dimmer (real 0..1). */
+export const setMasterDimmer = (value: number) =>
+  invoke<void>("main_set_master_dimmer", { value });
+
+/** Toggle the master blackout (kills all output while holding the fader). */
+export const setMasterBlackout = (on: boolean) =>
+  invoke<void>("main_set_master_blackout", { on });
+
+/** Set the global strobe: `rate` Hz (0 = off), `duty` 0..1. */
+export const setMasterStrobe = (rate: number, duty: number) =>
+  invoke<void>("main_set_master_strobe", { rate, duty });
+
 // --- Main operation window (M8 step 4): the scene grid ---
 
 /** One scene-grid cell of a zone: empty (assignable) or an assigned effect, and
