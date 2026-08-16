@@ -18,12 +18,84 @@
 
 use prisma_core::{ClockSnapshot, ParamDescriptor, ParamHandle, ParameterTree};
 
+/// A channel of a compound colour control (option (a) grouping). Three scalar
+/// params tagged with the same colour group and distinct channels form one colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColorChannel {
+    R,
+    G,
+    B,
+}
+
+/// How the UI should present a parameter — its *type* (colour / direction / plain
+/// scalar). This is a **presentation hint only**: the value is still a scalar `f32`
+/// in the Parameter Tree and one `f32` in the uniform buffer, and the render, the
+/// tree and the show model are all untouched. The hint only decides which control the
+/// parameter panel draws (§3.5 / §5.3 — the panel builds itself from the manifest).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParamRole {
+    /// A standalone scalar → a slider. The default for every parameter.
+    Scalar,
+    /// A colour channel belonging to colour `group`. The group id is **explicit** (not
+    /// inferred from the param name) so an effect with two colours — e.g. a gradient's
+    /// start and end — keeps them in separate, non-colliding groups. The UI collects a
+    /// group's channels into one 255-space picker; the operator thinks in 0–255 sRGB
+    /// while the engine keeps the value in linear-light `0..1` (the UI converts, §2.3).
+    Color {
+        group: &'static str,
+        channel: ColorChannel,
+    },
+    /// A discrete 8-way signal direction → the rose (reusing the editor's 8 signal
+    /// directions). No built-in effect declares one yet; the control is wired and
+    /// lights up the day an effect's manifest asks for it.
+    Direction,
+}
+
 /// One parameter an effect exposes. `name` is the trailing path segment (the
 /// parameter is registered at `{prefix}/param/{name}`) and also documents which
-/// uniform field it feeds.
+/// uniform field it feeds. `role` is a presentation hint only (see [`ParamRole`]);
+/// the value model is unchanged regardless of it.
 pub struct ParamSpec {
     pub name: &'static str,
     pub descriptor: ParamDescriptor,
+    pub role: ParamRole,
+}
+
+impl ParamSpec {
+    /// A standalone scalar parameter — the panel draws a slider.
+    pub fn scalar(name: &'static str, descriptor: ParamDescriptor) -> Self {
+        Self {
+            name,
+            descriptor,
+            role: ParamRole::Scalar,
+        }
+    }
+
+    /// A colour channel. `group` names the colour (distinct groups for two colours in
+    /// one effect); `channel` is the component. The panel collects a group's channels
+    /// into one 255-space picker.
+    pub fn color(
+        name: &'static str,
+        descriptor: ParamDescriptor,
+        group: &'static str,
+        channel: ColorChannel,
+    ) -> Self {
+        Self {
+            name,
+            descriptor,
+            role: ParamRole::Color { group, channel },
+        }
+    }
+
+    /// A discrete 8-way signal direction — the panel draws the rose. Provided for the
+    /// first effect that needs it; unused by the built-ins today.
+    pub fn direction(name: &'static str, descriptor: ParamDescriptor) -> Self {
+        Self {
+            name,
+            descriptor,
+            role: ParamRole::Direction,
+        }
+    }
 }
 
 /// Static description of an effect: its id, its parameters (order matters — it is

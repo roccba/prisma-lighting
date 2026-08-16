@@ -283,6 +283,14 @@ export interface ParamInfo {
   min: number;
   max: number;
   value_norm: number; // 0..1
+  /** Presentation type the panel switches on (§3.5): a plain slider, a channel of a
+   *  colour picker, or the direction rose. Value model is scalar regardless. */
+  role: "scalar" | "color" | "direction";
+  /** Colour group id — set only for `role === "color"`; channels sharing it are one
+   *  picker (two colours in an effect use distinct groups). */
+  group: string | null;
+  /** Colour channel — set only for `role === "color"`. */
+  channel: "r" | "g" | "b" | null;
 }
 
 /** The effect work panel for a zone: its active cell's effect + its parameters.
