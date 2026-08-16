@@ -125,6 +125,48 @@ pub fn gradient() -> EffectManifest {
     }
 }
 
+/// One entry in the effect catalogue: an effect the picker can offer, with a
+/// human-readable name and a category to group it under (screenshot 14). The UI
+/// builds the picker from this list, never a hardcoded one (§5.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EffectListing {
+    /// The `effect_id` a [`Source::Shader`](prisma_core::show::Source) stores.
+    pub id: &'static str,
+    /// Display name for the picker.
+    pub name: &'static str,
+    /// Category to group under (M8 ships generators only).
+    pub category: &'static str,
+}
+
+/// The built-in effects available to assign to a scene cell (M8 step 4). These are
+/// the M5 GPU effects; audio-reactive (S2L/M2L) and scripting (MAS) categories come
+/// in later phases (§5.3). **Noise is a known M5 gap** (its shader is unwritten) —
+/// it appears here the day its `fn` and `manifest_by_id` arm exist, no UI change.
+pub fn catalogue() -> Vec<EffectListing> {
+    vec![
+        EffectListing {
+            id: "solid",
+            name: "Color",
+            category: "Generadores",
+        },
+        EffectListing {
+            id: "gradient",
+            name: "Gradient",
+            category: "Generadores",
+        },
+        EffectListing {
+            id: "plasma",
+            name: "Plasma",
+            category: "Generadores",
+        },
+        EffectListing {
+            id: "wave",
+            name: "Wave",
+            category: "Generadores",
+        },
+    ]
+}
+
 /// The manifest for a built-in effect by its `effect_id`, or `None` if unknown.
 ///
 /// This is the catalogue lookup the show model addresses effects through: a
