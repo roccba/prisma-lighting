@@ -410,7 +410,15 @@ body {
 .pr-zonecard-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .pr-zonecard-swatch { width: 10px; height: 10px; flex: 0 0 auto; border-radius: var(--r-sm); border: 1px solid var(--btn-border-dark); }
 .pr-zonecard-name { font-size: var(--fs-base); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pr-zonecard-canvas { width: 100%; height: 64px; display: block; background: var(--bg-canvas); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); }
+/* `translateZ(0)` gives EVERY mini-preview its own compositing layer — each repaints at
+   ~30 Hz and deserves one. The symptom that forced it: the FIRST card's canvas sits in
+   the origin corner of the `overflow-x:auto` zone row (a scroll/clip container), and
+   WebKitGTK re-rasterized that corner on every canvas repaint → a flicker only there.
+   Promoting the canvas decouples its per-frame repaint from the container's compositing,
+   killing the flicker at the root (not a throttle — timing and draw are untouched).
+   Applied to the class, not just the first card, so a future layout change that puts a
+   different canvas at the compositing corner cannot bring it back. */
+.pr-zonecard-canvas { width: 100%; height: 64px; display: block; background: var(--bg-canvas); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); transform: translateZ(0); }
 .pr-zonecard-controls { display: flex; align-items: center; gap: 6px; }
 .pr-zonecard-controls .pr-hslider { flex: 1 1 auto; height: 40px; }
 .pr-zonecard-btns { display: flex; gap: 3px; flex: 0 0 auto; }
