@@ -17,7 +17,9 @@ use prisma_editor::{
     aggregate, load_library, next_free_address, plan, plan_preview, save_library, EditOp,
     FixtureLibrary, FixtureType, PatchDraft, PlacementSpec, PreviewRun, SelectionAggregate,
 };
-use prisma_engine::{Engine, EngineConfig, EngineHandle};
+use prisma_engine::{
+    Cell, Engine, EngineConfig, EngineHandle, Layer, ParamSet, Show, ZoneLiveReadout,
+};
 use prisma_patch::{load_patch, save_patch, Diagnostic, Patch};
 use prisma_preview::sink::WebSocketSink;
 use prisma_render::AdapterPreference;
@@ -25,10 +27,57 @@ use serde::Serialize;
 use tauri::{Manager, RunEvent, State};
 use uuid::Uuid;
 
+/// A zone's identity for the main operation window (M8 step 3), in `Patch::zones`
+/// order — the slot the engine's per-zone live controls are addressed by.
+struct ZoneMeta {
+    id: Uuid,
+    name: String,
+    color: [u8; 3],
+}
+
+/// A zone card's data for the zone row: identity + its current live controls.
+#[derive(Serialize)]
+struct ZoneInfo {
+    id: Uuid,
+    name: String,
+    color: [u8; 3],
+    dimmer: f32,
+    solo: bool,
+    blackout: bool,
+}
+
+/// The M8 test show: the wedding rig with a distinct effect running per zone, so the
+/// zone row's live mini-previews show something worth looking at (not two trivial
+/// zones). The editor writes only fixture→zone *ownership*, so the overlap membership
+/// the render path needs is derived first ([`Patch::fill_zone_members_from_ownership`]).
+fn build_show() -> Show {
+    let mut patch = prisma_editor::samples::wedding_rig();
+    patch.fill_zone_members_from_ownership();
+    let mut show = Show::new("Wedding", patch);
+    // One effect per zone, cycled — enough variety to judge the row at a glance.
+    let catalogue = ["plasma", "wave", "gradient", "solid"];
+    for (i, zs) in show.zones.iter_mut().enumerate() {
+        let effect_id = catalogue[i % catalogue.len()];
+        let mut params = ParamSet::new();
+        if effect_id == "solid" {
+            params.set("r", 0.85);
+            params.set("g", 0.25);
+            params.set("b", 0.5);
+        }
+        zs.grid.push(Cell::single(Layer::shader(effect_id, params)));
+        zs.active = Some(0);
+        zs.live.dimmer = 0.8; // lit, so the mini-previews are visible
+    }
+    show
+}
+
 /// Everything the shell owns for the life of the process.
 struct AppState {
     /// The live output engine (S1). `None` once shut down.
     engine: Mutex<Option<EngineHandle>>,
+    /// The show's zones in slot order (M8 step 3): identity for the zone row, and the
+    /// slot each zone's live controls are addressed by.
+    zones: Vec<ZoneMeta>,
     /// The editor's working patch and its undo history (S2).
     draft: Mutex<PatchDraft>,
     /// The operator's reusable fixture library (S7, §3.2). Feeds the placement dialog
@@ -337,6 +386,78 @@ fn editor_open_from(state: State<AppState>, path: String) -> Result<EditorState,
     Ok(state_of(&draft))
 }
 
+// --- Main operation window (M8 step 3): the zone row ---
+
+/// The slot (index in `Patch::zones`) of a zone id, or `None` if unknown.
+fn zone_slot(zones: &[ZoneMeta], id: Uuid) -> Option<usize> {
+    zones.iter().position(|z| z.id == id)
+}
+
+/// Every zone with its identity and current live controls, for the zone row. The
+/// dimmer/solo/blackout are read live from the engine so the cards reflect state set
+/// by any transport (or the loaded show), not just the UI's own writes.
+#[tauri::command]
+fn main_zones(state: State<AppState>) -> Vec<ZoneInfo> {
+    let guard = state.engine.lock().unwrap();
+    state
+        .zones
+        .iter()
+        .enumerate()
+        .map(|(slot, z)| {
+            let live = guard
+                .as_ref()
+                .map(|e| e.zone_live(slot))
+                .unwrap_or(ZoneLiveReadout {
+                    dimmer: 0.0,
+                    solo: false,
+                    blackout: false,
+                });
+            ZoneInfo {
+                id: z.id,
+                name: z.name.clone(),
+                color: z.color,
+                dimmer: live.dimmer,
+                solo: live.solo,
+                blackout: live.blackout,
+            }
+        })
+        .collect()
+}
+
+/// Set a zone's dimmer (the zone-row fader) — a live control that changes the output,
+/// not the UI's selection. `selected ≠ active`: this is the "active" side.
+#[tauri::command]
+fn main_set_zone_dimmer(state: State<AppState>, zone: Uuid, value: f32) {
+    let Some(slot) = zone_slot(&state.zones, zone) else {
+        return;
+    };
+    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        engine.set_zone_dimmer(slot, value);
+    }
+}
+
+/// Toggle a zone's solo (M8-SPEC §3.1).
+#[tauri::command]
+fn main_set_zone_solo(state: State<AppState>, zone: Uuid, on: bool) {
+    let Some(slot) = zone_slot(&state.zones, zone) else {
+        return;
+    };
+    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        engine.set_zone_solo(slot, on);
+    }
+}
+
+/// Toggle a zone's blackout/mute (M8-SPEC §3.1).
+#[tauri::command]
+fn main_set_zone_blackout(state: State<AppState>, zone: Uuid, on: bool) {
+    let Some(slot) = zone_slot(&state.zones, zone) else {
+        return;
+    };
+    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        engine.set_zone_blackout(slot, on);
+    }
+}
+
 #[tauri::command]
 fn editor_undo(state: State<AppState>) -> EditorState {
     let mut draft = state.draft.lock().unwrap();
@@ -374,31 +495,50 @@ fn main() {
             editor_open_from,
             editor_undo,
             editor_redo,
+            main_zones,
+            main_set_zone_dimmer,
+            main_set_zone_solo,
+            main_set_zone_blackout,
         ])
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // The editor opens on the sample wedding rig — a realistic layout
-            // (four zones, varied tube lengths, two diagonal bar runs).
-            let patch = prisma_editor::samples::wedding_rig();
+            // M8: the app boots into the main operation window running a real Show (the
+            // wedding rig with a distinct effect per zone). This is where the engine
+            // stops rendering IdleContent and runs per-zone content — the zone row's
+            // live mini-previews light up. The editor draft below stays for the patch
+            // editor (a secondary window in a later step).
+            let show = build_show();
+            let zones: Vec<ZoneMeta> = show
+                .patch
+                .zones
+                .iter()
+                .map(|z| ZoneMeta {
+                    id: z.id,
+                    name: z.name.clone(),
+                    color: z.display_color,
+                })
+                .collect();
 
-            // Start the live engine on the same patch. Loopback Art-Net (not
-            // broadcast); prefer the real GPU, fall back to software so the window
-            // still opens without a configured Vulkan driver. Each attempt binds its own
-            // preview WebSocket (a failed attempt frees its port before the next binds).
+            // Loopback Art-Net (not broadcast); prefer the real GPU, fall back to
+            // software so the window still opens without a configured Vulkan driver.
+            // Each attempt binds its own preview WebSocket (a failed attempt frees its
+            // port before the next binds).
             let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6454);
             let (config_hp, port_hp) = preview_config(AdapterPreference::HighPerformance, target);
-            let (engine, preview_port) = match Engine::start(patch.clone(), config_hp) {
+            let (engine, preview_port) = match Engine::start_show(show.clone(), config_hp) {
                 Ok(engine) => (engine, port_hp),
                 Err(_) => {
                     let (config_sw, port_sw) = preview_config(AdapterPreference::Software, target);
-                    (Engine::start(patch.clone(), config_sw)?, port_sw)
+                    (Engine::start_show(show, config_sw)?, port_sw)
                 }
             };
 
-            // The editor is open for the life of the app (M7: app == editor), so freeze
-            // the show content (§7): effects hold, output stays alive for Highlight. In
-            // M8 this brackets the editor *window*'s lifetime instead.
-            engine.set_frozen(true);
+            // The show runs LIVE (not frozen) — the main window operates content. The
+            // editor's freeze bracket returns with the editor window in a later step.
+
+            // The editor draft opens on the same rig (its own copy; the editor works in
+            // ownership terms and never needs the derived overlap membership).
+            let patch = prisma_editor::samples::wedding_rig();
 
             // Load the operator's fixture library from the per-user app-config dir
             // (§3.2). First run: seed a few generic types and write the file, so the
@@ -430,6 +570,7 @@ fn main() {
 
             app.manage(AppState {
                 engine: Mutex::new(Some(engine)),
+                zones,
                 draft: Mutex::new(PatchDraft::new(patch)),
                 library: Mutex::new(library),
                 library_path,

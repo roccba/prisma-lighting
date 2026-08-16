@@ -209,3 +209,30 @@ export const saveTo = (path: string) => invoke<EditorState>("editor_save_to", { 
 
 /** Open a `.prismap` from `path` into the editor, migrating an older schema (§9). */
 export const openFrom = (path: string) => invoke<EditorState>("editor_open_from", { path });
+
+// --- Main operation window (M8 step 3): the zone row ---
+
+/** A zone card's data: identity + its current live controls (read from the engine). */
+export interface ZoneInfo {
+  id: string;
+  name: string;
+  color: Rgb;
+  dimmer: number; // 0..1
+  solo: boolean;
+  blackout: boolean;
+}
+
+/** Every zone of the running show, in slot order, with live controls. */
+export const mainZones = () => invoke<ZoneInfo[]>("main_zones");
+
+/** Set a zone's dimmer (the zone-row fader) — changes the output, not the selection. */
+export const setZoneDimmer = (zone: string, value: number) =>
+  invoke<void>("main_set_zone_dimmer", { zone, value });
+
+/** Toggle a zone's solo (§3.1). */
+export const setZoneSolo = (zone: string, on: boolean) =>
+  invoke<void>("main_set_zone_solo", { zone, on });
+
+/** Toggle a zone's blackout/mute (§3.1). */
+export const setZoneBlackout = (zone: string, on: boolean) =>
+  invoke<void>("main_set_zone_blackout", { zone, on });

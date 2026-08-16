@@ -38,7 +38,11 @@ pub mod zone_content;
 
 pub use config::EngineConfig;
 pub use content::IdleContent;
-pub use engine::{Engine, EngineError, EngineHandle, ShutdownReport};
+pub use engine::{Engine, EngineError, EngineHandle, ShutdownReport, ZoneLiveReadout};
+
+// The Show model the assembly consumes, re-exported so the app (which sits on this
+// crate) can build a `Show` without depending on `prisma-core` directly.
+pub use prisma_core::show::{Cell, Layer, MasterState, ParamSet, Show, Source, ZoneLive, ZoneShow};
 pub use zone_content::{
     build_zone_effects, seed_live_from_show, ZoneCommand, ZoneCommandSender, ZoneCompositor,
 };

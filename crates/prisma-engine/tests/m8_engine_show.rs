@@ -141,6 +141,24 @@ fn engine_runs_a_show_and_lights_the_wire() {
         );
     }
 
+    // The zone-row fader (M8 step 3) is a live control: halving the zone dimmer
+    // halves the wire (0.5 content x 0.5 dimmer -> ~64), applied at the output stage.
+    assert_eq!(engine.zone_count(), 1);
+    engine.set_zone_dimmer(0, 0.5);
+    wait_for("the zone fader reaches the wire", || {
+        let snap = dev_sink.snapshot();
+        match snap.universes.get(&1) {
+            Some(u) => !u.data.is_empty() && (56..72).contains(&u.data[0]),
+            None => false,
+        }
+    });
+    let live = engine.zone_live(0);
+    assert!(
+        (live.dimmer - 0.5).abs() < 0.01,
+        "zone_live reflects the fader, got {}",
+        live.dimmer
+    );
+
     let report = engine.shutdown();
     assert!(
         report.render.frames_published > 0,

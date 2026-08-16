@@ -373,3 +373,47 @@ body {
 .pr-listrow.is-sel { background: var(--accent); color: #fff; }
 .pr-listrow .meta { color: var(--text-dim); font-size: var(--fs-tiny); }
 .pr-listrow.is-sel .meta { color: rgba(255,255,255,.7); }
+
+/* ============================================================
+   M8 — Main operation window (M8-SPEC §3)
+   The live-operation surface: the fixed layout skeleton, the zone
+   row and its cards. Composed on the primitives above (.pr-btn,
+   .pr-hslider, .pr-menubar); every colour is a token — retheming
+   overrides :root only (DESIGN.md §6, per-surface layout).
+   ============================================================ */
+
+/* --- Window shell + fixed layout --- */
+.pr-mainwin { height: 100vh; display: flex; flex-direction: column; background: var(--bg-app); color: var(--text); font-family: var(--font-ui); font-size: var(--fs-base); overflow: hidden; }
+.pr-mainwin-body { flex: 1 1 auto; display: flex; flex-direction: column; gap: 6px; padding: 6px; min-height: 0; overflow: hidden; }
+.pr-mainwin-mid { flex: 1 1 auto; display: flex; gap: 6px; min-height: 0; }
+
+/* A region is a bordered surface with a title strip — the dock unit for the future
+   dashboard (§7). Raised: light-ish grey face over the app black, 1px dark edge. */
+.pr-region { background: var(--bg-panel); border: 1px solid var(--btn-border-dark); border-radius: var(--r-md); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.pr-region-zonerow { flex: 0 0 auto; }
+.pr-region-grid, .pr-region-preview { flex: 1 1 0; }
+.pr-region-params { flex: 0 0 auto; height: 108px; }
+.pr-region-global { flex: 0 0 auto; height: 46px; }
+.pr-region-title { font-size: var(--fs-small); color: var(--text-label); padding: 5px 8px; border-bottom: 1px solid var(--divider); text-transform: uppercase; letter-spacing: .04em; flex: 0 0 auto; }
+
+/* Placeholder regions (filled in steps 4–6): centred dim caption, so the operator sees
+   where each panel will live without it pretending to be functional yet. */
+.pr-placeholder .pr-placeholder-body { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; color: var(--text-dim); font-size: var(--fs-small); }
+
+/* --- Zone row --- */
+.pr-zonerow { display: flex; gap: 6px; padding: 8px; overflow-x: auto; align-items: stretch; }
+.pr-zonerow-empty { color: var(--text-dim); font-size: var(--fs-small); padding: 12px; }
+
+/* --- Zone card --- */
+.pr-zonecard { flex: 0 0 auto; width: 152px; background: var(--bg-panel-2); border: 1px solid var(--btn-border); border-top-color: #3a3a3a; border-bottom-color: var(--btn-border-dark); border-radius: var(--r-md); display: flex; flex-direction: column; gap: 6px; padding: 6px; cursor: pointer; user-select: none; }
+.pr-zonecard.is-selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset, 0 0 6px rgba(0,122,204,.35); }
+.pr-zonecard-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pr-zonecard-swatch { width: 10px; height: 10px; flex: 0 0 auto; border-radius: var(--r-sm); border: 1px solid var(--btn-border-dark); }
+.pr-zonecard-name { font-size: var(--fs-base); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-zonecard-canvas { width: 100%; height: 64px; display: block; background: var(--bg-canvas); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); }
+.pr-zonecard-controls { display: flex; align-items: center; gap: 6px; }
+.pr-zonecard-controls .pr-hslider { flex: 1 1 auto; height: 40px; }
+.pr-zonecard-btns { display: flex; gap: 3px; flex: 0 0 auto; }
+.pr-zonecard-btns .pr-btn { width: 22px; height: 22px; padding: 0; font-size: var(--fs-small); }
+
+.pr-mainwin-error { flex: 0 0 auto; color: var(--accent-text); background: var(--bg-panel); border-top: 1px solid var(--btn-border-dark); padding: 6px 10px; font-size: var(--fs-small); font-family: var(--font-mono); }

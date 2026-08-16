@@ -56,6 +56,39 @@ impl Patch {
         self.fixtures.iter().find(|f| f.id == id)
     }
 
+    /// Populate each zone's overlap [`members`](crate::zone::Zone::members) from
+    /// fixture→zone **ownership** ([`Fixture::zone`](crate::fixture::Fixture::zone)):
+    /// every pixel of every fixture a zone owns becomes a member.
+    ///
+    /// This bridges the two membership models (M7 §2.2). The editor writes only
+    /// *ownership* (one fixture, one zone) and leaves `Zone::members` (the engine's
+    /// many-to-many *overlap* membership) empty; but the render path — zone coverage
+    /// and the overlap counter — consumes `Zone::members`. A patch destined to run as
+    /// show content therefore needs this bridge first, or every zone covers nothing
+    /// and renders black.
+    ///
+    /// **Only zones with empty `members` are filled**, so any zone that already
+    /// carries explicit overlap membership (a future global strobe/flash zone that
+    /// owns no fixtures) is left untouched. Idempotent on an already-filled patch.
+    pub fn fill_zone_members_from_ownership(&mut self) {
+        for zone in &mut self.zones {
+            if !zone.members.is_empty() {
+                continue;
+            }
+            zone.members = self
+                .fixtures
+                .iter()
+                .filter(|f| f.zone == zone.id)
+                .flat_map(|f| {
+                    f.pixels.iter().map(|p| crate::zone::PixelRef {
+                        fixture: f.id,
+                        pixel: p.index,
+                    })
+                })
+                .collect();
+        }
+    }
+
     fn validate_pixel_indices(&self) -> Result<(), PatchError> {
         for fixture in &self.fixtures {
             for (position, pixel) in fixture.pixels.iter().enumerate() {

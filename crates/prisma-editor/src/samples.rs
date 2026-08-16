@@ -263,6 +263,37 @@ mod tests {
     }
 
     #[test]
+    fn filling_members_from_ownership_makes_every_zone_cover_its_fixtures() {
+        // The editor leaves Zone::members empty (it writes ownership only, §2.2), so a
+        // freshly-loaded rig would render black. The ownership→members bridge is what
+        // lets a show over this rig actually light up.
+        let mut patch = wedding_rig();
+        assert!(
+            patch.zones.iter().all(|z| z.members.is_empty()),
+            "the editor rig starts with no overlap membership"
+        );
+        patch.fill_zone_members_from_ownership();
+
+        // Every zone now covers exactly the pixels of the fixtures it owns.
+        for zone in &patch.zones {
+            let owned_pixels: usize = patch
+                .fixtures
+                .iter()
+                .filter(|f| f.zone == zone.id)
+                .map(|f| f.pixels.len())
+                .sum();
+            assert_eq!(
+                zone.members.len(),
+                owned_pixels,
+                "zone {} covers its owned pixels",
+                zone.name
+            );
+            assert!(owned_pixels > 0, "every wedding-rig zone owns fixtures");
+        }
+        patch.compile().expect("still valid after filling members");
+    }
+
+    #[test]
     fn wedding_rig_has_no_wire_faults() {
         // The editor opens on this rig (S6): it must report no DMX wire faults — no
         // address collisions, no out-of-range channels — so the first thing the

@@ -11,6 +11,7 @@ use half::f16;
 use uuid::Uuid;
 
 use prisma_core::show::Show;
+use prisma_core::source::{priority, SourceId};
 use prisma_core::time::SystemClock;
 use prisma_core::tree::ParameterTree;
 use prisma_core::zone::ZoneStates;
@@ -161,6 +162,21 @@ pub struct EngineHandle {
     /// per-zone effect swaps through this; `None` under `IdleContent`.
     zone_commands: Option<ZoneCommandSender>,
     inner: Option<Running>,
+}
+
+/// A snapshot of a zone's live controls, for the UI to reflect state it did not set
+/// itself (another transport, or the show's loaded values). Read wait-free.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ZoneLiveReadout {
+    pub dimmer: f32,
+    pub solo: bool,
+    pub blackout: bool,
+}
+
+/// The source the main window's live controls (faders, solo, mute) write as — UI
+/// priority, so a physical fader can take over per the arbitration rules (§4.5).
+fn ui_control_source() -> SourceId {
+    SourceId::new(priority::UI, 1)
 }
 
 /// Namespace for engine bring-up.
@@ -446,6 +462,60 @@ impl EngineHandle {
     /// stale pairings.
     pub fn generation(&self) -> LayoutGeneration {
         self.generation
+    }
+
+    /// Number of zones (the `Patch::zones` / `LiveParams` slot count). Slots address
+    /// the per-zone live controls below.
+    pub fn zone_count(&self) -> usize {
+        self.live.zone_count()
+    }
+
+    /// Set a zone's dimmer (the zone-row fader), `slot` in `Patch::zones` order.
+    /// Written live through the Parameter Tree; the render loop and the output stage
+    /// both pick it up (the output stage on the next frame, §1.5). Out-of-range slots
+    /// are ignored.
+    pub fn set_zone_dimmer(&self, slot: usize, value: f32) {
+        if slot < self.live.zone_count() {
+            self.tree
+                .write_real(&self.live.zone(slot).dimmer, value, ui_control_source());
+        }
+    }
+
+    /// Toggle a zone's solo (M8-SPEC §3.1). Solo elsewhere silences other zones'
+    /// *output* but not their `is_active` state (the preview/pads keep them, §4.3).
+    pub fn set_zone_solo(&self, slot: usize, on: bool) {
+        if slot < self.live.zone_count() {
+            let v = if on { 1.0 } else { 0.0 };
+            self.tree
+                .write_real(&self.live.zone(slot).solo, v, ui_control_source());
+        }
+    }
+
+    /// Toggle a zone's blackout/mute (M8-SPEC §3.1).
+    pub fn set_zone_blackout(&self, slot: usize, on: bool) {
+        if slot < self.live.zone_count() {
+            let v = if on { 1.0 } else { 0.0 };
+            self.tree
+                .write_real(&self.live.zone(slot).blackout, v, ui_control_source());
+        }
+    }
+
+    /// The current live controls for a zone, so the UI can show state it did not set
+    /// (the show's loaded values, or another transport). Out-of-range → all-default.
+    pub fn zone_live(&self, slot: usize) -> ZoneLiveReadout {
+        if slot >= self.live.zone_count() {
+            return ZoneLiveReadout {
+                dimmer: 0.0,
+                solo: false,
+                blackout: false,
+            };
+        }
+        let z = self.live.zone(slot);
+        ZoneLiveReadout {
+            dimmer: z.dimmer.read_real().unwrap_or(0.0),
+            solo: z.solo.read_real().unwrap_or(0.0) > 0.5,
+            blackout: z.blackout.read_real().unwrap_or(0.0) > 0.5,
+        }
     }
 
     /// The producer for per-zone effect swaps (M8-PARTA §3), present only when a show

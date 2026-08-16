@@ -2499,6 +2499,10 @@ name = "prisma-core"
 version = "0.1.0"
 dependencies = [
  "parking_lot",
+ "prisma-patch",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -2516,6 +2520,7 @@ dependencies = [
 name = "prisma-engine"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "half",
  "prisma-core",
  "prisma-output",
