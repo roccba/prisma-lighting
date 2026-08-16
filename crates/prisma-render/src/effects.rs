@@ -167,6 +167,38 @@ pub fn catalogue() -> Vec<EffectListing> {
     ]
 }
 
+/// One parameter of an effect, flattened for the UI's manifest-driven parameter
+/// panel (M8 step 5, §3.5): its key, real range, and normalized default. The panel
+/// builds itself from this list — never a per-effect hardcoded UI (§5.3). `name` is
+/// the trailing path segment the value is addressed by (`/zone/{id}/layer/0/param/
+/// {name}`); the real range lets the panel show a value the operator can read.
+#[derive(Debug, Clone)]
+pub struct EffectParam {
+    pub name: String,
+    pub min: f32,
+    pub max: f32,
+    pub default_norm: f32,
+}
+
+/// The parameters an effect exposes, in manifest (= uniform) order, for `effect_id`;
+/// an empty vec if the effect is unknown. This is the manifest surface the parameter
+/// panel walks so it never hardcodes an effect's controls (§5.3).
+pub fn effect_params(id: &str) -> Vec<EffectParam> {
+    manifest_by_id(id)
+        .map(|m| {
+            m.params
+                .into_iter()
+                .map(|p| EffectParam {
+                    name: p.name.to_string(),
+                    min: p.descriptor.range.min,
+                    max: p.descriptor.range.max,
+                    default_norm: p.descriptor.default_norm,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The manifest for a built-in effect by its `effect_id`, or `None` if unknown.
 ///
 /// This is the catalogue lookup the show model addresses effects through: a

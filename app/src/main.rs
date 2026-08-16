@@ -65,6 +65,43 @@ struct EffectListingInfo {
     category: String,
 }
 
+/// One row of the effect parameter panel (M8 step 5, §3.5), built from the effect's
+/// manifest — never a hardcoded per-effect control (§5.3). `value_norm` is the cell's
+/// current normalized value (its stored override, else the manifest default); `min`/
+/// `max` are the real range so the panel can show a value the operator reads.
+#[derive(Serialize)]
+struct ParamInfo {
+    name: String,
+    label: String,
+    min: f32,
+    max: f32,
+    value_norm: f32,
+}
+
+/// The effect work panel's data for the selected zone (M8 step 5): the zone's active
+/// cell effect and its manifest-driven parameters. `effect_id` is `None` when the zone
+/// has no running cell (empty selection) — the panel then shows an empty state.
+#[derive(Serialize)]
+struct EffectPanelInfo {
+    zone_id: Uuid,
+    cell_index: Option<usize>,
+    effect_id: Option<String>,
+    effect_name: Option<String>,
+    params: Vec<ParamInfo>,
+}
+
+/// A display label from a manifest parameter key: capitalise the first letter, leaving
+/// the rest as-is. Generic on purpose — the panel stays manifest-driven, with no
+/// per-effect label table (§5.3). Real i18n resolution of the manifest's `label_key`
+/// is deferred (the UI has no locale resolver yet); this is a legible stand-in.
+fn humanize(name: &str) -> String {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
 /// How many assignable cells each zone's grid seeds with (8 columns × 2 rows). The
 /// first cell holds the zone's initial effect; the rest are empty and assignable.
 const GRID_CELLS: usize = 16;
@@ -640,6 +677,77 @@ fn main_clear_cell(state: State<AppState>, zone: Uuid, index: usize) -> Vec<Cell
     dto
 }
 
+// --- Main operation window (M8 step 5): the effect parameter panel ---
+
+/// The effect work panel for a zone (§3.5): its active cell's effect and the effect's
+/// manifest-driven parameters, each merged with the cell's stored value (else the
+/// manifest default). Empty (`effect_id: None`) when the zone has no running cell.
+#[tauri::command]
+fn main_effect_panel(state: State<AppState>, zone: Uuid) -> EffectPanelInfo {
+    let show = state.show.lock().unwrap();
+    let empty = |cell_index| EffectPanelInfo {
+        zone_id: zone,
+        cell_index,
+        effect_id: None,
+        effect_name: None,
+        params: Vec::new(),
+    };
+    let Some(zs) = show.zone(zone) else {
+        return empty(None);
+    };
+    // The active cell's single layer (M8: one effect per cell). An active-but-empty
+    // cell (cleared) has no layer, so the panel shows its empty state.
+    let effect = zs
+        .active
+        .and_then(|i| zs.grid.get(i))
+        .and_then(|c| c.layers.first())
+        .map(|l| match &l.source {
+            Source::Shader { effect_id, params } => (effect_id.clone(), params),
+        });
+    let Some((effect_id, stored)) = effect else {
+        return empty(zs.active);
+    };
+    let params = prisma_render::effect_params(&effect_id)
+        .into_iter()
+        .map(|p| ParamInfo {
+            value_norm: stored.0.get(&p.name).copied().unwrap_or(p.default_norm),
+            label: humanize(&p.name),
+            name: p.name,
+            min: p.min,
+            max: p.max,
+        })
+        .collect();
+    EffectPanelInfo {
+        zone_id: zone,
+        cell_index: zs.active,
+        effect_name: effect_display_name(&effect_id),
+        effect_id: Some(effect_id),
+        params,
+    }
+}
+
+/// Set one parameter of a zone's active effect (§3.5). Two writes, both needed:
+/// persist the normalized value into the show (source of truth for save and for a
+/// later re-trigger), and drive it **live** on the running effect through the engine
+/// (so the preview and wire follow at once). `value` is normalized `0..=1`.
+#[tauri::command]
+fn main_set_param(state: State<AppState>, zone: Uuid, name: String, value: f32) {
+    {
+        let mut show = state.show.lock().unwrap();
+        if let Some(zs) = show.zones.iter_mut().find(|z| z.zone_id == zone) {
+            if let Some(cell) = zs.active.and_then(|i| zs.grid.get_mut(i)) {
+                if let Some(layer) = cell.layers.first_mut() {
+                    let Source::Shader { params, .. } = &mut layer.source;
+                    params.set(name.as_str(), value);
+                }
+            }
+        }
+    }
+    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        engine.set_zone_param(zone, &name, value);
+    }
+}
+
 #[tauri::command]
 fn editor_undo(state: State<AppState>) -> EditorState {
     let mut draft = state.draft.lock().unwrap();
@@ -686,6 +794,8 @@ fn main() {
             main_assign_cell,
             main_trigger_cell,
             main_clear_cell,
+            main_effect_panel,
+            main_set_param,
         ])
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {

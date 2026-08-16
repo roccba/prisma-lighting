@@ -272,3 +272,33 @@ export const triggerCell = (zone: string, index: number) =>
 /** Empty a cell (and stop the zone if it was the running cell). */
 export const clearCell = (zone: string, index: number) =>
   invoke<CellInfo[]>("main_clear_cell", { zone, index });
+
+// --- Main operation window (M8 step 5): the effect parameter panel ---
+
+/** One manifest-driven parameter row (§3.5): its key, display label, real range and
+ *  current normalized value. The panel builds itself from these — never hardcoded. */
+export interface ParamInfo {
+  name: string;
+  label: string;
+  min: number;
+  max: number;
+  value_norm: number; // 0..1
+}
+
+/** The effect work panel for a zone: its active cell's effect + its parameters.
+ *  `effect_id` is null when the zone has no running cell (empty state). */
+export interface EffectPanelInfo {
+  zone_id: string;
+  cell_index: number | null;
+  effect_id: string | null;
+  effect_name: string | null;
+  params: ParamInfo[];
+}
+
+/** The active effect and its manifest-driven parameters for a zone (§3.5). */
+export const effectPanel = (zone: string) =>
+  invoke<EffectPanelInfo>("main_effect_panel", { zone });
+
+/** Set one parameter of a zone's active effect (normalized 0..1). Drives it live. */
+export const setParam = (zone: string, name: string, value: number) =>
+  invoke<void>("main_set_param", { zone, name, value });

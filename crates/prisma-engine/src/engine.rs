@@ -565,6 +565,18 @@ impl EngineHandle {
         sender.set_zone_effect(slot, Some(effect))
     }
 
+    /// Write one live parameter of a zone's active effect (M8 step 5 — the parameter
+    /// panel). Targets `/zone/{zone_id}/layer/0/param/{name}` with a **normalized**
+    /// `0..=1` value, so the running [`EffectInstance`] picks it up on its next
+    /// wait-free read (§4.5) — the preview and the wire follow immediately, no
+    /// re-trigger. A no-op if that path is not registered (the zone has no active
+    /// effect, so nothing to drive). This is the `active` side of `selected ≠ active`,
+    /// exactly like the zone faders.
+    pub fn set_zone_param(&self, zone_id: Uuid, name: &str, value_norm: f32) {
+        let path = format!("/zone/{zone_id}/layer/0/param/{name}");
+        self.tree.write_path(&path, value_norm, ui_control_source());
+    }
+
     /// Clear a zone's active effect (firing an empty cell / stopping the zone). The
     /// zone renders nothing from the next frame. Returns `false` if no show is running.
     pub fn clear_zone_effect(&self, slot: usize) -> bool {

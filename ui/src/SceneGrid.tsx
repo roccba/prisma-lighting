@@ -11,9 +11,12 @@ import { EffectPicker } from "./EffectPicker";
 
 interface SceneGridProps {
   zoneId: string;
+  /** Called after the zone's active cell changes (fire / assign / clear), so the
+   *  effect parameter panel can re-fetch the now-active effect. */
+  onActiveChange?: () => void;
 }
 
-export function SceneGrid({ zoneId }: SceneGridProps) {
+export function SceneGrid({ zoneId, onActiveChange }: SceneGridProps) {
   const [cells, setCells] = useState<CellInfo[]>([]);
   const [pickerFor, setPickerFor] = useState<number | null>(null);
 
@@ -27,7 +30,10 @@ export function SceneGrid({ zoneId }: SceneGridProps) {
   const onCellClick = (cell: CellInfo) => {
     if (cell.effect_id) {
       triggerCell(zoneId, cell.index)
-        .then(setCells)
+        .then((c) => {
+          setCells(c);
+          onActiveChange?.();
+        })
         .catch(() => {});
     } else {
       setPickerFor(cell.index);
@@ -39,14 +45,20 @@ export function SceneGrid({ zoneId }: SceneGridProps) {
     setPickerFor(null);
     if (idx === null) return;
     assignCell(zoneId, idx, effectId)
-      .then(setCells)
+      .then((c) => {
+        setCells(c);
+        onActiveChange?.();
+      })
       .catch(() => {});
   };
 
   const onClear = (e: React.PointerEvent, cell: CellInfo) => {
     e.stopPropagation();
     clearCell(zoneId, cell.index)
-      .then(setCells)
+      .then((c) => {
+        setCells(c);
+        onActiveChange?.();
+      })
       .catch(() => {});
   };
 
