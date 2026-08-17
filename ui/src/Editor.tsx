@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  addZone,
   applyToLive,
   getState,
   highlight as highlightCmd,
   openFrom,
+  removeZone,
   removeFixtures,
   saveTo,
   selectionAggregate,
@@ -29,7 +30,11 @@ const PRISMAP_FILTERS = [{ name: "Prisma map", extensions: ["prismap"] }];
 
 export default function Editor() {
   const [editor, setEditor] = useState<EditorState | null>(null);
+  // `error` is FATAL — it replaces the whole editor (only the initial load uses it).
+  // `notice` is a recoverable, dismissible message (a rejected edit, a failed apply):
+  // it must NOT blank the editor, or a "zone not empty" rejection would look like a crash.
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const [aggregate, setAggregate] = useState<SelectionAggregate | null>(null);
   const [activeZone, setActiveZone] = useState<string>("");
@@ -39,10 +44,6 @@ export default function Editor() {
   const [matrixOpen, setMatrixOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [currentPath, setCurrentPath] = useState<string | null>(null);
-  const [unsavedOpen, setUnsavedOpen] = useState(false);
-
-  const dirtyRef = useRef(false);
-  const closingRef = useRef(false);
 
   useEffect(() => {
     getState()
@@ -54,7 +55,6 @@ export default function Editor() {
   }, []);
 
   const patch = editor?.patch ?? null;
-  useEffect(() => { dirtyRef.current = editor?.dirty ?? false; }, [editor]);
 
   const fixtureIds = useMemo(() => new Set((patch?.fixtures ?? []).map((f) => f.id)), [patch]);
   useEffect(() => {
@@ -85,7 +85,7 @@ export default function Editor() {
         setCurrentPath(path);
         setSelection(new Set());
       }
-    } catch (e) { setError(String(e)); }
+    } catch (e) { setNotice(String(e)); }
   };
 
   /** Save to the current file, or prompt for one. Returns whether it was saved. */
@@ -100,14 +100,14 @@ export default function Editor() {
       }
       setEditor(await saveTo(path));
       return true;
-    } catch (e) { setError(String(e)); return false; }
+    } catch (e) { setNotice(String(e)); return false; }
   };
 
   const doSaveAs = async () => {
     try {
       const picked = await saveDialog({ filters: PRISMAP_FILTERS, defaultPath: currentPath ?? "untitled.prismap" });
       if (picked) { setEditor(await saveTo(picked)); setCurrentPath(picked); }
-    } catch (e) { setError(String(e)); }
+    } catch (e) { setNotice(String(e)); }
   };
 
   // --- Disable browser zoom app-wide (§5.7) ---
@@ -131,25 +131,20 @@ export default function Editor() {
     };
   }, []);
 
-  // --- Unsaved-changes guard on window close ---
+  // Auto-apply edits to the running show (the manual "Apply to live" button is gone,
+  // §7 revised flow). Debounced so a burst of edits triggers one recompile after they
+  // settle; the tree's live values are preserved across it (`apply_editor_draft`), so
+  // the operator's master/colour/dimmers survive. Closing the window applies the final
+  // state too, so nothing is lost if a debounce is still pending. There is deliberately
+  // NO unsaved-changes guard: closing just closes — the edits already live in the show;
+  // saving a `.prismap` is an optional export, not a condition to close.
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    getCurrentWindow()
-      .onCloseRequested((e) => {
-        if (dirtyRef.current && !closingRef.current) {
-          e.preventDefault();
-          setUnsavedOpen(true);
-        }
-      })
-      .then((u) => { unlisten = u; })
-      .catch(() => {});
-    return () => unlisten?.();
-  }, []);
-
-  const forceClose = async () => {
-    closingRef.current = true;
-    await getCurrentWindow().destroy();
-  };
+    if (!editor?.dirty) return;
+    const t = setTimeout(() => {
+      applyToLive().catch((e) => setNotice(String(e)));
+    }, 400);
+    return () => clearTimeout(t);
+  }, [editor]);
 
   // --- Keyboard shortcuts ---
   useEffect(() => {
@@ -191,10 +186,38 @@ export default function Editor() {
         </span>
       </header>
 
+      {notice && (
+        <div className="editor-notice">
+          <span>{notice}</span>
+          <button className="btn" onClick={() => setNotice(null)} title="Descartar">
+            ×
+          </button>
+        </div>
+      )}
+
       <Toolbar
         patch={patch}
         activeZone={activeZone}
         onActiveZone={setActiveZone}
+        onAddZone={async () => {
+          try {
+            const s = await addZone("");
+            setEditor(s);
+            const added = s.patch.zones[s.patch.zones.length - 1];
+            if (added) setActiveZone(added.id);
+          } catch (e) {
+            setNotice(String(e));
+          }
+        }}
+        onRemoveZone={async (id) => {
+          try {
+            const s = await removeZone(id);
+            setEditor(s);
+            if (activeZone === id) setActiveZone(s.patch.zones[0]?.id ?? "");
+          } catch (e) {
+            setNotice(String(e));
+          }
+        }}
         viewMode={viewMode}
         onViewMode={setViewMode}
         onOpen={doOpen}
@@ -210,7 +233,6 @@ export default function Editor() {
         canRedo={editor.can_redo}
         highlightMode={highlightMode}
         onHighlightMode={setHighlightMode}
-        onApply={async () => { try { await applyToLive(); } catch (e) { setError(String(e)); } }}
       />
 
       <WireFaults
@@ -258,37 +280,6 @@ export default function Editor() {
       )}
 
       {libraryOpen && <LibraryManager onClose={() => setLibraryOpen(false)} />}
-
-      {unsavedOpen && (
-        <div className="modal-backdrop">
-          <div className="modal">
-            <div className="modal-head">Unsaved changes</div>
-            <div className="modal-message">
-              You have unsaved changes to <strong>{fileName}</strong>. Save before closing?
-            </div>
-            <div className="modal-foot">
-              <button className="btn" onClick={() => setUnsavedOpen(false)}>Cancel</button>
-              <div className="spacer" />
-              <button
-                className="btn"
-                onClick={async () => { setUnsavedOpen(false); await forceClose(); }}
-              >
-                Discard
-              </button>
-              <button
-                className="btn primary"
-                onClick={async () => {
-                  const saved = await doSave();
-                  setUnsavedOpen(false);
-                  if (saved) await forceClose();
-                }}
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

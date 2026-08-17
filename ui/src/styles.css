@@ -44,6 +44,21 @@ html, body, #root {
 .topbar .title { font-weight: 600; }
 .topbar .sub { color: var(--muted); font-size: 12px; }
 
+/* A recoverable, dismissible notice (a rejected edit, a failed apply) — never blanks
+   the editor the way the fatal `.fatal` screen does. */
+.editor-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 14px;
+  background: #3a2a10;
+  border-bottom: 1px solid #5a3f18;
+  color: #f0d9a8;
+  font-size: 12px;
+}
+.editor-notice button { flex: 0 0 auto; padding: 0 8px; }
+
 /* Toolbar — zone selector (§6) + view modes (§5.3) */
 .toolbar {
   display: flex;

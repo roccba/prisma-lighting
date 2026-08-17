@@ -94,7 +94,9 @@ export function PreviewStreamProvider({ children }: { children: ReactNode }) {
     const scheduleReconnect = () => {
       if (closed) return;
       window.clearTimeout(reconnect);
-      reconnect = window.setTimeout(connect, 1000);
+      // Short delay: a hot patch edit recompiles the engine and rebinds the preview on a
+      // fresh port, so the socket drops and must reconnect quickly to keep the gap brief.
+      reconnect = window.setTimeout(connect, 300);
     };
 
     connect();

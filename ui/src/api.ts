@@ -190,6 +190,12 @@ export const setZoneMappingSize = (zone: string, size: [number, number]) =>
 export const removeFixtures = (ids: string[]) =>
   invoke<EditorState>("editor_remove_fixtures", { ids });
 
+/** Add a new (empty) zone to the patch (§7). Returns the new editor state. */
+export const addZone = (name: string) => invoke<EditorState>("editor_add_zone", { name });
+
+/** Remove a zone (§7). Rejected (throws) if fixtures still belong to it. */
+export const removeZone = (zone: string) => invoke<EditorState>("editor_remove_zone", { zone });
+
 export const undo = () => invoke<EditorState>("editor_undo");
 export const redo = () => invoke<EditorState>("editor_redo");
 
@@ -265,6 +271,10 @@ export const setMasterBlackout = (on: boolean) =>
 /** Set the global strobe: `rate` Hz (0 = off), `duty` 0..1. */
 export const setMasterStrobe = (rate: number, duty: number) =>
   invoke<void>("main_set_master_strobe", { rate, duty });
+
+/** Open the patch editor as a secondary window (§6/§7). Freezes the show while open;
+ *  applies the edits to the running show on close. */
+export const openEditor = () => invoke<void>("main_open_editor");
 
 // --- Main operation window (M8 step 4): the scene grid ---
 

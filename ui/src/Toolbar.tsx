@@ -25,6 +25,8 @@ interface Props {
   patch: Patch;
   activeZone: string;
   onActiveZone: (id: string) => void;
+  onAddZone: () => void;
+  onRemoveZone: (id: string) => void;
   viewMode: ViewMode;
   onViewMode: (m: ViewMode) => void;
   onOpen: () => void;
@@ -40,7 +42,6 @@ interface Props {
   canRedo: boolean;
   highlightMode: HighlightMode;
   onHighlightMode: (m: HighlightMode) => void;
-  onApply: () => void;
 }
 
 export function Toolbar(p: Props) {
@@ -92,6 +93,17 @@ export function Toolbar(p: Props) {
             ))}
           </select>
         </span>
+        <button className="btn" onClick={p.onAddZone} title="Add a new zone">
+          + Zona
+        </button>
+        <button
+          className="btn"
+          onClick={() => p.onRemoveZone(p.activeZone)}
+          disabled={!active || p.patch.zones.length <= 1}
+          title="Remove the selected zone (must have no fixtures)"
+        >
+          − Zona
+        </button>
       </label>
       {active && (
         <button
@@ -137,17 +149,6 @@ export function Toolbar(p: Props) {
         </div>
       </div>
 
-      <div className="tb-sep" />
-
-      <div className="tb-group">
-        <button
-          className="btn"
-          onClick={p.onApply}
-          title="Recompile the edited patch into the live engine (§7)"
-        >
-          Apply to live
-        </button>
-      </div>
     </div>
   );
 }

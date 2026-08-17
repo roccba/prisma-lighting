@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Core APIs the editor uses (window close-requested for the unsaved-changes guard) plus native file dialogs for .prismap open/save.",
-  "windows": ["main"],
+  "description": "Core APIs both windows use (window close-requested for the unsaved-changes guard, events) plus native file dialogs for .prismap open/save. Scoped to the main operation window AND the patch-editor secondary window (M8 §7).",
+  "windows": ["main", "editor"],
   "permissions": ["core:default", "dialog:default"]
 }

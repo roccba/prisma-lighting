@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { mainZones, type ZoneInfo } from "./api";
+import { listen } from "@tauri-apps/api/event";
+import { mainZones, openEditor, type ZoneInfo } from "./api";
 import { EffectParams } from "./EffectParams";
 import { GlobalBar } from "./GlobalBar";
 import { LargePreview } from "./LargePreview";
@@ -24,18 +25,38 @@ export default function MainWindow() {
   const [zones, setZones] = useState<ZoneInfo[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Which menu is dropped down (null = none). Minimal for M8: only Preferencias has an
+  // action (open the patch editor, §6). A full menu system is later polish.
+  const [menuOpen, setMenuOpen] = useState<string | null>(null);
   // Bumped whenever the selected zone's active cell changes (fire / assign / clear), so
   // the effect parameter panel re-fetches the now-active effect and its values. The
   // large preview follows the stream on its own and needs no signal.
   const [gridRev, setGridRev] = useState(0);
 
-  useEffect(() => {
+  const refreshZones = () =>
     mainZones()
       .then((zs) => {
         setZones(zs);
-        setSelected((cur) => cur ?? (zs.length > 0 ? zs[0].id : null));
+        // Keep the selection if it still exists; otherwise fall back to the first zone.
+        setSelected((cur) => (cur && zs.some((z) => z.id === cur) ? cur : (zs[0]?.id ?? null)));
       })
       .catch((e) => setError(String(e)));
+
+  useEffect(() => {
+    refreshZones();
+  }, []);
+
+  // The patch editor (secondary window) applies its edits to the running show on close
+  // and emits `layout-changed` (§7). The zone set / names / fixtures may have changed,
+  // so re-fetch the row and refresh the grid/params.
+  useEffect(() => {
+    const un = listen("layout-changed", () => {
+      refreshZones();
+      setGridRev((r) => r + 1);
+    });
+    return () => {
+      un.then((f) => f()).catch(() => {});
+    };
   }, []);
 
   const selectedZone = zones.find((z) => z.id === selected) ?? null;
@@ -43,10 +64,28 @@ export default function MainWindow() {
   return (
     <PreviewStreamProvider>
       <div className="pr-mainwin">
-        <div className="pr-menubar">
+        <div className="pr-menubar" onPointerLeave={() => setMenuOpen(null)}>
           {MENU.map((m) => (
-            <span className="mi" key={m}>
+            <span
+              className={`mi${menuOpen === m ? " is-open" : ""}`}
+              key={m}
+              onClick={() => setMenuOpen((cur) => (cur === m ? null : m))}
+            >
               {m}
+              {m === "Preferencias" && (
+                <div className="submenu" onClick={(e) => e.stopPropagation()}>
+                  <div
+                    className="subitem"
+                    onClick={() => {
+                      setMenuOpen(null);
+                      openEditor().catch(() => {});
+                    }}
+                  >
+                    Editor de Patch
+                    <span className="kbd">F3</span>
+                  </div>
+                </div>
+              )}
             </span>
           ))}
         </div>
