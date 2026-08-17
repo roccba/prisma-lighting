@@ -23,7 +23,7 @@
 //! shared cells are valid choices, not faults at all (§2.4/§4.4).
 
 use glam::Vec3;
-use prisma_patch::{DisplayColor, Fixture, Patch};
+use prisma_patch::{DisplayColor, Fixture, Patch, Zone};
 use uuid::Uuid;
 
 /// A DMX address for one pixel: the pair an edit sets or restores.
@@ -73,6 +73,16 @@ pub enum EditOp {
     SetZoneColor { zone: Uuid, color: DisplayColor },
     /// Change a zone's local mapping-space size (§2.4).
     SetZoneMappingSize { zone: Uuid, size: [u32; 3] },
+    /// Add a zone, inserted at index `at` in `Patch::zones` (mirrors `InsertFixtures`:
+    /// undo of a removal restores the zone at its *original* index so the slot order —
+    /// which `LiveParams` and the overlap counter key off — is reproduced exactly).
+    /// Its inverse is [`RemoveZone`](EditOp::RemoveZone).
+    AddZone { at: usize, zone: Zone },
+    /// Remove a zone by id. Only an **empty** zone (no fixture owns it) may be removed —
+    /// fixtures are re-assigned or deleted first — so the op never orphans ownership.
+    /// `apply` captures the zone and its index, so the inverse ([`AddZone`](
+    /// EditOp::AddZone)) restores it exactly.
+    RemoveZone { zone: Uuid },
 }
 
 /// Why an op could not be applied. These are **structural** rejections (the op does
@@ -98,6 +108,14 @@ pub enum EditError {
     DuplicateFixtureId(Uuid),
     /// A remove named a fixture id not present.
     RemoveMissingFixture(Uuid),
+    /// An add named a zone id already present.
+    DuplicateZoneId(Uuid),
+    /// A zone remove was refused because fixtures still belong to it (reassign or
+    /// delete them first). Carries the count so the UI can say how many.
+    ZoneNotEmpty {
+        zone: Uuid,
+        fixtures: usize,
+    },
 }
 
 impl std::fmt::Display for EditError {
@@ -120,6 +138,11 @@ impl std::fmt::Display for EditError {
             EditError::RemoveMissingFixture(id) => {
                 write!(f, "cannot remove fixture {id}: not present")
             }
+            EditError::DuplicateZoneId(id) => write!(f, "duplicate zone id {id}"),
+            EditError::ZoneNotEmpty { zone, fixtures } => write!(
+                f,
+                "cannot remove zone {zone}: {fixtures} fixture(s) still belong to it"
+            ),
         }
     }
 }
@@ -156,7 +179,10 @@ impl EditOp {
             EditOp::RenameZone { zone, .. } => Some(CoalesceKey::ZoneName(*zone)),
             EditOp::SetZoneColor { zone, .. } => Some(CoalesceKey::ZoneColor(*zone)),
             EditOp::SetZoneMappingSize { zone, .. } => Some(CoalesceKey::ZoneMapping(*zone)),
-            EditOp::InsertFixtures { .. } | EditOp::RemoveFixtures { .. } => None,
+            EditOp::InsertFixtures { .. }
+            | EditOp::RemoveFixtures { .. }
+            | EditOp::AddZone { .. }
+            | EditOp::RemoveZone { .. } => None,
         }
     }
 }
@@ -300,6 +326,37 @@ pub fn apply(patch: &mut Patch, op: EditOp) -> Result<EditOp, EditError> {
             let z = zone_mut(patch, zone)?;
             let old = std::mem::replace(&mut z.mapping_size, size);
             Ok(EditOp::SetZoneMappingSize { zone, size: old })
+        }
+
+        EditOp::AddZone { at, zone } => {
+            if patch.zones.iter().any(|z| z.id == zone.id) {
+                return Err(EditError::DuplicateZoneId(zone.id));
+            }
+            let id = zone.id;
+            let at = at.min(patch.zones.len()); // clamp past-end to an append
+            patch.zones.insert(at, zone);
+            Ok(EditOp::RemoveZone { zone: id })
+        }
+
+        EditOp::RemoveZone { zone } => {
+            let index = patch
+                .zones
+                .iter()
+                .position(|z| z.id == zone)
+                .ok_or(EditError::ZoneNotFound(zone))?;
+            // Refuse to orphan ownership: an owning fixture must be reassigned first.
+            let owners = patch.fixtures.iter().filter(|f| f.zone == zone).count();
+            if owners > 0 {
+                return Err(EditError::ZoneNotEmpty {
+                    zone,
+                    fixtures: owners,
+                });
+            }
+            let removed = patch.zones.remove(index);
+            Ok(EditOp::AddZone {
+                at: index,
+                zone: removed,
+            })
         }
     }
 }

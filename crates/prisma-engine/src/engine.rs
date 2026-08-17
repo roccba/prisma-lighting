@@ -678,9 +678,37 @@ impl EngineHandle {
     /// consumed. Highlight is cleared and any freeze is reset to the new engine's
     /// default (running) — the caller re-applies editor state after.
     pub fn recompile(
+        self,
+        patch: Patch,
+        config: EngineConfig,
+    ) -> Result<EngineHandle, EngineError> {
+        self.recompile_with(patch, config, ContentSource::Idle)
+    }
+
+    /// Like [`recompile`](Self::recompile), but re-runs a **Show** on the new layout
+    /// instead of resetting to black — the editor-as-secondary-window path (M8 §6/§7):
+    /// closing the editor applies its patch edits to the *running* show, reusing the
+    /// GPU. The show embeds its (edited) patch, so the compositor rebuilds its per-zone
+    /// effects from the show's active cells, and the tree is re-seeded from the show's
+    /// live state. **Note:** because the tree is rebuilt, live values reset to the
+    /// show's saved state — the caller re-applies any live tweaks it wants preserved.
+    pub fn recompile_show(
+        self,
+        show: Show,
+        config: EngineConfig,
+    ) -> Result<EngineHandle, EngineError> {
+        let patch = show.patch.clone();
+        self.recompile_with(patch, config, ContentSource::Show(Box::new(show)))
+    }
+
+    /// Shared teardown + reassembly for [`recompile`](Self::recompile) and
+    /// [`recompile_show`](Self::recompile_show): stop the loops in order (keeping the
+    /// GPU alive), then assemble a fresh engine on the same device with `content`.
+    fn recompile_with(
         mut self,
         patch: Patch,
         config: EngineConfig,
+        content: ContentSource,
     ) -> Result<EngineHandle, EngineError> {
         let running = self
             .inner
@@ -697,10 +725,7 @@ impl EngineHandle {
         // Keep the device alive for the fresh assembly; `self` (and its GPU Arc) drops
         // when this returns, but `gpu` carries the only remaining strong reference.
         let gpu = Arc::clone(&self.gpu);
-        // Recompile (editor apply) rebuilds patch-only content — the show, if any, is
-        // re-applied by the caller afterward (M7 §7 / S9 semantics: recompile resets
-        // to a clean layout; M8 show reload goes through `start_show`).
-        Engine::assemble(patch, config, gpu, ContentSource::Idle)
+        Engine::assemble(patch, config, gpu, content)
     }
 
     /// Stop the engine cleanly, **in order**, and report the run.

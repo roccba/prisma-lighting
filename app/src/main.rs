@@ -21,20 +21,14 @@ use prisma_engine::{
     Cell, Engine, EngineConfig, EngineHandle, Layer, ParamSet, Show, Source, ZoneLiveReadout,
     ZoneShow,
 };
-use prisma_patch::{load_patch, save_patch, Diagnostic, Patch};
+use prisma_patch::{load_patch, save_patch, BlendMode, Diagnostic, Patch, Zone};
 use prisma_preview::sink::WebSocketSink;
 use prisma_render::{AdapterPreference, ColorChannel, ParamRole};
 use serde::Serialize;
-use tauri::{Manager, RunEvent, State};
+use tauri::{
+    AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+};
 use uuid::Uuid;
-
-/// A zone's identity for the main operation window (M8 step 3), in `Patch::zones`
-/// order — the slot the engine's per-zone live controls are addressed by.
-struct ZoneMeta {
-    id: Uuid,
-    name: String,
-    color: [u8; 3],
-}
 
 /// A zone card's data for the zone row: identity + its current live controls.
 #[derive(Serialize)]
@@ -197,10 +191,9 @@ fn build_show() -> Show {
 struct AppState {
     /// The live output engine (S1). `None` once shut down.
     engine: Mutex<Option<EngineHandle>>,
-    /// The show's zones in slot order (M8 step 3): identity for the zone row, and the
-    /// slot each zone's live controls are addressed by.
-    zones: Vec<ZoneMeta>,
-    /// The editable Show — the source of truth for each zone's scene grid (M8 step 4).
+    /// The editable Show — the source of truth for each zone's scene grid (M8 step 4)
+    /// AND for the zone set/identity (its embedded patch; §7 derives the zone row and
+    /// slot mapping from it, so a hot patch edit needs no separate list kept in sync).
     /// The engine ran a copy at boot; grid edits mutate this and are pushed to the
     /// engine as effect triggers through the frame-boundary queue.
     show: Mutex<Show>,
@@ -427,6 +420,57 @@ fn editor_set_zone_mapping_size(
     Ok(state_of(&draft))
 }
 
+/// A grey palette to seed a new zone's display colour, cycled by index so successive
+/// zones are visually distinct without asking the operator to pick a colour up front.
+const ZONE_COLORS: [[u8; 3]; 6] = [
+    [69, 123, 157],  // blue
+    [42, 157, 143],  // teal
+    [233, 196, 106], // gold
+    [142, 125, 190], // violet
+    [231, 111, 81],  // coral
+    [138, 177, 125], // sage
+];
+
+/// Add a new zone to the patch (undoable). The zone starts empty (no fixtures) with a
+/// modest default matrix and a palette colour; fixtures are assigned to it afterward via
+/// the canvas / active-zone placement. Returns the updated editor state.
+#[tauri::command]
+fn editor_add_zone(state: State<AppState>, name: String) -> Result<EditorState, String> {
+    let mut draft = state.draft.lock().unwrap();
+    let at = draft.patch().zones.len();
+    let name = if name.trim().is_empty() {
+        format!("Zona {}", at + 1)
+    } else {
+        name.trim().to_string()
+    };
+    let zone = Zone {
+        id: Uuid::new_v4(),
+        name,
+        members: vec![],
+        bounds: None,
+        z_order: 0,
+        blend_mode: BlendMode::Normal,
+        mapping_size: [16, 16, 1],
+        display_color: ZONE_COLORS[at % ZONE_COLORS.len()],
+        world_transform: None,
+    };
+    draft
+        .apply(EditOp::AddZone { at, zone }, None)
+        .map_err(|e| e.to_string())?;
+    Ok(state_of(&draft))
+}
+
+/// Remove a zone (undoable). Refused if fixtures still belong to it — the error names
+/// how many, so the UI can tell the operator to reassign or delete them first.
+#[tauri::command]
+fn editor_remove_zone(state: State<AppState>, zone: Uuid) -> Result<EditorState, String> {
+    let mut draft = state.draft.lock().unwrap();
+    draft
+        .apply(EditOp::RemoveZone { zone }, None)
+        .map_err(|e| e.to_string())?;
+    Ok(state_of(&draft))
+}
+
 /// Highlight fixtures on the live output to identify them on the rig (§7 / S9). `blink`
 /// chooses blink vs. solid. An empty selection clears the highlight. Writes to the live
 /// engine, not the draft — this is the editor↔engine seam that makes Highlight possible.
@@ -445,31 +489,111 @@ fn editor_preview_port(state: State<AppState>) -> u16 {
     *state.preview_port.lock().unwrap()
 }
 
-/// Apply the current editor draft to the live engine (§7 / S9): recompile the patch,
-/// reusing the GPU. The show "resumes" on the new layout. In M7 (app == editor) this is
-/// an explicit action; in M8 the same recompile runs when the editor window closes.
-#[tauri::command]
-fn editor_apply_to_live(state: State<AppState>) -> Result<(), String> {
-    // Clone the draft patch first so we do not hold the draft lock across the recompile.
-    let patch = state.draft.lock().unwrap().patch().clone();
-    // A FRESH preview WebSocket on a new port: binding port 0 never collides with the
-    // still-running old engine's sink, and recompile drops the old one on teardown. The
-    // viewer reconnects to the new port (re-queried on close).
+/// Apply the editor's current draft to the **running show** (§7, M8 hot patch editing):
+/// adopt the edited patch into the live show — keeping each zone's grid/effects, keyed
+/// by zone id — and recompile on the same GPU so the show resumes on the new layout.
+/// `resume` unfreezes (the editor window closed); `resume == false` keeps it frozen
+/// (an explicit "Apply to live" while the editor is still open, §7).
+///
+/// Because recompile rebuilds the Parameter Tree, live values reset to the show's saved
+/// state (a known limitation; live tweaks made since load are not preserved). Zone
+/// **add/remove** IS supported: the show's per-zone grids are reconciled to the new
+/// patch's zone set (kept by id, empty for a new zone, dropped for a removed one), and a
+/// `layout-changed` event tells the main window to re-fetch the (possibly changed) zones.
+fn apply_editor_draft(app: &AppHandle, resume: bool) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    // Adopt the edited patch into the running show. The render path needs Zone::members
+    // (the editor only tracks fixture→zone ownership), so derive them first.
+    let show = {
+        let mut show = state.show.lock().unwrap();
+        // Preserve live state across the recompile (which rebuilds the Parameter Tree):
+        // fold the engine's CURRENT live values back into the show model, keyed by the
+        // OLD zone order (still matching the engine + `show.zones` here, before the
+        // reconcile). The reconcile keeps these by zone id, and `recompile_show` re-seeds
+        // from them — so auto-applying an edit does not reset the operator's master /
+        // colour / dimmers.
+        {
+            let guard = state.engine.lock().unwrap();
+            if let Some(engine) = guard.as_ref() {
+                let m = engine.live().master();
+                show.master.dimmer = m.dimmer.read_real().unwrap_or(show.master.dimmer);
+                for i in 0..3 {
+                    show.master.color[i] = m.color[i].read_real().unwrap_or(show.master.color[i]);
+                }
+                for (slot, zs) in show.zones.iter_mut().enumerate() {
+                    if slot >= engine.zone_count() {
+                        break;
+                    }
+                    let z = engine.live().zone(slot);
+                    zs.live.dimmer = z.dimmer.read_real().unwrap_or(zs.live.dimmer);
+                    for i in 0..3 {
+                        zs.live.color_filter[i] =
+                            z.color[i].read_real().unwrap_or(zs.live.color_filter[i]);
+                    }
+                    zs.live.speed_multiplier =
+                        z.speed.read_real().unwrap_or(zs.live.speed_multiplier);
+                    zs.live.solo = z.solo.read_real().map(|v| v > 0.5).unwrap_or(zs.live.solo);
+                    zs.live.blackout = z
+                        .blackout
+                        .read_real()
+                        .map(|v| v > 0.5)
+                        .unwrap_or(zs.live.blackout);
+                }
+            }
+        }
+        let mut patch = state.draft.lock().unwrap().patch().clone();
+        patch.fill_zone_members_from_ownership();
+        // Reconcile the per-zone grids to the new zone set: one ZoneShow per patch zone,
+        // in patch order, keeping an existing zone's grid/live by id, an empty one for a
+        // newly added zone, and dropping a removed zone's. This keeps `Show` a bijection
+        // with its patch (what the engine and `Show::validate` expect).
+        let mut old = std::mem::take(&mut show.zones);
+        show.zones = patch
+            .zones
+            .iter()
+            .map(|pz| match old.iter().position(|zs| zs.zone_id == pz.id) {
+                Some(pos) => old.remove(pos),
+                // A newly added zone gets a grid of assignable (empty) cells, like the
+                // seeded zones — otherwise its scene grid would render nothing.
+                None => {
+                    let mut zs = ZoneShow::new(pz.id);
+                    zs.grid = (0..GRID_CELLS).map(|_| Cell::empty()).collect();
+                    zs
+                }
+            })
+            .collect();
+        show.patch = patch;
+        show.clone()
+    };
+    // A FRESH preview WebSocket on a new port: port 0 never collides with the still-
+    // running old engine's sink, and recompile drops the old one on teardown. The
+    // viewer reconnects to the new port (re-queried on reconnect).
     let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6454);
     let (config, port) = preview_config(AdapterPreference::Software, target);
     let mut guard = state.engine.lock().unwrap();
     let engine = guard.take().ok_or("engine is not running")?;
-    match engine.recompile(patch, config) {
+    match engine.recompile_show(show, config) {
         Ok(new) => {
-            new.set_frozen(true); // editor still open — keep content frozen (§7)
+            new.set_frozen(!resume);
             *guard = Some(new);
             if let Some(port) = port {
                 *state.preview_port.lock().unwrap() = port;
             }
+            drop(guard);
+            // Tell the main window to re-fetch zones/grids — the zone set, names or
+            // fixtures may have changed.
+            let _ = app.emit("layout-changed", ());
             Ok(())
         }
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// Apply the current editor draft to the live show without closing the editor (§7):
+/// an explicit "Apply to live" that keeps content frozen while the editor stays open.
+#[tauri::command]
+fn editor_apply_to_live(app: AppHandle) -> Result<(), String> {
+    apply_editor_draft(&app, false)
 }
 
 /// Delete the given fixtures (undoable).
@@ -514,9 +638,19 @@ fn editor_open_from(state: State<AppState>, path: String) -> Result<EditorState,
 
 // --- Main operation window (M8 step 3): the zone row ---
 
-/// The slot (index in `Patch::zones`) of a zone id, or `None` if unknown.
-fn zone_slot(zones: &[ZoneMeta], id: Uuid) -> Option<usize> {
-    zones.iter().position(|z| z.id == id)
+/// The slot (index in `Patch::zones`) of a zone id, or `None` if unknown. Derived from
+/// the running show's embedded patch — the single source of truth for the zone set, so
+/// after a hot patch edit (add/remove zone) the slots the engine's `LiveParams` use and
+/// the app's addressing stay in lockstep with no separate list to keep in sync.
+fn zone_slot(state: &AppState, id: Uuid) -> Option<usize> {
+    state
+        .show
+        .lock()
+        .unwrap()
+        .patch
+        .zones
+        .iter()
+        .position(|z| z.id == id)
 }
 
 /// Every zone with its identity and current live controls, for the zone row. The
@@ -524,12 +658,22 @@ fn zone_slot(zones: &[ZoneMeta], id: Uuid) -> Option<usize> {
 /// by any transport (or the loaded show), not just the UI's own writes.
 #[tauri::command]
 fn main_zones(state: State<AppState>) -> Vec<ZoneInfo> {
+    // Identity comes from the show's embedded patch (the single source of truth, so a
+    // hot patch edit is reflected here); the live controls come from the engine. Collect
+    // identity first, then drop the show lock before taking the engine lock.
+    let metas: Vec<(Uuid, String, [u8; 3])> = {
+        let show = state.show.lock().unwrap();
+        show.patch
+            .zones
+            .iter()
+            .map(|z| (z.id, z.name.clone(), z.display_color))
+            .collect()
+    };
     let guard = state.engine.lock().unwrap();
-    state
-        .zones
-        .iter()
+    metas
+        .into_iter()
         .enumerate()
-        .map(|(slot, z)| {
+        .map(|(slot, (id, name, color))| {
             let live = guard
                 .as_ref()
                 .map(|e| e.zone_live(slot))
@@ -539,9 +683,9 @@ fn main_zones(state: State<AppState>) -> Vec<ZoneInfo> {
                     blackout: false,
                 });
             ZoneInfo {
-                id: z.id,
-                name: z.name.clone(),
-                color: z.color,
+                id,
+                name,
+                color,
                 dimmer: live.dimmer,
                 solo: live.solo,
                 blackout: live.blackout,
@@ -554,7 +698,7 @@ fn main_zones(state: State<AppState>) -> Vec<ZoneInfo> {
 /// not the UI's selection. `selected ≠ active`: this is the "active" side.
 #[tauri::command]
 fn main_set_zone_dimmer(state: State<AppState>, zone: Uuid, value: f32) {
-    let Some(slot) = zone_slot(&state.zones, zone) else {
+    let Some(slot) = zone_slot(&state, zone) else {
         return;
     };
     if let Some(engine) = state.engine.lock().unwrap().as_ref() {
@@ -565,7 +709,7 @@ fn main_set_zone_dimmer(state: State<AppState>, zone: Uuid, value: f32) {
 /// Toggle a zone's solo (M8-SPEC §3.1).
 #[tauri::command]
 fn main_set_zone_solo(state: State<AppState>, zone: Uuid, on: bool) {
-    let Some(slot) = zone_slot(&state.zones, zone) else {
+    let Some(slot) = zone_slot(&state, zone) else {
         return;
     };
     if let Some(engine) = state.engine.lock().unwrap().as_ref() {
@@ -576,7 +720,7 @@ fn main_set_zone_solo(state: State<AppState>, zone: Uuid, on: bool) {
 /// Toggle a zone's blackout/mute (M8-SPEC §3.1).
 #[tauri::command]
 fn main_set_zone_blackout(state: State<AppState>, zone: Uuid, on: bool) {
-    let Some(slot) = zone_slot(&state.zones, zone) else {
+    let Some(slot) = zone_slot(&state, zone) else {
         return;
     };
     if let Some(engine) = state.engine.lock().unwrap().as_ref() {
@@ -588,7 +732,7 @@ fn main_set_zone_blackout(state: State<AppState>, zone: Uuid, on: bool) {
 /// zone's non-overlapped pixels at the output stage.
 #[tauri::command]
 fn main_set_zone_strobe(state: State<AppState>, zone: Uuid, rate: f32, duty: f32) {
-    let Some(slot) = zone_slot(&state.zones, zone) else {
+    let Some(slot) = zone_slot(&state, zone) else {
         return;
     };
     if let Some(engine) = state.engine.lock().unwrap().as_ref() {
@@ -653,6 +797,50 @@ fn main_set_master_strobe(state: State<AppState>, rate: f32, duty: f32) {
     }
 }
 
+// --- Main operation window (M8 step 7): the patch editor as a secondary window ---
+
+/// Open the M7 patch editor as a **secondary window** (M8-SPEC §6), from the main
+/// window's menu. Ownership is already B (this process owns the engine; the editor
+/// window talks to it over the same command surface), so opening just brackets the
+/// show: the content **freezes** while the editor is open (output stays alive so
+/// Highlight works, §7), and on **close** the editor's edits are applied to the running
+/// show and it resumes on the new layout ([`apply_editor_draft`]). A second open focuses
+/// the existing window.
+#[tauri::command]
+fn main_open_editor(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("editor") {
+        let _ = win.set_focus();
+        return Ok(());
+    }
+    // Freeze the show content while the editor is open (§7).
+    if let Some(engine) = app.state::<AppState>().engine.lock().unwrap().as_ref() {
+        engine.set_frozen(true);
+    }
+    let win = WebviewWindowBuilder::new(&app, "editor", WebviewUrl::App("index.html".into()))
+        .title("Prisma — Editor de Patch")
+        .inner_size(1280.0, 800.0)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    // On **Destroyed** (not CloseRequested): apply the edits to the running show and
+    // resume it. `Destroyed` is the reliable "the window is truly gone" event across
+    // every path — the editor's own webview intercepts `CloseRequested` for its
+    // unsaved-changes guard and then closes via `destroy()`, which skips CloseRequested.
+    // A failed recompile still unfreezes so the show never stays stuck frozen.
+    let handle = app.clone();
+    win.on_window_event(move |event| {
+        if matches!(event, WindowEvent::Destroyed) {
+            if let Err(e) = apply_editor_draft(&handle, true) {
+                eprintln!("prisma: editor-close recompile failed: {e}");
+                if let Some(engine) = handle.state::<AppState>().engine.lock().unwrap().as_ref() {
+                    engine.set_frozen(false);
+                }
+            }
+        }
+    });
+    Ok(())
+}
+
 // --- Main operation window (M8 step 4): the scene grid ---
 
 /// The effects the picker offers (screenshot 14), grouped by category — the M5 GPU
@@ -686,7 +874,7 @@ fn main_assign_cell(
     index: usize,
     effect_id: String,
 ) -> Vec<CellInfo> {
-    let Some(slot) = zone_slot(&state.zones, zone) else {
+    let Some(slot) = zone_slot(&state, zone) else {
         return Vec::new();
     };
     let params = ParamSet::new(); // default params in step 4; parameter editing is step 5
@@ -712,7 +900,7 @@ fn main_assign_cell(
 /// cell clears the zone (stops it). Returns the updated grid.
 #[tauri::command]
 fn main_trigger_cell(state: State<AppState>, zone: Uuid, index: usize) -> Vec<CellInfo> {
-    let Some(slot) = zone_slot(&state.zones, zone) else {
+    let Some(slot) = zone_slot(&state, zone) else {
         return Vec::new();
     };
     let (dto, effect) = {
@@ -745,7 +933,7 @@ fn main_trigger_cell(state: State<AppState>, zone: Uuid, index: usize) -> Vec<Ce
 /// Empty a cell. If it was the running cell, the zone stops (clears its output).
 #[tauri::command]
 fn main_clear_cell(state: State<AppState>, zone: Uuid, index: usize) -> Vec<CellInfo> {
-    let Some(slot) = zone_slot(&state.zones, zone) else {
+    let Some(slot) = zone_slot(&state, zone) else {
         return Vec::new();
     };
     let (dto, was_active) = {
@@ -877,6 +1065,8 @@ fn main() {
             editor_place_fixtures,
             editor_translate_fixtures,
             editor_set_zone_mapping_size,
+            editor_add_zone,
+            editor_remove_zone,
             editor_highlight,
             editor_apply_to_live,
             editor_preview_port,
@@ -894,6 +1084,7 @@ fn main() {
             main_set_master_dimmer,
             main_set_master_blackout,
             main_set_master_strobe,
+            main_open_editor,
             main_effect_catalogue,
             main_zone_grid,
             main_assign_cell,
@@ -910,17 +1101,7 @@ fn main() {
             // live mini-previews light up. The editor draft below stays for the patch
             // editor (a secondary window in a later step).
             let show = build_show();
-            let zones: Vec<ZoneMeta> = show
-                .patch
-                .zones
-                .iter()
-                .map(|z| ZoneMeta {
-                    id: z.id,
-                    name: z.name.clone(),
-                    color: z.display_color,
-                })
-                .collect();
-            // Keep an editable copy as the grid's source of truth (step 4); the engine
+            // Keep an editable copy as the grid's + zone-set source of truth; the engine
             // runs its own copy and follows our triggers through the queue.
             let show_state = show.clone();
 
@@ -975,7 +1156,6 @@ fn main() {
 
             app.manage(AppState {
                 engine: Mutex::new(Some(engine)),
-                zones,
                 show: Mutex::new(show_state),
                 draft: Mutex::new(PatchDraft::new(patch)),
                 library: Mutex::new(library),
