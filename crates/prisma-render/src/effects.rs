@@ -18,6 +18,124 @@ const NOISE_WGSL: &str = include_str!("../../../shaders/noise.wgsl");
 const FIRE_WGSL: &str = include_str!("../../../shaders/fire.wgsl");
 const RADIAL_WGSL: &str = include_str!("../../../shaders/radial.wgsl");
 const SPARKLE_WGSL: &str = include_str!("../../../shaders/sparkle.wgsl");
+const COLOR_SCROLL_WGSL: &str = include_str!("../../../shaders/color_scroll.wgsl");
+
+/// The fixed number of palette slots a palette effect carries. Slots beyond the live
+/// `count` are packed but unread by the shader. Raising this means more uniform slots
+/// and more shader lines — deliberately capped for a first cut (8 is generous for a
+/// scroll). Kept in lockstep with `color_scroll.wgsl`'s `pal` array and `PALETTE_SLOTS`.
+const PALETTE_SLOTS: usize = 8;
+
+/// Static per-slot channel names (`c{i}r/g/b`) — the trailing path segments and the
+/// uniform fields, in the order `color_scroll.wgsl` reads them. `&'static` so a
+/// [`ParamSpec`] can borrow them without leaking.
+const PALETTE_CHANNELS: [[&str; 3]; PALETTE_SLOTS] = [
+    ["c0r", "c0g", "c0b"],
+    ["c1r", "c1g", "c1b"],
+    ["c2r", "c2g", "c2b"],
+    ["c3r", "c3g", "c3b"],
+    ["c4r", "c4g", "c4b"],
+    ["c5r", "c5g", "c5b"],
+    ["c6r", "c6g", "c6b"],
+    ["c7r", "c7g", "c7b"],
+];
+
+/// professional consoles's default colour-scroll palette: the saturated rainbow. Values are
+/// LINEAR-light `0..1` — for fully-saturated sRGB primaries the sRGB curve maps 0→0
+/// and 255→1 unchanged, so these read the same in both spaces. The trailing two slots
+/// are inactive at the default `count` (6) but seeded so raising the count yields a
+/// usable colour rather than black.
+const PALETTE_DEFAULTS: [[f32; 3]; PALETTE_SLOTS] = [
+    [1.0, 0.0, 0.0], // red
+    [1.0, 1.0, 0.0], // yellow
+    [0.0, 1.0, 0.0], // green
+    [0.0, 1.0, 1.0], // cyan
+    [0.0, 0.0, 1.0], // blue
+    [1.0, 0.0, 1.0], // magenta
+    [1.0, 1.0, 1.0], // white (inactive at default count)
+    [1.0, 0.0, 0.0], // red   (inactive at default count)
+];
+
+/// The 24 palette colour-channel params (8 slots × r/g/b), tagged with their slot index
+/// and channel so the panel collects them into one palette editor. Seeded with the
+/// professional consoles rainbow defaults; the value model is plain linear-light scalars (§2.3), so a
+/// palette persists and MIDI-maps like any other parameter.
+fn palette_color_params() -> Vec<ParamSpec> {
+    let mut out = Vec::with_capacity(PALETTE_SLOTS * 3);
+    for slot in 0..PALETTE_SLOTS {
+        let channels = [ColorChannel::R, ColorChannel::G, ColorChannel::B];
+        for (ch_idx, channel) in channels.into_iter().enumerate() {
+            let name = PALETTE_CHANNELS[slot][ch_idx];
+            let default = PALETTE_DEFAULTS[slot][ch_idx];
+            out.push(ParamSpec::palette(
+                name,
+                ParamDescriptor::unit_level(name, default),
+                slot as u8,
+                channel,
+            ));
+        }
+    }
+    out
+}
+
+/// Scrolling bands of a user palette (§5.3 "Scroll de color", screenshot 15) — the
+/// first effect to declare a **palette** and a **direction**, so it lights up the
+/// palette editor and the 8-way rose. `speed` is scroll rate, `width` the number of
+/// palette repetitions across the scroll axis, `offset` a static phase, `direction`
+/// the 8-way axis, and `count`/`c0..c7` the palette itself. Param order here **is**
+/// the uniform layout the shader reads.
+pub fn color_scroll() -> EffectManifest {
+    let mut params = vec![
+        ParamSpec::scalar(
+            "speed",
+            ParamDescriptor::level(
+                "effect.color_scroll.speed",
+                RealRange { min: 0.0, max: 4.0 },
+                Curve::Linear,
+                // Mid-low so a freshly-assigned scroll drifts out of the box.
+                0.3,
+            ),
+        ),
+        ParamSpec::scalar(
+            "width",
+            ParamDescriptor::level(
+                "effect.color_scroll.width",
+                RealRange { min: 0.5, max: 8.0 },
+                Curve::Linear,
+                // ~2 repetitions across the axis: bands wide enough to read.
+                0.2,
+            ),
+        ),
+        ParamSpec::scalar(
+            "offset",
+            ParamDescriptor::unit_level("effect.color_scroll.offset", 0.0),
+        ),
+        ParamSpec::direction(
+            "direction",
+            // Default 0.0 → rose index 0 → Right.
+            ParamDescriptor::unit_level("effect.color_scroll.direction", 0.0),
+        ),
+        ParamSpec::palette_count(
+            "count",
+            ParamDescriptor::level(
+                "effect.color_scroll.count",
+                RealRange {
+                    min: 1.0,
+                    max: PALETTE_SLOTS as f32,
+                },
+                Curve::Linear,
+                // Default 6 live colours (the rainbow): (6-1)/(8-1).
+                5.0 / 7.0,
+            ),
+        ),
+    ];
+    params.extend(palette_color_params());
+    EffectManifest {
+        effect_id: "color_scroll",
+        params,
+        shader_source: COLOR_SCROLL_WGSL,
+    }
+}
 
 /// Sum-of-sines plasma. `scale` sets the spatial frequency of the field and
 /// `speed` how fast it evolves against show time. Param order here **is** the
@@ -331,6 +449,11 @@ pub fn catalogue() -> Vec<EffectListing> {
             name: "Chispas",
             category: "Generadores",
         },
+        EffectListing {
+            id: "color_scroll",
+            name: "Scroll de color",
+            category: "Generadores",
+        },
     ]
 }
 
@@ -387,6 +510,7 @@ pub fn manifest_by_id(id: &str) -> Option<EffectManifest> {
         "fire" => Some(fire()),
         "radial" => Some(radial()),
         "sparkle" => Some(sparkle()),
+        "color_scroll" => Some(color_scroll()),
         _ => None,
     }
 }

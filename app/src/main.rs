@@ -70,13 +70,16 @@ struct ParamInfo {
     min: f32,
     max: f32,
     value_norm: f32,
-    /// Presentation hint the panel switches on (§3.5): `"scalar"` (a slider),
-    /// `"color"` (a channel of the `group` colour picker) or `"direction"` (the rose).
+    /// Presentation hint the panel switches on (§3.5): `"scalar"` (a slider), `"color"`
+    /// (a channel of the `group` colour picker), `"direction"` (the rose), `"palette"`
+    /// (a channel of palette slot `group`, collected into the palette editor) or
+    /// `"palette_count"` (the palette's active length).
     role: &'static str,
-    /// The colour group id, `Some` only for `role == "color"` — several channels
-    /// sharing it are one picker (an effect's two colours use distinct groups).
+    /// A grouping key: for `role == "color"` the colour group id; for `role ==
+    /// "palette"` the slot index as a string. `Some` only for those roles.
     group: Option<String>,
-    /// The colour channel (`"r"`/`"g"`/`"b"`), `Some` only for `role == "color"`.
+    /// The colour channel (`"r"`/`"g"`/`"b"`), `Some` for `role == "color"` or
+    /// `"palette"`.
     channel: Option<&'static str>,
 }
 
@@ -107,17 +110,26 @@ fn humanize(name: &str) -> String {
 /// Flatten a manifest [`ParamRole`] into the serialisable `(role, group, channel)` the
 /// UI switches on. Presentation only — it never changes the value the tree carries.
 fn role_dto(role: &ParamRole) -> (&'static str, Option<String>, Option<&'static str>) {
+    fn ch_str(channel: &ColorChannel) -> &'static str {
+        match channel {
+            ColorChannel::R => "r",
+            ColorChannel::G => "g",
+            ColorChannel::B => "b",
+        }
+    }
     match role {
         ParamRole::Scalar => ("scalar", None, None),
         ParamRole::Direction => ("direction", None, None),
         ParamRole::Color { group, channel } => {
-            let ch = match channel {
-                ColorChannel::R => "r",
-                ColorChannel::G => "g",
-                ColorChannel::B => "b",
-            };
-            ("color", Some((*group).to_string()), Some(ch))
+            ("color", Some((*group).to_string()), Some(ch_str(channel)))
         }
+        // A palette slot reuses `group` to carry its slot index as a string; the panel
+        // collects all `palette` params by that index into one editor. `palette_count`
+        // is the plain length param the editor reads for the active number of slots.
+        ParamRole::Palette { index, channel } => {
+            ("palette", Some(index.to_string()), Some(ch_str(channel)))
+        }
+        ParamRole::PaletteCount => ("palette_count", None, None),
     }
 }
 
@@ -164,7 +176,14 @@ fn build_show() -> Show {
     let mut show = Show::new("Wedding", patch);
     // One effect per zone, cycled — enough variety to judge the row at a glance. Each
     // zone gets a grid of assignable cells with its initial effect in cell 0 (active).
-    let catalogue = ["plasma", "fire", "noise", "radial", "sparkle", "wave"];
+    let catalogue = [
+        "color_scroll",
+        "plasma",
+        "fire",
+        "noise",
+        "radial",
+        "sparkle",
+    ];
     for (i, zs) in show.zones.iter_mut().enumerate() {
         let effect_id = catalogue[i % catalogue.len()];
         let mut params = ParamSet::new();

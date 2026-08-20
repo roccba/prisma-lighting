@@ -49,6 +49,18 @@ pub enum ParamRole {
     /// directions). No built-in effect declares one yet; the control is wired and
     /// lights up the day an effect's manifest asks for it.
     Direction,
+    /// One channel of palette slot `index` (0-based). Like [`ParamRole::Color`] the
+    /// value stays a linear-light scalar in the tree/uniform — a palette is just a
+    /// fixed block of colour channels plus a [`ParamRole::PaletteCount`] param. The UI
+    /// collects every `Palette` param, groups them by `index`, and draws ONE palette
+    /// editor (swatches + add/remove) whose active length is the count param. The
+    /// engine packs the channels flat like any other scalar; the shader reassembles the
+    /// colours into a local array and gates the loop by count.
+    Palette { index: u8, channel: ColorChannel },
+    /// The active length of a palette (how many of the fixed slots are live). A plain
+    /// scalar in the tree; tagged so the palette editor can find it and so the shader
+    /// reads it to gate its slot loop.
+    PaletteCount,
 }
 
 /// One parameter an effect exposes. `name` is the trailing path segment (the
@@ -94,6 +106,30 @@ impl ParamSpec {
             name,
             descriptor,
             role: ParamRole::Direction,
+        }
+    }
+
+    /// One channel of palette slot `index`. The panel collects a palette's channels
+    /// into a single editor (see [`ParamRole::Palette`]).
+    pub fn palette(
+        name: &'static str,
+        descriptor: ParamDescriptor,
+        index: u8,
+        channel: ColorChannel,
+    ) -> Self {
+        Self {
+            name,
+            descriptor,
+            role: ParamRole::Palette { index, channel },
+        }
+    }
+
+    /// The active-length parameter of a palette (see [`ParamRole::PaletteCount`]).
+    pub fn palette_count(name: &'static str, descriptor: ParamDescriptor) -> Self {
+        Self {
+            name,
+            descriptor,
+            role: ParamRole::PaletteCount,
         }
     }
 }

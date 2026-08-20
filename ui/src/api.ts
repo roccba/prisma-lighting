@@ -328,12 +328,13 @@ export interface ParamInfo {
   max: number;
   value_norm: number; // 0..1
   /** Presentation type the panel switches on (§3.5): a plain slider, a channel of a
-   *  colour picker, or the direction rose. Value model is scalar regardless. */
-  role: "scalar" | "color" | "direction";
-  /** Colour group id — set only for `role === "color"`; channels sharing it are one
-   *  picker (two colours in an effect use distinct groups). */
+   *  colour picker, the direction rose, a channel of a palette slot, or a palette's
+   *  active-length. Value model is scalar regardless. */
+  role: "scalar" | "color" | "direction" | "palette" | "palette_count";
+  /** A grouping key: the colour group id for `role === "color"`, or the palette slot
+   *  index (as a string) for `role === "palette"`. Null otherwise. */
   group: string | null;
-  /** Colour channel — set only for `role === "color"`. */
+  /** Colour channel — set for `role === "color"` or `"palette"`. */
   channel: "r" | "g" | "b" | null;
 }
 
