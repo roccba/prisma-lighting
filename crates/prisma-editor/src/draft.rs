@@ -34,8 +34,12 @@ pub struct PatchDraft {
 }
 
 impl PatchDraft {
-    /// Start editing `patch` with an empty history.
-    pub fn new(patch: Patch) -> Self {
+    /// Start editing `patch` with an empty history. The world `matrix_size` is fitted
+    /// to the rig on load (a derived fact, not a stored knob — see
+    /// [`Patch::fit_matrix_size`]); this normalises any patch saved before auto-fit
+    /// without marking the draft dirty.
+    pub fn new(mut patch: Patch) -> Self {
+        patch.fit_matrix_size();
         Self {
             patch,
             undo: Vec::new(),
@@ -58,6 +62,10 @@ impl PatchDraft {
     pub fn apply(&mut self, op: EditOp, gesture: Option<GestureId>) -> Result<(), EditError> {
         let key = op.coalesce_key();
         let inverse = op::apply(&mut self.patch, op)?;
+        // The world size is derived from where the pixels are, so re-fit it after any
+        // edit that may have added or moved them. `matrix_size` is not part of any op's
+        // diff, so undo/redo re-fit too (below), keeping it a pure derived fact.
+        self.patch.fit_matrix_size();
 
         // Coalesce: if this op continues the same gesture on the same target as the
         // top undo entry, keep that entry's inverse (it already restores to the
@@ -88,6 +96,7 @@ impl PatchDraft {
                 // a failure here would be an internal invariant break.
                 let redo_op = op::apply(&mut self.patch, entry.inverse)
                     .expect("undo: applying a stored inverse must succeed");
+                self.patch.fit_matrix_size(); // derived; re-fit after the geometry moves
                 self.redo.push(Entry {
                     inverse: redo_op,
                     gesture: entry.gesture,
@@ -106,6 +115,7 @@ impl PatchDraft {
             Some(entry) => {
                 let undo_op = op::apply(&mut self.patch, entry.inverse)
                     .expect("redo: applying a stored inverse must succeed");
+                self.patch.fit_matrix_size(); // derived; re-fit after the geometry moves
                 self.undo.push(Entry {
                     inverse: undo_op,
                     gesture: entry.gesture,

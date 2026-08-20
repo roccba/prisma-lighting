@@ -62,17 +62,25 @@ export function Preview() {
       const oy = (h - s * spanY) / 2 - minY * s;
       const n = d.zones.length;
 
+      // SQUARE dots via `fillRect` (a pixel is square; uniform with the main-window
+      // previews). Critically, `arc`+`stroke` PER PIXEL tessellates two paths per pixel —
+      // over the whole rig (thousands of pixels × many zones) that saturated the UI thread
+      // and made the whole editor sluggish (slow to open, delete/edit felt dead). The
+      // per-pixel zone ring is an identification aid that only helps at low density, so it
+      // is drawn only for small rigs; at scale the fill colour alone carries the content.
+      const many = d.pixels.length > 400;
+      const dd = 2 * r;
       for (let i = 0; i < d.pixels.length; i++) {
         const cx = ox + d.pixels[i].x * s, cy = oy + d.pixels[i].y * s;
-        ctx.beginPath();
-        ctx.arc(cx, cy, r, 0, Math.PI * 2);
         ctx.fillStyle = `rgb(${colors[i * 3]},${colors[i * 3 + 1]},${colors[i * 3 + 2]})`;
-        ctx.fill();
-        const zs = pixelZoneRef.current[i];
-        if (zs >= 0) {
-          ctx.lineWidth = Math.max(1, r * 0.28);
-          ctx.strokeStyle = zoneColor(zs, n);
-          ctx.stroke();
+        ctx.fillRect(cx - r, cy - r, dd, dd);
+        if (!many) {
+          const zs = pixelZoneRef.current[i];
+          if (zs >= 0) {
+            ctx.lineWidth = Math.max(1, r * 0.28);
+            ctx.strokeStyle = zoneColor(zs, n);
+            ctx.strokeRect(cx - r, cy - r, dd, dd);
+          }
         }
       }
     };

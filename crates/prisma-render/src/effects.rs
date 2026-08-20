@@ -72,7 +72,9 @@ pub fn wave() -> EffectManifest {
                     "effect.wave.speed",
                     RealRange { min: 0.0, max: 4.0 },
                     Curve::Linear,
-                    0.0,
+                    // Default to mid-slider so a freshly-assigned wave animates out of the
+                    // box (a 0 default looked broken — the effect sat frozen).
+                    0.5,
                 ),
             ),
         ],

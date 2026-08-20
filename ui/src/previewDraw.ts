@@ -62,12 +62,42 @@ export function drawZone(
   const ox = (w - s * spanX) / 2 - minX * s;
   const oy = (h - s * spanY) / 2 - minY * s;
 
+  // SQUARE dots, always (a pixel is square) via `fillRect` — no per-pixel path
+  // tessellation like `arc`. Uniform across small and large rigs, just scaled.
+  const cap = Math.max(128, Math.floor((w * h) / 40));
+
+  if (zone.members.length <= cap) {
+    // Few enough pixels to draw each at its real position.
+    const d = 2 * r;
+    for (const p of zone.members) {
+      const px = descriptor.pixels[p];
+      if (!px) continue;
+      ctx.fillStyle = `rgb(${colors[p * 3]},${colors[p * 3 + 1]},${colors[p * 3 + 2]})`;
+      ctx.fillRect(ox + px.x * s - r, oy + px.y * s - r, d, d);
+    }
+    return;
+  }
+
+  // Too many pixels for this canvas: DOWN-SCALE spatially into a coarse grid and fill one
+  // TILED cell per occupied bucket. This looks like a lower-resolution version of the same
+  // picture (clean blocks) — NOT the diagonal striping a linear "draw every Nth pixel"
+  // subsample produced (that skips through row-major order and beats against the row width).
+  // The large preview's canvas is big enough that `cap` exceeds the pixel count, so it never
+  // takes this path and stays full-resolution.
+  const bs = Math.max(1, Math.round(Math.sqrt((spanX * spanY) / cap)) || 1); // bucket, matrix units
+  const bw = Math.floor(spanX / bs) + 1;
+  const bh = Math.floor(spanY / bs) + 1;
+  const drawn = new Uint8Array(bw * bh);
+  const cell = Math.ceil(bs * s) + 1; // +1 so tiles overlap by a hair — no seams/gaps
   for (const p of zone.members) {
     const px = descriptor.pixels[p];
     if (!px) continue;
-    ctx.beginPath();
-    ctx.arc(ox + px.x * s, oy + px.y * s, r, 0, Math.PI * 2);
+    const bx = Math.floor((px.x - minX) / bs);
+    const by = Math.floor((px.y - minY) / bs);
+    const k = by * bw + bx;
+    if (drawn[k]) continue; // first pixel in the bucket is its representative colour
+    drawn[k] = 1;
     ctx.fillStyle = `rgb(${colors[p * 3]},${colors[p * 3 + 1]},${colors[p * 3 + 2]})`;
-    ctx.fill();
+    ctx.fillRect(ox + (minX + bx * bs) * s, oy + (minY + by * bs) * s, cell, cell);
   }
 }

@@ -57,11 +57,14 @@ pub struct PixelRef {
 /// another's. `world_transform` is its **optional** placement in the shared venue
 /// space, needed only for cross-zone effects.
 ///
-/// *Not yet consumed by render.* The render gather still samples one global
-/// `Patch::matrix_size` (CLAUDE.md §5.2 step 5). Per-zone mapping spaces are
-/// stored and edited in M7 but wired through the gather in M8 — see the M7
-/// explicit-debt note in CLAUDE.md. Until then pixel positions are validated and
-/// sampled against `Patch::matrix_size`, not against this field.
+/// **`mapping_size` IS consumed by render (M8).** Each zone renders its effect at
+/// its own `mapping_size`, then that texture is *placed* into the world framebuffer
+/// (`Patch::matrix_size`, auto-fitted to the rig) at the zone's pixel footprint —
+/// see [`prisma_render::ZonePlacer`] and `prisma_engine::zone_content`. Pixel
+/// positions are still gathered from the world framebuffer against
+/// `Patch::matrix_size` (§5.2 step 5). `world_transform` is **not** yet consumed —
+/// the default arrangement places a zone by where its member pixels actually fall,
+/// not by an explicit transform; the field is stored for a later cross-zone effect.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Zone {
     pub id: Uuid,

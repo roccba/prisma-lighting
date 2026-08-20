@@ -89,6 +89,43 @@ impl Patch {
         }
     }
 
+    /// Auto-fit the world [`matrix_size`](Self::matrix_size) to the bounding box of
+    /// every fixture pixel's cell, so the shared world canvas always contains the whole
+    /// rig. `matrix_size` is the **venue/world** space that zones composite into and
+    /// that pixel positions are sampled against (§5.2 step 5) — it is *not* a knob the
+    /// operator hand-sets. Each axis becomes `max cell + 1` (min 1). A pixel at a
+    /// negative coordinate does not shrink an axis below 1; it simply falls outside the
+    /// world and renders black, exactly as an out-of-range pixel does today (`validate`
+    /// deliberately permits out-of-matrix — see [`validate_zone_mapping_sizes`]).
+    ///
+    /// Call after any edit that adds or moves pixels, and when a patch is loaded, so
+    /// `matrix_size` is a *derived* fact rather than a stale stored number. Cost is
+    /// O(pixels) — an edit-time pass, never on the render/output hot path.
+    pub fn fit_matrix_size(&mut self) {
+        let mut max = [0i64; 3];
+        let mut any = false;
+        for fixture in &self.fixtures {
+            for pixel in &fixture.pixels {
+                if let Some(cell) = crate::geometry::cell_of(pixel.position) {
+                    any = true;
+                    for axis in 0..3 {
+                        max[axis] = max[axis].max(cell[axis]);
+                    }
+                }
+            }
+        }
+        // No (finite-positioned) pixels yet: a minimal 1×1×1 world.
+        self.matrix_size = if any {
+            [
+                (max[0] + 1).max(1) as u32,
+                (max[1] + 1).max(1) as u32,
+                (max[2] + 1).max(1) as u32,
+            ]
+        } else {
+            [1, 1, 1]
+        };
+    }
+
     fn validate_pixel_indices(&self) -> Result<(), PatchError> {
         for fixture in &self.fixtures {
             for (position, pixel) in fixture.pixels.iter().enumerate() {

@@ -1,13 +1,18 @@
 :root {
   color-scheme: dark;
-  --bg: #0e0f13;
-  --panel: #16181f;
-  --panel-2: #1c1f28;
-  --line: #2a2d38;
-  --text: #d6d9e0;
-  --muted: #8a8f9c;
-  --accent: #6aa8ff;
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Editor-only legacy token NAMES, now ALIASED to the design-system tokens so the
+     un-migrated editor shares the exact neutral greys + VS-blue accent of the main
+     window — no bluish/neutral colour mix while the migration is in flight. Each alias
+     is deleted as the classes that use it move to the `.pr-*` design tokens directly.
+     (`--accent`/`--text` were dropped entirely and fall through to theme.css; they used
+     to collide here and forced the whole app — main window included — onto the legacy
+     accent #6aa8ff instead of the VS-blue #007ACC.) */
+  --bg: var(--bg-app);          /* was #0e0f13 (bluish) → #0a0a0a neutral */
+  --panel: var(--bg-panel);     /* was #16181f → #1e1e1e */
+  --panel-2: var(--bg-panel-2); /* was #1c1f28 → #2a2a2a */
+  --line: var(--divider);       /* was #2a2d38 → #333 */
+  --muted: var(--text-dim);     /* was #8a8f9c → #888 */
+  font-family: var(--font-ui);
   font-size: 13px;
 }
 
@@ -59,59 +64,9 @@ html, body, #root {
 }
 .editor-notice button { flex: 0 0 auto; padding: 0 8px; }
 
-/* Toolbar — zone selector (§6) + view modes (§5.3) */
-.toolbar {
-  display: flex;
-  align-items: center;
-  gap: 22px;
-  padding: 6px 14px;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel-2);
-}
-.tb-group { display: flex; align-items: center; gap: 8px; }
-.tb-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-}
-.tb-select {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 2px 8px;
-}
-.tb-select select {
-  background: transparent;
-  color: var(--text);
-  border: none;
-  outline: none;
-  font: inherit;
-  padding: 2px 0;
-}
-.segmented {
-  display: inline-flex;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  overflow: hidden;
-}
-.seg {
-  background: var(--bg);
-  color: var(--muted);
-  border: none;
-  padding: 4px 12px;
-  font: inherit;
-  cursor: pointer;
-  border-left: 1px solid var(--line);
-}
-.seg:first-child { border-left: none; }
-.seg:hover { color: var(--text); }
-.seg.active { background: var(--accent); color: #0b0d12; font-weight: 600; }
-
-.tb-sep { width: 1px; height: 22px; background: var(--line); }
+/* Toolbar migrated to .pr-toolbar + .pr-tbtn + .pr-tabbtn + shared Dropdown
+   (re-style section 4.1). Its legacy classes (toolbar, tb-group, tb-label,
+   tb-select, segmented, seg, tb-sep) were removed. */
 
 /* Buttons */
 .btn {
@@ -123,7 +78,7 @@ html, body, #root {
   font: inherit;
   cursor: pointer;
 }
-.btn:hover:not(:disabled) { border-color: #3a3f4d; background: #191c24; }
+.btn:hover:not(:disabled) { border-color: var(--btn-border); background: var(--btn-face-hover); }
 .btn:disabled { opacity: 0.4; cursor: default; }
 .btn.primary { background: var(--accent); color: #0b0d12; border-color: var(--accent); font-weight: 600; }
 

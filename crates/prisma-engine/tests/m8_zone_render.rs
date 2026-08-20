@@ -356,3 +356,30 @@ fn the_command_sender_is_send() {
     fn is_send<T: Send>() {}
     is_send::<ZoneCommandSender>();
 }
+
+/// An EMPTY patch (zero zones, zero fixtures) must compile and render without panicking:
+/// the editor lets the operator delete down to zero zones and build up from scratch, so
+/// the whole pipeline has to survive an empty rig (the world auto-fits to a 1×1 canvas,
+/// buffers are size-guarded). If this ever panics, the editor's "remove last zone" is
+/// unsafe and the guard belongs back.
+#[test]
+fn an_empty_patch_compiles_and_renders() {
+    let gpu = software_gpu();
+    let mut patch = Patch {
+        id: Uuid::from_u128(0xE0),
+        name: "empty".into(),
+        matrix_size: [1, 1, 1],
+        fixtures: vec![],
+        zones: vec![],
+    };
+    patch.fit_matrix_size();
+    assert_eq!(patch.matrix_size, [1, 1, 1]);
+    let index = patch.compile().expect("empty patch compiles");
+    assert_eq!(index.zone_count(), 0);
+    assert_eq!(index.pixel_count(), 0);
+
+    let mut comp = ZoneCompositor::new(&gpu, &patch, &index, vec![]);
+    let zones = ZoneStates::new(0);
+    let out = render_and_gather(&gpu, &patch, &index, &mut comp, &zones);
+    assert!(out.is_empty(), "an empty rig gathers to no pixels");
+}
