@@ -164,7 +164,7 @@ fn build_show() -> Show {
     let mut show = Show::new("Wedding", patch);
     // One effect per zone, cycled — enough variety to judge the row at a glance. Each
     // zone gets a grid of assignable cells with its initial effect in cell 0 (active).
-    let catalogue = ["plasma", "wave", "gradient", "solid"];
+    let catalogue = ["plasma", "fire", "noise", "radial", "sparkle", "wave"];
     for (i, zs) in show.zones.iter_mut().enumerate() {
         let effect_id = catalogue[i % catalogue.len()];
         let mut params = ParamSet::new();
