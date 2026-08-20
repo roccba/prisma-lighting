@@ -148,6 +148,49 @@ fn render_and_gather(
         .collect()
 }
 
+/// Like [`render_and_gather`] but at a caller-chosen clock, so a test can advance show
+/// time frame by frame (the persistent `content` keeps its per-zone phase between calls).
+fn render_and_gather_at(
+    gpu: &Gpu,
+    patch: &Patch,
+    index: &PatchIndex,
+    content: &mut impl FrameContent,
+    zones: &ZoneStates,
+    clock: &ClockSnapshot,
+) -> Vec<[f32; 3]> {
+    let mut counter = OverlapCounter::new(patch, index);
+    counter.sync(zones);
+    let overlap = counter.snapshot();
+
+    let framebuffer = create_render_target(gpu, patch.matrix_size[0], patch.matrix_size[1].max(1));
+    content.render_into(gpu, clock, zones, &overlap, &framebuffer);
+
+    let sampler = Sampler::new(gpu, &SamplePlan::compile(patch, index));
+    sampler.gather(gpu, &framebuffer);
+    let master: Vec<f16> = sampler.read_master_f16(gpu);
+    (0..index.pixel_count())
+        .map(|g| {
+            let off = index.pixel_component_offset(g) as usize;
+            [
+                master[off].to_f32(),
+                master[off + 1].to_f32(),
+                master[off + 2].to_f32(),
+            ]
+        })
+        .collect()
+}
+
+fn playing_clock(show_ns: u64) -> ClockSnapshot {
+    ClockSnapshot {
+        frame: 0,
+        wall_ns: 0,
+        show_ns,
+        beat: 0.0,
+        bpm: 120.0,
+        playing: true,
+    }
+}
+
 fn lit_zones(n: usize) -> ZoneStates {
     let mut z = ZoneStates::new(n);
     for slot in 0..n {
@@ -382,4 +425,71 @@ fn an_empty_patch_compiles_and_renders() {
     let zones = ZoneStates::new(0);
     let out = render_and_gather(&gpu, &patch, &index, &mut comp, &zones);
     assert!(out.is_empty(), "an empty rig gathers to no pixels");
+}
+
+/// Bipolar velocity: a negative zone speed runs the zone's effect in REVERSE — the exact
+/// inverse of forward. Advancing the phase forward one step and then, at negative speed,
+/// back the same step returns the zone to the frame it started on; a positive-only clock
+/// (the old absolute-time scaling) could never do this. Uses NOISE, whose field is a
+/// hash of the (space, time) lattice — animated by time like the trig effects but free of
+/// GPU-`sin` large-argument inaccuracy, so the check is exact.
+#[test]
+fn negative_zone_speed_runs_the_effect_in_reverse() {
+    let gpu = software_gpu();
+    let patch = build_patch(8, &[("z", &[0, 1, 2, 3, 4, 5, 6, 7], 8, BlendMode::Normal)]);
+    let index = patch.compile().expect("rig compiles");
+
+    let tree = ParameterTree::with_defaults();
+    let noise = EffectInstance::new(&gpu, &tree, "/z/n", &effects::noise());
+    // Effect speed real 1.0 (norm 0.25 over 0..4) so time drives the field.
+    tree.write_path("/z/n/param/speed", 0.25, ui());
+    let mut zones = lit_zones(1);
+    let mut content = ZoneCompositor::new(&gpu, &patch, &index, vec![Some(noise)]);
+
+    let dt_ns = 80_000_000u64; // 0.08 s per step
+
+    // Frame A (seed): zero delta, phase = bias.
+    zones.set_speed_multiplier(0, 4.0);
+    let a = render_and_gather_at(
+        &gpu,
+        &patch,
+        &index,
+        &mut content,
+        &zones,
+        &playing_clock(0),
+    );
+
+    // Frame B: forward one step at +4 → phase advances, the field moves.
+    let b = render_and_gather_at(
+        &gpu,
+        &patch,
+        &index,
+        &mut content,
+        &zones,
+        &playing_clock(dt_ns),
+    );
+    assert!(
+        a.iter().zip(&b).any(|(x, y)| (x[0] - y[0]).abs() > 0.008),
+        "forward playback must move the field"
+    );
+
+    // Frame C: reverse the same step at -4 → phase returns to the bias, so the render
+    // returns to frame A. Only a signed (bipolar) phase can undo the advance like this.
+    zones.set_speed_multiplier(0, -4.0);
+    let c = render_and_gather_at(
+        &gpu,
+        &patch,
+        &index,
+        &mut content,
+        &zones,
+        &playing_clock(2 * dt_ns),
+    );
+    for i in 0..8 {
+        assert!(
+            (a[i][0] - c[i][0]).abs() <= EPS,
+            "pixel {i}: reverse must return to the start ({} vs {})",
+            a[i][0],
+            c[i][0]
+        );
+    }
 }
