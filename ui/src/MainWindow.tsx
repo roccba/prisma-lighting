@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { mainZones, openEditor, openShow, saveShow, type ZoneInfo } from "./api";
+import { DeviceManager } from "./DeviceManager";
 import { EffectParams } from "./EffectParams";
 import { GlobalBar } from "./GlobalBar";
 import { LargePreview } from "./LargePreview";
@@ -31,6 +32,8 @@ export default function MainWindow() {
   // Which menu is dropped down (null = none). Minimal for M8: only Preferencias has an
   // action (open the patch editor, §6). A full menu system is later polish.
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
+  // Whether the device-manager modal (network output, screenshot 16) is open.
+  const [deviceMgrOpen, setDeviceMgrOpen] = useState(false);
   // Bumped whenever the selected zone's active cell changes (fire / assign / clear), so
   // the effect parameter panel re-fetches the now-active effect and its values. The
   // large preview follows the stream on its own and needs no signal.
@@ -120,6 +123,15 @@ export default function MainWindow() {
                     Editor de Patch
                     <span className="kbd">F3</span>
                   </div>
+                  <div
+                    className="subitem"
+                    onClick={() => {
+                      setMenuOpen(null);
+                      setDeviceMgrOpen(true);
+                    }}
+                  >
+                    Gestor de dispositivos
+                  </div>
                 </div>
               )}
             </span>
@@ -179,6 +191,7 @@ export default function MainWindow() {
         </div>
 
         {error && <div className="pr-mainwin-error">Error: {error}</div>}
+        {deviceMgrOpen && <DeviceManager onClose={() => setDeviceMgrOpen(false)} />}
       </div>
     </PreviewStreamProvider>
   );
