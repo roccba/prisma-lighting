@@ -276,6 +276,11 @@ export const setMasterStrobe = (rate: number, duty: number) =>
  *  applies the edits to the running show on close. */
 export const openEditor = () => invoke<void>("main_open_editor");
 
+/** Save the live show (with its embedded patch) to a `.prisma` file (§5). */
+export const saveShow = (path: string) => invoke<void>("main_save_show", { path });
+/** Open a `.prisma` show and run it (recompiles the engine onto its embedded patch). */
+export const openShow = (path: string) => invoke<void>("main_open_show", { path });
+
 // --- Main operation window (M8 step 4): the scene grid ---
 
 /** One scene-grid cell of a zone: empty (assignable) or an assigned effect, and

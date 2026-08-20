@@ -18,8 +18,8 @@ use prisma_editor::{
     FixtureLibrary, FixtureType, PatchDraft, PlacementSpec, PreviewRun, SelectionAggregate,
 };
 use prisma_engine::{
-    Cell, Engine, EngineConfig, EngineHandle, Layer, ParamSet, Show, Source, ZoneLiveReadout,
-    ZoneShow,
+    load_show, save_show, Cell, Engine, EngineConfig, EngineHandle, Layer, ParamSet, Show, Source,
+    ZoneLiveReadout, ZoneShow,
 };
 use prisma_patch::{load_patch, save_patch, BlendMode, Diagnostic, Patch, Zone};
 use prisma_preview::sink::WebSocketSink;
@@ -633,6 +633,54 @@ fn editor_apply_to_live(app: AppHandle) -> Result<(), String> {
     apply_editor_draft(&app, false)
 }
 
+/// Save the current live show to a `.prisma` file (M8-SPEC §5): serialize the Show — with
+/// its embedded Patch — through the versioned envelope. The frontend picks the path with
+/// the native dialog.
+#[tauri::command]
+fn main_save_show(state: State<AppState>, path: String) -> Result<(), String> {
+    let show = state.show.lock().unwrap();
+    let json = save_show(&show).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())
+}
+
+/// Open a `.prisma` show and run it: load the Show, recompile the engine onto its embedded
+/// Patch, and adopt it as the live + editable state. Like [`apply_editor_draft`], the patch
+/// is validated (compile) BEFORE the engine is torn down, so a bad file is rejected with the
+/// running show intact rather than leaving the app with no engine. The main window re-fetches
+/// on the `layout-changed` event.
+#[tauri::command]
+fn main_open_show(app: AppHandle, path: String) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let json = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let mut show = load_show(&json).map_err(|e| e.to_string())?;
+    // Derive the render-critical data and validate before touching the running engine.
+    show.patch.fill_zone_members_from_ownership();
+    show.patch.fit_matrix_size();
+    show.patch.compile().map_err(|e| e.to_string())?;
+
+    let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6454);
+    let (config, port) = preview_config(AdapterPreference::Software, target);
+    let mut guard = state.engine.lock().unwrap();
+    let engine = guard.take().ok_or("engine is not running")?;
+    match engine.recompile_show(show.clone(), config) {
+        Ok(new) => {
+            new.set_frozen(false); // a freshly opened show plays
+            *guard = Some(new);
+            if let Some(port) = port {
+                *state.preview_port.lock().unwrap() = port;
+            }
+            drop(guard);
+            // Adopt the loaded show + its patch as the editable state (so the editor, if
+            // opened next, shows this rig), then tell the main window to re-fetch.
+            *state.draft.lock().unwrap() = PatchDraft::new(show.patch.clone());
+            *state.show.lock().unwrap() = show;
+            let _ = app.emit("layout-changed", ());
+            Ok(())
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Delete the given fixtures (undoable).
 #[tauri::command]
 fn editor_remove_fixtures(state: State<AppState>, ids: Vec<Uuid>) -> Result<EditorState, String> {
@@ -1124,6 +1172,8 @@ fn main() {
             main_set_master_blackout,
             main_set_master_strobe,
             main_open_editor,
+            main_save_show,
+            main_open_show,
             main_effect_catalogue,
             main_zone_grid,
             main_assign_cell,

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { mainZones, openEditor, type ZoneInfo } from "./api";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { mainZones, openEditor, openShow, saveShow, type ZoneInfo } from "./api";
 import { EffectParams } from "./EffectParams";
 import { GlobalBar } from "./GlobalBar";
 import { LargePreview } from "./LargePreview";
@@ -20,6 +21,8 @@ import { ZoneRow } from "./ZoneRow";
 // do that.
 
 const MENU = ["Archivo", "Vista", "Preferencias", "Herramientas", "Ayuda"];
+
+const PRISMA_FILTERS = [{ name: "Prisma show", extensions: ["prisma"] }];
 
 export default function MainWindow() {
   const [zones, setZones] = useState<ZoneInfo[]>([]);
@@ -59,6 +62,29 @@ export default function MainWindow() {
     };
   }, []);
 
+  // Open a `.prisma` show: the backend recompiles the engine onto it and emits
+  // `layout-changed`, which our listener above turns into a zone/grid refresh.
+  const doOpenShow = async () => {
+    setMenuOpen(null);
+    try {
+      const path = await openDialog({ multiple: false, filters: PRISMA_FILTERS });
+      if (typeof path === "string") await openShow(path);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  // Save the live show (with its embedded patch) to a `.prisma` file.
+  const doSaveShow = async () => {
+    setMenuOpen(null);
+    try {
+      const path = await saveDialog({ filters: PRISMA_FILTERS, defaultPath: "untitled.prisma" });
+      if (path) await saveShow(path);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   const selectedZone = zones.find((z) => z.id === selected) ?? null;
 
   return (
@@ -72,6 +98,16 @@ export default function MainWindow() {
               onClick={() => setMenuOpen((cur) => (cur === m ? null : m))}
             >
               {m}
+              {m === "Archivo" && (
+                <div className="submenu" onClick={(e) => e.stopPropagation()}>
+                  <div className="subitem" onClick={doOpenShow}>
+                    Abrir show…
+                  </div>
+                  <div className="subitem" onClick={doSaveShow}>
+                    Guardar show…
+                  </div>
+                </div>
+              )}
               {m === "Preferencias" && (
                 <div className="submenu" onClick={(e) => e.stopPropagation()}>
                   <div
