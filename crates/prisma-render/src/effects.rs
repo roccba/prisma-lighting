@@ -14,6 +14,10 @@ const GRADIENT_WGSL: &str = include_str!("../../../shaders/gradient.wgsl");
 const SOLID_WGSL: &str = include_str!("../../../shaders/solid.wgsl");
 const PLASMA_WGSL: &str = include_str!("../../../shaders/plasma.wgsl");
 const WAVE_WGSL: &str = include_str!("../../../shaders/wave.wgsl");
+const NOISE_WGSL: &str = include_str!("../../../shaders/noise.wgsl");
+const FIRE_WGSL: &str = include_str!("../../../shaders/fire.wgsl");
+const RADIAL_WGSL: &str = include_str!("../../../shaders/radial.wgsl");
+const SPARKLE_WGSL: &str = include_str!("../../../shaders/sparkle.wgsl");
 
 /// Sum-of-sines plasma. `scale` sets the spatial frequency of the field and
 /// `speed` how fast it evolves against show time. Param order here **is** the
@@ -79,6 +83,136 @@ pub fn wave() -> EffectManifest {
             ),
         ],
         shader_source: WAVE_WGSL,
+    }
+}
+
+/// Animated fractal value noise (§5.3 "Noise", the Perlin/Simplex entry). `scale`
+/// sets the base spatial frequency of the field and `speed` how fast it evolves
+/// against show time. Order here **is** the uniform layout the shader reads.
+pub fn noise() -> EffectManifest {
+    EffectManifest {
+        effect_id: "noise",
+        params: vec![
+            ParamSpec::scalar(
+                "scale",
+                ParamDescriptor::level(
+                    "effect.noise.scale",
+                    RealRange {
+                        min: 1.0,
+                        max: 20.0,
+                    },
+                    Curve::Linear,
+                    0.25,
+                ),
+            ),
+            ParamSpec::scalar(
+                "speed",
+                ParamDescriptor::level(
+                    "effect.noise.speed",
+                    RealRange { min: 0.0, max: 4.0 },
+                    Curve::Linear,
+                    0.25,
+                ),
+            ),
+        ],
+        shader_source: NOISE_WGSL,
+    }
+}
+
+/// Rising flames with a built-in fire colour ramp (§5.3 "Fire"). `intensity` scales
+/// the overall heat and `speed` the rise rate. The ramp is intrinsic to the effect,
+/// so unlike the palette generators fire needs no external colours.
+pub fn fire() -> EffectManifest {
+    EffectManifest {
+        effect_id: "fire",
+        params: vec![
+            ParamSpec::scalar(
+                "intensity",
+                ParamDescriptor::level(
+                    "effect.fire.intensity",
+                    RealRange { min: 0.0, max: 2.0 },
+                    Curve::Linear,
+                    // Default to ~1.0 so a freshly-assigned fire actually burns.
+                    0.5,
+                ),
+            ),
+            ParamSpec::scalar(
+                "speed",
+                ParamDescriptor::level(
+                    "effect.fire.speed",
+                    RealRange { min: 0.0, max: 4.0 },
+                    Curve::Linear,
+                    // ~1.0 unit/s so the flames move out of the box.
+                    0.25,
+                ),
+            ),
+        ],
+        shader_source: FIRE_WGSL,
+    }
+}
+
+/// Concentric sine rings expanding from the matrix centre (§5.3 "Onda / radial").
+/// `frequency` is rings across the half-width, `speed` how fast they travel outward.
+pub fn radial() -> EffectManifest {
+    EffectManifest {
+        effect_id: "radial",
+        params: vec![
+            ParamSpec::scalar(
+                "frequency",
+                ParamDescriptor::level(
+                    "effect.radial.frequency",
+                    RealRange {
+                        min: 0.0,
+                        max: 10.0,
+                    },
+                    Curve::Linear,
+                    0.3,
+                ),
+            ),
+            ParamSpec::scalar(
+                "speed",
+                ParamDescriptor::level(
+                    "effect.radial.speed",
+                    RealRange { min: 0.0, max: 4.0 },
+                    Curve::Linear,
+                    // Mid-slider so the rings animate immediately.
+                    0.5,
+                ),
+            ),
+        ],
+        shader_source: RADIAL_WGSL,
+    }
+}
+
+/// Scattered twinkling points (§5.3 "Sparkle / twinkle"). `density` controls how
+/// many sparkles (lattice resolution + active fraction) and `speed` the twinkle rate.
+pub fn sparkle() -> EffectManifest {
+    EffectManifest {
+        effect_id: "sparkle",
+        params: vec![
+            ParamSpec::scalar(
+                "density",
+                ParamDescriptor::level(
+                    "effect.sparkle.density",
+                    RealRange {
+                        min: 1.0,
+                        max: 40.0,
+                    },
+                    Curve::Linear,
+                    0.25,
+                ),
+            ),
+            ParamSpec::scalar(
+                "speed",
+                ParamDescriptor::level(
+                    "effect.sparkle.speed",
+                    RealRange { min: 0.0, max: 4.0 },
+                    Curve::Linear,
+                    0.5,
+                ),
+            ),
+        ],
+        shader_source: SPARKLE_WGSL,
     }
 }
 
@@ -177,6 +311,26 @@ pub fn catalogue() -> Vec<EffectListing> {
             name: "Wave",
             category: "Generadores",
         },
+        EffectListing {
+            id: "radial",
+            name: "Onda radial",
+            category: "Generadores",
+        },
+        EffectListing {
+            id: "noise",
+            name: "Ruido",
+            category: "Generadores",
+        },
+        EffectListing {
+            id: "fire",
+            name: "Fuego",
+            category: "Generadores",
+        },
+        EffectListing {
+            id: "sparkle",
+            name: "Chispas",
+            category: "Generadores",
+        },
     ]
 }
 
@@ -229,6 +383,10 @@ pub fn manifest_by_id(id: &str) -> Option<EffectManifest> {
         "gradient" => Some(gradient()),
         "plasma" => Some(plasma()),
         "wave" => Some(wave()),
+        "noise" => Some(noise()),
+        "fire" => Some(fire()),
+        "radial" => Some(radial()),
+        "sparkle" => Some(sparkle()),
         _ => None,
     }
 }
