@@ -23,9 +23,13 @@
 //!
 //! # Per-zone speed (M5 gap closed here, guardrail)
 //!
-//! `speed_multiplier` scales the **effect's** show-time only — a per-zone *copy* of
-//! the clock snapshot with `show_ns` scaled — never the master clock, which would
-//! desync everything ([`scaled_clock`]).
+//! `speed_multiplier` drives only the **effect's** show-time — a per-zone phase fed to
+//! a *copy* of the clock snapshot — never the master clock, which would desync
+//! everything. The phase is **integrated** from the signed speed each frame
+//! ([`phase_clock`] + the accumulator in [`ZoneCompositor::render_into`]), so the
+//! velocity is **bipolar**: 0 holds the animation static, a negative speed plays the
+//! zone in reverse. (Scaling absolute `show_ns` — the earlier approach — cannot reverse,
+//! because that clock is unsigned and monotonic.)
 
 use std::sync::mpsc;
 
@@ -192,7 +196,29 @@ pub struct ZoneCompositor {
     /// can hand out cloned producers.
     commands_rx: mpsc::Receiver<ZoneCommand>,
     commands_tx: mpsc::Sender<ZoneCommand>,
+    /// Per-zone animation phase in show-nanoseconds, integrated from signed speed each
+    /// frame so a **negative** speed runs that zone's effects in reverse (bipolar
+    /// velocity). Seeded to [`PHASE_BIAS_NS`] so the unsigned clock never underflows.
+    zone_phase_ns: Vec<f64>,
+    /// Master show-time at the previous frame, to take the delta the phase integrates.
+    /// `None` before the first frame (delta 0).
+    last_show_ns: Option<u64>,
 }
+
+/// Starting value for every zone's phase accumulator, in show-ns (`100` s). It exists to
+/// give **reverse** playback (a negative speed) room before the phase reaches zero and
+/// the unsigned per-zone clock clamps: ~100 s of reverse at 1×, ~10 s at 10× — and the
+/// headroom grows as the show plays forward. It is deliberately *not* larger: the shader
+/// feeds `time = show_seconds` straight into GPU `sin`/`cos`, whose hardware range
+/// reduction loses accuracy for large arguments, so a big time offset would visibly
+/// corrupt the trig-based effects (plasma/wave/radial/color_scroll). That accuracy
+/// ceiling is a *pre-existing* property of the absolute-time model (any effect degrades
+/// after a long runtime as `show_seconds` grows); 100 s keeps the bias within a normal
+/// session's magnitudes. Reverse past the show origin holds the show-start frame (benign
+/// clamp), not a crash. A wrap-based phase (constant trig accuracy + unbounded reverse)
+/// is the eventual fix, but it must reconcile periodic vs noise-coordinate effects and is
+/// out of scope here.
+const PHASE_BIAS_NS: f64 = 1.0e11;
 
 impl ZoneCompositor {
     /// Build the compositor for a compiled layout. `effects` is indexed by **zone
@@ -250,6 +276,8 @@ impl ZoneCompositor {
             contrib: Vec::new(),
             commands_rx,
             commands_tx,
+            zone_phase_ns: vec![PHASE_BIAS_NS; index.zone_count()],
+            last_show_ns: None,
         }
     }
 
@@ -286,12 +314,13 @@ impl ZoneCompositor {
     }
 }
 
-/// A per-zone view of the clock with only the effect's **show-time** scaled by
-/// `speed` — never the master clock (guardrail, M8-PARTA §3). `frame`/`beat`/`bpm`
-/// are left as-is; the built-in effects animate off `show_seconds`.
-fn scaled_clock(clock: &ClockSnapshot, speed: f32) -> ClockSnapshot {
+/// A per-zone view of the clock whose **show-time** is the zone's integrated phase —
+/// never the master clock (guardrail, M8-PARTA §3). `frame`/`beat`/`bpm` are left as-is;
+/// the built-in effects animate off `show_seconds`. The phase is advanced per frame by
+/// [`ZoneCompositor`] so a signed speed can run the zone forward or in reverse.
+fn phase_clock(clock: &ClockSnapshot, phase_ns: f64) -> ClockSnapshot {
     let mut c = *clock;
-    c.show_ns = (clock.show_ns as f64 * speed.max(0.0) as f64) as u64;
+    c.show_ns = phase_ns.max(0.0) as u64;
     c
 }
 
@@ -325,6 +354,22 @@ impl FrameContent for ZoneCompositor {
         //    swap can never split a frame into old-half / new-half (M8-PARTA §3).
         self.drain_commands();
 
+        // 0b. Advance every zone's animation phase by its signed speed over the
+        //     master's show-time delta. Integrating (rather than scaling absolute time)
+        //     is what lets a negative speed play a zone in REVERSE; a zero speed holds
+        //     the phase (static). Done for all slots, contributing or not, so a zone that
+        //     comes back on resumes where its animation would have been. Frozen master
+        //     clock ⇒ zero delta ⇒ every zone freezes.
+        let delta_ns = match self.last_show_ns {
+            Some(prev) => clock.show_ns.saturating_sub(prev) as f64,
+            None => 0.0,
+        };
+        self.last_show_ns = Some(clock.show_ns);
+        for s in 0..self.slots.len() {
+            let speed = zones.get(s).speed_multiplier as f64;
+            self.zone_phase_ns[s] = (self.zone_phase_ns[s] + delta_ns * speed).max(0.0);
+        }
+
         // 1. Which zones actually contribute this frame, in compositing order. A
         //    zone contributes iff it has live state (contributes_pixels), an active
         //    effect, and a non-empty footprint. Reuses `contrib` in place.
@@ -344,8 +389,7 @@ impl FrameContent for ZoneCompositor {
         //    per-zone speed-scaled clock), then PLACE it into the world framebuffer.
         for &slot in &self.contrib {
             let s = slot as usize;
-            let speed = zones.get(s).speed_multiplier;
-            let zclock = scaled_clock(clock, speed);
+            let zclock = phase_clock(clock, self.zone_phase_ns[s]);
             {
                 let slot_mut = &mut self.slots[s];
                 if let Some(effect) = slot_mut.effect.as_mut() {

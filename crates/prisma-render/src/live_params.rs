@@ -203,9 +203,17 @@ impl LiveParams {
                         &format!("{base}/speed"),
                         ParamDescriptor::level(
                             "zone.speed",
-                            RealRange { min: 0.0, max: 4.0 },
+                            // Bipolar velocity (professional consoles-style): 0 = static, sign = play
+                            // direction (negative runs the zone's effects in reverse).
+                            // The reverse is realised by the render's per-zone phase
+                            // accumulator ([`zone_content`]), not by scaling absolute time.
+                            RealRange {
+                                min: -10.0,
+                                max: 10.0,
+                            },
                             Curve::Linear,
-                            0.25, // real 1.0 — unity speed
+                            // Centre (norm 0.5) is 0 = static; unity forward is real 1.0.
+                            0.55, // (1.0 - (-10)) / 20 = real 1.0 — unity speed
                         ),
                     ),
                     solo: tree.register(
