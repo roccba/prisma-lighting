@@ -37,6 +37,9 @@ struct ZoneInfo {
     name: String,
     color: [u8; 3],
     dimmer: f32,
+    /// Velocity multiplier, real `-10..=10` (0 = static, negative = reverse). The
+    /// zone-card speed fader seeds from this and writes it back live.
+    speed: f32,
     solo: bool,
     blackout: bool,
 }
@@ -783,6 +786,7 @@ fn main_zones(state: State<AppState>) -> Vec<ZoneInfo> {
                 .map(|e| e.zone_live(slot))
                 .unwrap_or(ZoneLiveReadout {
                     dimmer: 0.0,
+                    speed: 1.0,
                     solo: false,
                     blackout: false,
                 });
@@ -791,6 +795,7 @@ fn main_zones(state: State<AppState>) -> Vec<ZoneInfo> {
                 name,
                 color,
                 dimmer: live.dimmer,
+                speed: live.speed,
                 solo: live.solo,
                 blackout: live.blackout,
             }
@@ -807,6 +812,18 @@ fn main_set_zone_dimmer(state: State<AppState>, zone: Uuid, value: f32) {
     };
     if let Some(engine) = state.engine.lock().unwrap().as_ref() {
         engine.set_zone_dimmer(slot, value);
+    }
+}
+
+/// Set a zone's velocity multiplier (the zone-card speed fader), real `-10..=10`:
+/// 0 = static, negative = reverse. Written live; the render integrates it per frame.
+#[tauri::command]
+fn main_set_zone_speed(state: State<AppState>, zone: Uuid, value: f32) {
+    let Some(slot) = zone_slot(&state, zone) else {
+        return;
+    };
+    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        engine.set_zone_speed(slot, value);
     }
 }
 
@@ -1183,6 +1200,7 @@ fn main() {
             editor_redo,
             main_zones,
             main_set_zone_dimmer,
+            main_set_zone_speed,
             main_set_zone_solo,
             main_set_zone_blackout,
             main_set_zone_strobe,

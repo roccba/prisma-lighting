@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { masterState, setMasterBlackout, setMasterDimmer, setMasterStrobe } from "./api";
 import { Fader } from "./Fader";
+import { Bolt } from "./icons";
 import { strobeHz } from "./strobe";
 
 // The global operation bar (M8-SPEC §3.6): master dimmer + blackout and the GLOBAL
@@ -73,7 +74,7 @@ export function GlobalBar() {
           title="Strobo global — mantené = momentáneo, doble clic = fijo"
           aria-pressed={strobeOn}
         >
-          ⚡
+          <Bolt size={15} />
         </button>
         <label className="pr-zonecard-strobe pr-globalbar-strobe" title="Velocidad del strobo">
           <input

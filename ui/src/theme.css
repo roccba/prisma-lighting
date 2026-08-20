@@ -290,7 +290,7 @@ body {
    ============================================================ */
 
 /* vertical fader */
-.pr-fader { width: 40px; height: 170px; position: relative; display: flex; justify-content: center; }
+.pr-fader { --pr-knob-h: 30px; width: 40px; height: 170px; position: relative; display: flex; justify-content: center; }
 .pr-fader .slot {
   position: absolute; top: 0; bottom: 0; left: 50%; transform: translateX(-50%);
   width: 6px; background: #050505; border: 1px solid var(--btn-border-dark);
@@ -423,8 +423,11 @@ body {
    dashboard (§7). Raised: light-ish grey face over the app black, 1px dark edge. */
 .pr-region { background: var(--bg-panel); border: 1px solid var(--btn-border-dark); border-radius: var(--r-md); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .pr-region-zonerow { flex: 0 0 auto; }
-.pr-region-grid, .pr-region-preview { flex: 1 1 0; }
-.pr-region-params { flex: 0 0 auto; height: 108px; }
+/* The preview is the star; give it more of the mid row than the (compact) grid, so the
+   grid stops stretching its cells to fill half the window. */
+.pr-region-grid { flex: 1 1 0; }
+.pr-region-preview { flex: 1.5 1 0; }
+.pr-region-params { flex: 0 0 auto; height: 150px; }
 .pr-region-global { flex: 0 0 auto; height: 46px; }
 .pr-region-title { font-size: var(--fs-small); color: var(--text-label); padding: 5px 8px; border-bottom: 1px solid var(--divider); text-transform: uppercase; letter-spacing: .04em; flex: 0 0 auto; }
 
@@ -437,11 +440,26 @@ body {
 .pr-zonerow-empty { color: var(--text-dim); font-size: var(--fs-small); padding: 12px; }
 
 /* --- Zone card --- */
-.pr-zonecard { flex: 0 0 auto; width: 152px; background: var(--bg-panel-2); border: 1px solid var(--btn-border); border-top-color: #3a3a3a; border-bottom-color: var(--btn-border-dark); border-radius: var(--r-md); display: flex; flex-direction: column; gap: 6px; padding: 6px; cursor: pointer; user-select: none; }
+.pr-zonecard { flex: 0 0 auto; width: 178px; background: var(--bg-panel-2); border: 1px solid var(--btn-border); border-top-color: #3a3a3a; border-bottom-color: var(--btn-border-dark); border-radius: var(--r-md); display: flex; flex-direction: column; gap: 6px; padding: 6px; cursor: pointer; user-select: none; }
 .pr-zonecard.is-selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset, 0 0 6px rgba(0,122,204,.35); }
 .pr-zonecard-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .pr-zonecard-swatch { width: 10px; height: 10px; flex: 0 0 auto; border-radius: var(--r-sm); border: 1px solid var(--btn-border-dark); }
 .pr-zonecard-name { font-size: var(--fs-base); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Body: dimmer fader · mini-preview · velocity fader. Align tops so the fader RAILS line
+   up with the canvas top (the fader columns run taller because of the labels below). */
+.pr-zonecard-body { display: flex; align-items: flex-start; gap: 5px; }
+.pr-zonecard-fader { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.pr-zonecard-fader .pr-fader { --pr-knob-h: 22px; width: 26px; height: 96px; }
+.pr-zonecard-fader .pr-fader .pr-knob { width: 24px; height: 22px; padding: 3px; }
+/* Fixed-width, tabular readout: its text width must NOT change with the value ("5" vs
+   "100", "0" vs "-10.0"), or the card reflows on every drag and WebKitGTK re-rasterizes
+   the mini-preview canvases → the flicker on dimmer/speed moves. */
+.pr-zonecard-faderval { width: 36px; text-align: center; font-size: var(--fs-small); color: var(--accent); font-variant-numeric: tabular-nums; line-height: 1; overflow: hidden; white-space: nowrap; }
+.pr-zonecard-faderlbl { font-size: 9px; color: var(--text-label); letter-spacing: .05em; line-height: 1; }
+/* A centre reference line on the bipolar velocity fader, marking 0 (static). */
+.pr-fader.is-bipolar .pr-fader-center { position: absolute; top: calc(50% - 1px); left: 6px; right: 6px; height: 1px; background: var(--text-label); opacity: .5; pointer-events: none; z-index: 1; }
+
 /* `translateZ(0)` gives EVERY mini-preview its own compositing layer — each repaints at
    ~30 Hz and deserves one. The symptom that forced it: the FIRST card's canvas sits in
    the origin corner of the `overflow-x:auto` zone row (a scroll/clip container), and
@@ -450,23 +468,23 @@ body {
    killing the flicker at the root (not a throttle — timing and draw are untouched).
    Applied to the class, not just the first card, so a future layout change that puts a
    different canvas at the compositing corner cannot bring it back. */
-.pr-zonecard-canvas { width: 100%; height: 64px; display: block; background: var(--bg-canvas); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); transform: translateZ(0); }
-.pr-zonecard-controls { display: flex; align-items: center; gap: 6px; }
-.pr-zonecard-controls .pr-hslider { flex: 1 1 auto; height: 40px; }
-.pr-zonecard-btns { display: flex; gap: 3px; flex: 0 0 auto; }
-.pr-zonecard-btns .pr-btn { width: 22px; height: 22px; padding: 0; font-size: var(--fs-small); }
+.pr-zonecard-preview { position: relative; flex: 1 1 auto; min-width: 0; display: flex; }
+.pr-zonecard-canvas { width: 100%; height: 96px; display: block; background: var(--bg-canvas); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); transform: translateZ(0); }
 
-/* --- Per-zone strobe (§3.6): ⚡ over the mini-preview + a 0..1 speed slider --- */
-.pr-zonecard-preview { position: relative; }
-.pr-strobe-trigger { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; line-height: 1; padding: 0; background: rgba(0,0,0,.45); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); color: var(--text-dim); font-size: 12px; cursor: pointer; user-select: none; }
+/* Footer: solo / mute + the strobe rate. */
+.pr-zonecard-footer { display: flex; align-items: center; gap: 4px; }
+.pr-zonecard-sm { width: 24px; height: 22px; padding: 0; font-size: var(--fs-small); flex: 0 0 auto; }
+
+/* --- Per-zone strobe (§3.6): bolt over the mini-preview + a 0..1 rate slider --- */
+.pr-strobe-trigger { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; line-height: 0; padding: 0; background: rgba(0,0,0,.45); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); color: var(--text-dim); cursor: pointer; user-select: none; }
 .pr-strobe-trigger:hover { color: var(--text); border-color: var(--btn-border); }
 /* Engaged (held or latched): bright. Latched adds an inset ring so a "stuck on" strobe
    still reads as latched even mid-flash. */
 .pr-strobe-trigger.is-on { color: var(--accent-text); border-color: var(--accent); background: rgba(0,122,204,.4); box-shadow: 0 0 6px rgba(0,122,204,.55); }
 .pr-strobe-trigger.is-latched { box-shadow: 0 0 0 1px var(--accent) inset; }
-.pr-zonecard-strobe { display: flex; align-items: center; gap: 5px; }
-.pr-strobe-ico { flex: 0 0 auto; color: var(--text-dim); font-size: var(--fs-small); }
-.pr-strobe-rate { flex: 1 1 auto; height: 4px; -webkit-appearance: none; appearance: none; background: #050505; border: 1px solid var(--btn-border-dark); border-radius: var(--r-md); outline: none; cursor: pointer; }
+.pr-zonecard-strobe { display: flex; align-items: center; gap: 5px; flex: 1 1 auto; min-width: 0; }
+.pr-strobe-ico { flex: 0 0 auto; color: var(--text-dim); display: flex; align-items: center; }
+.pr-strobe-rate { flex: 1 1 auto; min-width: 0; height: 4px; -webkit-appearance: none; appearance: none; background: #050505; border: 1px solid var(--btn-border-dark); border-radius: var(--r-md); outline: none; cursor: pointer; }
 .pr-strobe-rate::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 10px; height: 14px; background: linear-gradient(90deg,#575757,#2c2c2c); border: 1px solid #6e6e6e; border-radius: 2px; cursor: pointer; }
 
 /* --- Global operation bar (M8 step 6, §3.6): master + blackout + global strobe --- */
@@ -483,8 +501,10 @@ body {
 
 /* --- Scene grid + effect picker (M8 step 4, §3.3 / §4) --- */
 .pr-grid-wrap { flex: 1 1 auto; overflow: auto; padding: 8px; min-height: 0; }
-.pr-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 5px; }
-.pr-cell { position: relative; aspect-ratio: 1 / 1; background: var(--bg-input); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; color: var(--text-dim); user-select: none; overflow: hidden; }
+/* Fixed 76px cells, left-aligned (like a professional consoles storage grid) instead of stretching to
+   fill the panel — 16 stretched cells left a huge dead area below and oversized squares. */
+.pr-grid { display: grid; grid-template-columns: repeat(8, 76px); grid-auto-rows: 76px; gap: 5px; justify-content: start; align-content: start; }
+.pr-cell { position: relative; background: var(--bg-input); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; color: var(--text-dim); user-select: none; overflow: hidden; }
 .pr-cell:hover { border-color: var(--btn-border); }
 .pr-cell.is-assigned { background: var(--bg-panel-2); color: var(--text); border-color: var(--btn-border); }
 .pr-cell.is-active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset, 0 0 6px rgba(0,122,204,.35); }
@@ -511,36 +531,42 @@ body {
 .pr-largepreview-canvas { flex: 1 1 auto; width: 100%; min-height: 0; display: block; background: var(--bg-canvas); border-radius: 0 0 var(--r-md) var(--r-md); }
 
 /* --- Effect parameter panel (M8 step 5, §3.5) --- */
-/* Built from the effect manifest: the effect name, then one label · value · fader
-   group per parameter, laid out horizontally (scroll if they overflow), matching the
-   "one knob per amount" grouping (screenshot 15). All primitives (.pr-value, .pr-hslider). */
-.pr-params { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 6px 8px; gap: 5px; overflow: hidden; }
+/* Built from the effect manifest (screenshot 15): TWO columns — the scalar sliders as a
+   vertical list of `label · value · fader` lines on the left, and the effect-specific
+   controls (rose, palette, colour) on the right. All primitives (.pr-value, .pr-hslider). */
+.pr-params { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 6px 8px; gap: 6px; overflow: hidden; }
 .pr-params-head { flex: 0 0 auto; display: flex; align-items: baseline; gap: 8px; }
 .pr-params-effect { font-size: var(--fs-base); color: var(--text); font-weight: 600; }
 .pr-params-none { flex: 1 1 auto; display: flex; align-items: center; color: var(--text-dim); font-size: var(--fs-small); }
-.pr-params-rows { flex: 1 1 auto; min-height: 0; display: flex; gap: 16px; align-items: center; overflow-x: auto; overflow-y: hidden; }
-.pr-param-row { flex: 0 0 auto; width: 190px; display: grid; grid-template-columns: 1fr auto; grid-template-areas: "label value" "fader fader"; align-items: center; gap: 3px 6px; }
-.pr-param-label { grid-area: label; font-size: var(--fs-small); color: var(--text-label); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pr-param-value { grid-area: value; }
-.pr-param-fader { grid-area: fader; }
-.pr-param-fader .pr-hslider { height: 34px; }
+.pr-params-rows { flex: 1 1 auto; min-height: 0; display: flex; gap: 28px; align-items: flex-start; overflow-x: auto; overflow-y: hidden; }
+.pr-params-col { display: flex; flex-direction: column; flex: 0 0 auto; }
+.pr-params-scalars { gap: 5px; }
+/* The effect-specific controls sit side by side (rose next to palette next to colour). */
+.pr-params-controls { flex-direction: row; gap: 20px; align-items: flex-start; }
 
-/* Colour param: the 255 readout + a swatch that opens the native picker. The value
-   stays linear in the model; the swatch shows its sRGB (§2.3). Narrower than a fader. */
-.pr-color-row { width: 150px; grid-template-areas: "label value" "swatch swatch"; }
+/* A scalar parameter on ONE line: label · value · horizontal fader (screenshot 15). */
+.pr-param-row { flex: 0 0 auto; width: 236px; display: grid; grid-template-columns: 74px 34px 1fr; grid-template-areas: "label value fader"; align-items: center; gap: 8px; }
+.pr-param-label { grid-area: label; font-size: var(--fs-small); color: var(--text-label); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-param-value { grid-area: value; text-align: right; }
+.pr-param-fader { grid-area: fader; }
+.pr-param-fader .pr-hslider { height: 24px; }
+
+/* Colour param: label + 255 readout + a swatch that opens the native picker. The value
+   stays linear in the model; the swatch shows its sRGB (§2.3). A compact vertical block. */
+.pr-color-row { width: auto; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
 .pr-color-255 { min-width: 0; }
-.pr-color-swatch { grid-area: swatch; position: relative; height: 34px; border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); cursor: pointer; overflow: hidden; box-shadow: inset 0 0 0 1px rgba(0,0,0,.35); }
+.pr-color-swatch { position: relative; width: 64px; height: 28px; border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); cursor: pointer; overflow: hidden; box-shadow: inset 0 0 0 1px rgba(0,0,0,.35); }
 .pr-color-swatch input[type="color"] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: none; padding: 0; cursor: pointer; }
 
 /* Direction rose: a 3×3 compass of the editor's eight signal directions (centre empty). */
-.pr-rose-row { width: auto; grid-template-columns: none; grid-template-areas: "label" "rose"; }
+.pr-rose-row { width: auto; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
 .pr-rose { grid-area: rose; display: grid; grid-template-columns: repeat(3, 22px); grid-template-rows: repeat(3, 20px); gap: 2px; }
 .pr-rose-btn { background: var(--btn-face); border: 1px solid var(--btn-border); border-bottom-color: var(--btn-border-dark); color: var(--text); border-radius: var(--r-sm); cursor: pointer; font-size: 12px; line-height: 1; padding: 0; }
 .pr-rose-btn:hover { background: var(--btn-face-hover); }
 .pr-rose-btn.is-active { border-color: var(--accent); color: var(--accent-text); box-shadow: 0 0 0 1px var(--accent) inset; }
 
 /* Palette editor (Scroll de color) — a row of editable colour slots + add/remove. */
-.pr-palette-row { width: auto; grid-template-columns: none; grid-template-areas: "label" "palette"; }
+.pr-palette-row { width: auto; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
 .pr-palette { grid-area: palette; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .pr-palette-slot { position: relative; width: 24px; height: 30px; }
 .pr-palette-slot.is-dragging { opacity: .5; }
