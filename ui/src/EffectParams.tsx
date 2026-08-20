@@ -127,6 +127,8 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
   }
 
   const items = buildItems(panel.params);
+  const scalarItems = items.filter((i): i is Extract<PanelItem, { kind: "scalar" }> => i.kind === "scalar");
+  const controlItems = items.filter((i) => i.kind !== "scalar");
 
   return (
     <div className="pr-params">
@@ -136,74 +138,81 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
       {items.length === 0 ? (
         <div className="pr-params-none">Este efecto no tiene parámetros</div>
       ) : (
+        // Two columns, professional consoles-style (screenshot 15): the scalar sliders as a vertical
+        // list on the left, the effect-specific controls (direction rose, palette,
+        // colour picker) on the right.
         <div className="pr-params-rows">
-          {items.map((item) => {
-            // Keys carry the effect id so an effect swap rebuilds controls (and their
-            // local state) rather than reusing a stale one by position.
-            if (item.kind === "color") {
-              // A complete colour → the picker; an incomplete group degrades to sliders.
-              if (item.r && item.g && item.b) {
-                return (
-                  <ColorControl
-                    key={`${panel.effect_id}:color:${item.group}`}
-                    zoneId={zoneId}
-                    label="Color"
-                    r={item.r}
-                    g={item.g}
-                    b={item.b}
-                  />
-                );
-              }
-              return [item.r, item.g, item.b]
-                .filter((p): p is ParamInfo => !!p)
-                .map((p) => (
-                  <ScalarRow key={`${panel.effect_id}:${p.name}`} zoneId={zoneId} param={p} />
-                ));
-            }
-            if (item.kind === "direction") {
-              return (
-                <Rose
-                  key={`${panel.effect_id}:${item.param.name}`}
-                  zoneId={zoneId}
-                  param={item.param}
-                />
-              );
-            }
-            if (item.kind === "palette") {
-              // Only complete slots (r+g+b present) with a count param form the editor;
-              // anything malformed degrades to sliders rather than a broken control.
-              const slots = [...item.slots.values()]
-                .filter((s): s is { index: number; r: ParamInfo; g: ParamInfo; b: ParamInfo } =>
-                  !!(s.r && s.g && s.b),
-                )
-                .sort((a, b) => a.index - b.index);
-              if (item.count && slots.length > 0) {
-                return (
-                  <PaletteControl
-                    key={`${panel.effect_id}:palette`}
-                    zoneId={zoneId}
-                    slots={slots}
-                    count={item.count}
-                  />
-                );
-              }
-              const stray = [item.count, ...slots.flatMap((s) => [s.r, s.g, s.b])].filter(
-                (p): p is ParamInfo => !!p,
-              );
-              return stray.map((p) => (
-                <ScalarRow key={`${panel.effect_id}:${p.name}`} zoneId={zoneId} param={p} />
-              ));
-            }
-            return (
+          <div className="pr-params-col pr-params-scalars">
+            {scalarItems.map((item) => (
               <ScalarRow
                 key={`${panel.effect_id}:${item.param.name}`}
                 zoneId={zoneId}
                 param={item.param}
               />
-            );
-          })}
+            ))}
+          </div>
+          {controlItems.length > 0 && (
+            <div className="pr-params-col pr-params-controls">
+              {controlItems.map((item) => renderControl(item, panel.effect_id!))}
+            </div>
+          )}
         </div>
       )}
     </div>
   );
+
+  // One non-scalar control (colour picker, rose, or palette editor). Keys carry the
+  // effect id so an effect swap rebuilds the control (and its local state) rather than
+  // reusing a stale one by position.
+  function renderControl(item: PanelItem, effectId: string) {
+    if (item.kind === "color") {
+      if (item.r && item.g && item.b) {
+        return (
+          <ColorControl
+            key={`${effectId}:color:${item.group}`}
+            zoneId={zoneId}
+            label="Color"
+            r={item.r}
+            g={item.g}
+            b={item.b}
+          />
+        );
+      }
+      return [item.r, item.g, item.b]
+        .filter((p): p is ParamInfo => !!p)
+        .map((p) => <ScalarRow key={`${effectId}:${p.name}`} zoneId={zoneId} param={p} />);
+    }
+    if (item.kind === "direction") {
+      return (
+        <Rose key={`${effectId}:${item.param.name}`} zoneId={zoneId} param={item.param} />
+      );
+    }
+    if (item.kind === "palette") {
+      // Only complete slots (r+g+b present) with a count param form the editor; anything
+      // malformed degrades to sliders rather than a broken control.
+      const slots = [...item.slots.values()]
+        .filter(
+          (s): s is { index: number; r: ParamInfo; g: ParamInfo; b: ParamInfo } =>
+            !!(s.r && s.g && s.b),
+        )
+        .sort((a, b) => a.index - b.index);
+      if (item.count && slots.length > 0) {
+        return (
+          <PaletteControl
+            key={`${effectId}:palette`}
+            zoneId={zoneId}
+            slots={slots}
+            count={item.count}
+          />
+        );
+      }
+      const stray = [item.count, ...slots.flatMap((s) => [s.r, s.g, s.b])].filter(
+        (p): p is ParamInfo => !!p,
+      );
+      return stray.map((p) => (
+        <ScalarRow key={`${effectId}:${p.name}`} zoneId={zoneId} param={p} />
+      ));
+    }
+    return null;
+  }
 }

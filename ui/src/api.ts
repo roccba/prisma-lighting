@@ -224,6 +224,7 @@ export interface ZoneInfo {
   name: string;
   color: Rgb;
   dimmer: number; // 0..1
+  speed: number; // real -10..10 (0 = static, negative = reverse)
   solo: boolean;
   blackout: boolean;
 }
@@ -234,6 +235,11 @@ export const mainZones = () => invoke<ZoneInfo[]>("main_zones");
 /** Set a zone's dimmer (the zone-row fader) — changes the output, not the selection. */
 export const setZoneDimmer = (zone: string, value: number) =>
   invoke<void>("main_set_zone_dimmer", { zone, value });
+
+/** Set a zone's velocity multiplier (the zone-card speed fader), real -10..10:
+ *  0 = static, negative = reverse. */
+export const setZoneSpeed = (zone: string, value: number) =>
+  invoke<void>("main_set_zone_speed", { zone, value });
 
 /** Toggle a zone's solo (§3.1). */
 export const setZoneSolo = (zone: string, on: boolean) =>

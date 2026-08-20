@@ -173,6 +173,8 @@ pub struct EngineHandle {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ZoneLiveReadout {
     pub dimmer: f32,
+    /// Velocity multiplier, real `-10..=10` (0 = static, negative = reverse).
+    pub speed: f32,
     pub solo: bool,
     pub blackout: bool,
 }
@@ -485,6 +487,17 @@ impl EngineHandle {
         }
     }
 
+    /// Set a zone's velocity multiplier (the zone-card speed fader), real `-10..=10`:
+    /// 0 = static, positive = forward, negative = REVERSE. Written live through the
+    /// Parameter Tree; the render loop integrates it into the zone's animation phase
+    /// (`zone_content`). Out-of-range slots are ignored.
+    pub fn set_zone_speed(&self, slot: usize, value: f32) {
+        if slot < self.live.zone_count() {
+            self.tree
+                .write_real(&self.live.zone(slot).speed, value, ui_control_source());
+        }
+    }
+
     /// Toggle a zone's solo (M8-SPEC §3.1). Solo elsewhere silences other zones'
     /// *output* but not their `is_active` state (the preview/pads keep them, §4.3).
     pub fn set_zone_solo(&self, slot: usize, on: bool) {
@@ -548,6 +561,7 @@ impl EngineHandle {
         if slot >= self.live.zone_count() {
             return ZoneLiveReadout {
                 dimmer: 0.0,
+                speed: 1.0,
                 solo: false,
                 blackout: false,
             };
@@ -555,6 +569,7 @@ impl EngineHandle {
         let z = self.live.zone(slot);
         ZoneLiveReadout {
             dimmer: z.dimmer.read_real().unwrap_or(0.0),
+            speed: z.speed.read_real().unwrap_or(1.0),
             solo: z.solo.read_real().unwrap_or(0.0) > 0.5,
             blackout: z.blackout.read_real().unwrap_or(0.0) > 0.5,
         }
