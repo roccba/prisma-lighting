@@ -274,6 +274,96 @@ fn sparkle_is_sparse_and_animates() {
 }
 
 #[test]
+fn color_scroll_bands_come_from_the_palette() {
+    // With a two-colour palette (red, blue), a static wide scroll paints red at the
+    // band start and blue at its middle — the colours the operator chose, not a fixed
+    // ramp. Proves the palette actually feeds the shader.
+    let gpu = software_gpu();
+    let tree = ParameterTree::with_defaults();
+    let mut cs = EffectInstance::new(gpu, &tree, "/fx/cs", &effects::color_scroll());
+    // write_real: these are REAL values (count 2, width 1), not normalized.
+    let set = |p: &str, v: f32| {
+        let h = tree.resolve(&format!("/fx/cs/param/{p}")).unwrap();
+        tree.write_real(&h, v, ui());
+    };
+    set("speed", 0.0);
+    set("width", 1.0);
+    set("offset", 0.0);
+    set("direction", 0.0); // Right
+    set("count", 2.0);
+    set("c0r", 1.0);
+    set("c0g", 0.0);
+    set("c0b", 0.0); // red
+    set("c1r", 0.0);
+    set("c1g", 0.0);
+    set("c1b", 1.0); // blue
+
+    let f = render_2d(gpu, &mut cs, &clock_at(0.0), 8, 1);
+    // Left edge (phase ~0) is the first palette colour: red-dominant.
+    assert!(
+        f[0][0] > f[0][2],
+        "band start should be red-dominant, got {:?}",
+        f[0]
+    );
+    // A cell near the middle (phase ~0.5) reaches the second colour: blue-dominant.
+    assert!(
+        f.iter().any(|p| p[2] > p[0]),
+        "the palette's blue must appear somewhere along the band: {f:?}"
+    );
+}
+
+#[test]
+fn color_scroll_scrolls_over_show_time_and_turns_with_direction() {
+    let gpu = software_gpu();
+    let tree = ParameterTree::with_defaults();
+    let mut cs = EffectInstance::new(gpu, &tree, "/fx/cs2", &effects::color_scroll());
+    let set = |p: &str, v: f32| {
+        let h = tree.resolve(&format!("/fx/cs2/param/{p}")).unwrap();
+        tree.write_real(&h, v, ui());
+    };
+    set("width", 1.0);
+    set("offset", 0.0);
+    // Real 1.0 cycle/s: half a second is half a cycle (a visible move, not an integer
+    // shift that would look unchanged).
+    set("speed", 1.0);
+
+    // Right: the pattern varies along x and is constant down each column.
+    set("direction", 0.0);
+    let right = render_2d(gpu, &mut cs, &clock_at(0.0), 6, 6);
+    let at = |v: &[[f32; 4]], x: usize, y: usize| v[y * 6 + x][0];
+    for x in 0..6 {
+        assert!(
+            (at(&right, x, 0) - at(&right, x, 5)).abs() < EPS,
+            "Right scroll: column {x} should be constant down y"
+        );
+    }
+    assert!(
+        (0..6).any(|x| (at(&right, x, 0) - at(&right, 0, 0)).abs() > 0.02),
+        "Right scroll must vary across x"
+    );
+
+    // Scrolls over show time.
+    let later = render_2d(gpu, &mut cs, &clock_at(0.5), 6, 6);
+    assert!(
+        right
+            .iter()
+            .zip(&later)
+            .any(|(a, b)| (a[0] - b[0]).abs() > 0.02),
+        "colour scroll must move over show time"
+    );
+
+    // Down (rose index 2 → norm 2/7): now constant across each row, varying down y.
+    set("direction", 2.0 / 7.0);
+    let down = render_2d(gpu, &mut cs, &clock_at(0.0), 6, 6);
+    for y in 0..6 {
+        assert!(
+            (at(&down, 0, y) - at(&down, 5, y)).abs() < EPS,
+            "Down scroll: row {y} should be constant across x"
+        );
+    }
+}
+
+#[test]
 fn the_four_core_effects_are_distinguishable_patterns() {
     // The milestone asks for three or four core effects. Four that look alike
     // would not let anyone judge a preview, so assert they actually differ.

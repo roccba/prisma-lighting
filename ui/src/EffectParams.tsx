@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { effectPanel, setParam, type EffectPanelInfo, type ParamInfo } from "./api";
 import { ColorControl } from "./ColorControl";
 import { Fader } from "./Fader";
+import { PaletteControl } from "./PaletteControl";
 import { Rose } from "./Rose";
 
 // The effect parameter panel for the SELECTED zone (M8-SPEC §3.5). It builds itself from
@@ -21,14 +22,26 @@ interface EffectParamsProps {
 // A panel item: the grouping of raw manifest params into rendered controls. Colour
 // channels sharing a group collapse into one colour item (placed where the group's first
 // channel appears); everything else stays one-to-one.
+type PaletteSlot = { index: number; r?: ParamInfo; g?: ParamInfo; b?: ParamInfo };
 type PanelItem =
   | { kind: "scalar"; param: ParamInfo }
   | { kind: "direction"; param: ParamInfo }
-  | { kind: "color"; group: string; r?: ParamInfo; g?: ParamInfo; b?: ParamInfo };
+  | { kind: "color"; group: string; r?: ParamInfo; g?: ParamInfo; b?: ParamInfo }
+  | { kind: "palette"; slots: Map<number, PaletteSlot>; count?: ParamInfo };
 
 function buildItems(params: ParamInfo[]): PanelItem[] {
   const items: PanelItem[] = [];
   const colorItems = new Map<string, Extract<PanelItem, { kind: "color" }>>();
+  // A single palette per effect (the only shape today); created where its count or its
+  // first channel appears, and filled as the remaining palette params stream past.
+  let palette: Extract<PanelItem, { kind: "palette" }> | undefined;
+  const ensurePalette = () => {
+    if (!palette) {
+      palette = { kind: "palette", slots: new Map() };
+      items.push(palette);
+    }
+    return palette;
+  };
   for (const p of params) {
     if (p.role === "color" && p.group) {
       let item = colorItems.get(p.group);
@@ -40,6 +53,19 @@ function buildItems(params: ParamInfo[]): PanelItem[] {
       if (p.channel === "r") item.r = p;
       else if (p.channel === "g") item.g = p;
       else if (p.channel === "b") item.b = p;
+    } else if (p.role === "palette_count") {
+      ensurePalette().count = p;
+    } else if (p.role === "palette" && p.group !== null) {
+      const item = ensurePalette();
+      const idx = parseInt(p.group, 10);
+      let slot = item.slots.get(idx);
+      if (!slot) {
+        slot = { index: idx };
+        item.slots.set(idx, slot);
+      }
+      if (p.channel === "r") slot.r = p;
+      else if (p.channel === "g") slot.g = p;
+      else if (p.channel === "b") slot.b = p;
     } else if (p.role === "direction") {
       items.push({ kind: "direction", param: p });
     } else {
@@ -142,6 +168,31 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
                   param={item.param}
                 />
               );
+            }
+            if (item.kind === "palette") {
+              // Only complete slots (r+g+b present) with a count param form the editor;
+              // anything malformed degrades to sliders rather than a broken control.
+              const slots = [...item.slots.values()]
+                .filter((s): s is { index: number; r: ParamInfo; g: ParamInfo; b: ParamInfo } =>
+                  !!(s.r && s.g && s.b),
+                )
+                .sort((a, b) => a.index - b.index);
+              if (item.count && slots.length > 0) {
+                return (
+                  <PaletteControl
+                    key={`${panel.effect_id}:palette`}
+                    zoneId={zoneId}
+                    slots={slots}
+                    count={item.count}
+                  />
+                );
+              }
+              const stray = [item.count, ...slots.flatMap((s) => [s.r, s.g, s.b])].filter(
+                (p): p is ParamInfo => !!p,
+              );
+              return stray.map((p) => (
+                <ScalarRow key={`${panel.effect_id}:${p.name}`} zoneId={zoneId} param={p} />
+              ));
             }
             return (
               <ScalarRow

@@ -538,3 +538,15 @@ body {
 .pr-rose-btn { background: var(--btn-face); border: 1px solid var(--btn-border); border-bottom-color: var(--btn-border-dark); color: var(--text); border-radius: var(--r-sm); cursor: pointer; font-size: 12px; line-height: 1; padding: 0; }
 .pr-rose-btn:hover { background: var(--btn-face-hover); }
 .pr-rose-btn.is-active { border-color: var(--accent); color: var(--accent-text); box-shadow: 0 0 0 1px var(--accent) inset; }
+
+/* Palette editor (Scroll de color) — a row of editable colour slots + add/remove. */
+.pr-palette-row { width: auto; grid-template-columns: none; grid-template-areas: "label" "palette"; }
+.pr-palette { grid-area: palette; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.pr-palette-slot { position: relative; width: 24px; height: 30px; }
+.pr-palette-slot.is-dragging { opacity: .5; }
+.pr-palette-swatch { display: block; width: 100%; height: 100%; position: relative; border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); cursor: grab; overflow: hidden; box-shadow: inset 0 0 0 1px rgba(0,0,0,.35); }
+.pr-palette-swatch input[type="color"] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: none; padding: 0; cursor: pointer; }
+.pr-palette-remove { position: absolute; top: -5px; right: -5px; width: 14px; height: 14px; display: none; align-items: center; justify-content: center; padding: 0; font-size: 11px; line-height: 1; background: var(--btn-face); color: var(--text); border: 1px solid var(--btn-border-dark); border-radius: 50%; cursor: pointer; }
+.pr-palette-slot:hover .pr-palette-remove { display: flex; }
+.pr-palette-add { width: 24px; height: 30px; padding: 0; font-size: 15px; line-height: 1; background: var(--btn-face); color: var(--text); border: 1px dashed var(--btn-border); border-radius: var(--r-sm); cursor: pointer; }
+.pr-palette-add:hover { background: var(--btn-face-hover); border-color: var(--accent); color: var(--accent-text); }
