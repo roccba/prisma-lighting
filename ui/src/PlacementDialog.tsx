@@ -3,19 +3,17 @@ import {
   fixtureTypes,
   nextFreeAddress,
   placeFixtures,
-  previewPlacement,
   type Direction,
   type EditorState,
   type FixtureType,
   type Patch,
   type PlacementSpec,
-  type PreviewRun,
 } from "./api";
 
 // The "Add fixtures" dialog (screenshot 06): Fixture · Placement · Addressing,
 // into the ACTIVE zone (§4.1). Signal DIRECTION is separate from orientation and
-// all eight are reachable (§4.1). A live signal-path preview shows the result
-// before applying. Z and rotation exist but are inert while 2-D.
+// all eight are reachable (§4.1). A schematic signal-direction preview shows the
+// routing before applying. Z and rotation exist but are inert while 2-D.
 
 interface Props {
   patch: Patch;
@@ -35,100 +33,148 @@ const DIRECTIONS: { id: Direction; label: string }[] = [
   { id: "UpLeft", label: "↖  Diagonal" },
 ];
 
-function NumField(props: { label: string; value: number; onChange?: (n: number) => void; min?: number; disabled?: boolean }) {
+/** A numeric field that can be CLEARED and typed over (a default 0 you cannot delete
+ *  is what made these fields annoying). Keeps a local text draft: while it is empty the
+ *  parent value is untouched, and it reverts to the last value on blur if still empty. */
+function NumField(props: {
+  label: string;
+  value: number;
+  onChange?: (n: number) => void;
+  min?: number;
+  disabled?: boolean;
+}) {
+  const [draft, setDraft] = useState(String(props.value));
+  useEffect(() => {
+    if (parseInt(draft, 10) !== props.value) setDraft(String(props.value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.value]);
+
+  const clampEmit = (raw: string) => {
+    const n = parseInt(raw, 10);
+    if (Number.isNaN(n)) return;
+    const c = props.min != null && n < props.min ? props.min : n;
+    props.onChange?.(c);
+  };
+
   return (
     <label className="field">
       <span>{props.label}</span>
       <input
         type="number"
-        value={Number.isFinite(props.value) ? props.value : 0}
+        value={draft}
         min={props.min}
         disabled={props.disabled}
-        onChange={(e) => props.onChange?.(parseInt(e.target.value, 10) || 0)}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          clampEmit(e.target.value);
+        }}
+        onBlur={() => {
+          // Empty (or garbage) on blur → snap back to the parent's current value.
+          if (Number.isNaN(parseInt(draft, 10))) setDraft(String(props.value));
+        }}
       />
     </label>
   );
 }
 
-/**
- * The signal path a placement would produce (§4.1), drawn like professional consoles's "Vista previa
- * de direccionamiento" (screenshot 12): ONE continuous serpentine stroke tracing the
- * cable's route through every fixture in signal order — up a column, across, down the
- * next — with a marker at the start end and an arrowhead at the finish. This is what
- * makes the snake and the starting corner legible; per-fixture arrows are gone.
- */
-function PreviewCanvas({ runs }: { runs: PreviewRun[] }) {
+/** Normalised vertices (0..1) of a SCHEMATIC signal route for a given direction + snake
+ *  — a fixed-resolution illustration of *where the signal starts and which way it runs*,
+ *  NOT one mark per fixture. This is the professional consoles "Vista previa de direccionamiento" idea:
+ *  the picture shows direction, never quantity, so a 4-pixel and a 10 000-pixel placement
+ *  draw the same cheap schematic (and the dialog never chokes rendering thousands). */
+function schematicPoints(direction: Direction, snake: boolean): { x: number; y: number }[] {
+  const diagonal: Partial<Record<Direction, { x: number; y: number }[]>> = {
+    DownRight: [{ x: 0, y: 0 }, { x: 1, y: 1 }],
+    DownLeft: [{ x: 1, y: 0 }, { x: 0, y: 1 }],
+    UpRight: [{ x: 0, y: 1 }, { x: 1, y: 0 }],
+    UpLeft: [{ x: 1, y: 1 }, { x: 0, y: 0 }],
+  };
+  if (diagonal[direction]) return diagonal[direction]!;
+
+  const vertical = direction === "Up" || direction === "Down";
+  const N = 4; // representative lines — fixed, so the schematic never scales with count
+  const pts: { x: number; y: number }[] = [];
+  for (let i = 0; i < N; i++) {
+    const cross = i / (N - 1); // 0..1 across the lines
+    const forward = !snake || i % 2 === 0; // snake reverses alternate lines (U-bends)
+    const a = forward ? 0 : 1;
+    const b = forward ? 1 : 0;
+    if (vertical) {
+      pts.push({ x: cross, y: a }, { x: cross, y: b });
+    } else {
+      pts.push({ x: a, y: cross }, { x: b, y: cross });
+    }
+  }
+  // Direction sign: Up flips the vertical travel, Left flips the horizontal travel.
+  const flipX = direction === "Left";
+  const flipY = direction === "Up";
+  return pts.map((p) => ({ x: flipX ? 1 - p.x : p.x, y: flipY ? 1 - p.y : p.y }));
+}
+
+/** Draws the schematic route: one blue stroke, a hollow knob at the signal start, an
+ *  arrowhead at the finish (§4.1). Cheap and constant-cost — depends only on direction. */
+function DirectionPreview({ direction, snake }: { direction: Direction; snake: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
     const dpr = window.devicePixelRatio || 1;
-    const w = canvas.clientWidth, h = canvas.clientHeight;
+    const w = canvas.clientWidth,
+      h = canvas.clientHeight;
     canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(h * dpr);
     const ctx = canvas.getContext("2d")!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const css = getComputedStyle(document.documentElement);
+    const accent = css.getPropertyValue("--accent-bright").trim() || "#1F9CFF";
+    const bg = css.getPropertyValue("--bg-input").trim() || "#000";
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = "#0e0f13";
+    ctx.fillStyle = bg;
     ctx.fillRect(0, 0, w, h);
-    if (runs.length === 0) {
-      ctx.fillStyle = "#8a8f9c";
-      ctx.font = "12px system-ui";
-      ctx.textAlign = "center";
-      ctx.fillText("nothing to place", w / 2, h / 2);
-      return;
-    }
 
-    // Signal order: each run is one fixture's start→end; concatenated in order the
-    // vertices form the whole route (the between-fixture segments are the folds).
-    const ordered = [...runs].sort((a, b) => a.order - b.order);
-    const pts: [number, number][] = [];
-    for (const r of ordered) { pts.push(r.start); pts.push(r.end); }
+    const pts = schematicPoints(direction, snake);
+    const m = 22;
+    const X = (x: number) => m + x * (w - 2 * m);
+    const Y = (y: number) => m + y * (h - 2 * m);
 
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const [x, y] of pts) {
-      minX = Math.min(minX, x); minY = Math.min(minY, y);
-      maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
-    }
-    const m = 18;
-    const s = Math.max(1, Math.min((w - 2 * m) / Math.max(1, maxX - minX), (h - 2 * m) / Math.max(1, maxY - minY)));
-    const X = (x: number) => m + (x - minX) * s;
-    const Y = (y: number) => m + (y - minY) * s;
-
-    // One continuous stroke, rounded joins like professional consoles's U-bends.
-    ctx.strokeStyle = "#6aa8ff";
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 3;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
     ctx.beginPath();
-    ctx.moveTo(X(pts[0][0]), Y(pts[0][1]));
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(X(pts[i][0]), Y(pts[i][1]));
+    ctx.moveTo(X(pts[0].x), Y(pts[0].y));
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(X(pts[i].x), Y(pts[i].y));
     ctx.stroke();
 
-    // Start marker — a hollow knob at the signal's origin (professional consoles's rounded start).
-    const [sx0, sy0] = [X(pts[0][0]), Y(pts[0][1])];
-    ctx.fillStyle = "#0e0f13";
+    // Start knob — a hollow circle at the signal origin.
+    ctx.fillStyle = bg;
     ctx.strokeStyle = "#eaf1ff";
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(sx0, sy0, 4, 0, Math.PI * 2);
+    ctx.arc(X(pts[0].x), Y(pts[0].y), 6, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
 
-    // Arrowhead at the very end, along the last segment.
-    const [ex, ey] = [X(pts[pts.length - 1][0]), Y(pts[pts.length - 1][1])];
-    const [px, py] = [X(pts[pts.length - 2][0]), Y(pts[pts.length - 2][1])];
-    const dx = ex - px, dy = ey - py, len = Math.hypot(dx, dy) || 1;
-    const ux = dx / len, uy = dy / len, hs = 7;
-    ctx.strokeStyle = "#6aa8ff";
-    ctx.lineWidth = 2;
+    // Arrowhead at the finish, along the last segment.
+    const a = pts[pts.length - 1],
+      b = pts[pts.length - 2];
+    const ex = X(a.x),
+      ey = Y(a.y);
+    const dx = ex - X(b.x),
+      dy = ey - Y(b.y);
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len,
+      uy = dy / len,
+      hs = 12;
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.moveTo(ex, ey);
     ctx.lineTo(ex - ux * hs - uy * hs * 0.5, ey - uy * hs + ux * hs * 0.5);
     ctx.moveTo(ex, ey);
     ctx.lineTo(ex - ux * hs + uy * hs * 0.5, ey - uy * hs - ux * hs * 0.5);
     ctx.stroke();
-  }, [runs]);
+  }, [direction, snake]);
   return <canvas ref={ref} className="preview-canvas" />;
 }
 
@@ -142,7 +188,14 @@ export function PlacementDialog({ patch, activeZone, onPlaced, onClose }: Props)
   const [offsetX, setOffsetX] = useState(2);
   const [offsetY, setOffsetY] = useState(2);
   const [startX, setStartX] = useState(0);
-  const [startY, setStartY] = useState(0);
+  // Default the start row to a FREE band below the existing rig, so a new zone's fixtures
+  // land in empty workspace instead of stacking on top of what is already placed (the
+  // operator can still aim anywhere). Computed once from the patch when the dialog opens.
+  const [startY, setStartY] = useState(() => {
+    let maxY = -Infinity;
+    for (const f of patch.fixtures) for (const p of f.pixels) maxY = Math.max(maxY, p.position[1]);
+    return Number.isFinite(maxY) ? Math.ceil(maxY) + 2 : 0;
+  });
   const [direction, setDirection] = useState<Direction>("Down");
   const [snake, setSnake] = useState(false);
   const [universe, setUniverse] = useState(1);
@@ -150,7 +203,6 @@ export function PlacementDialog({ patch, activeZone, onPlaced, onClose }: Props)
   const [channelOffset, setChannelOffset] = useState(0);
   const [universeOffset, setUniverseOffset] = useState(0);
   const [perUniverse, setPerUniverse] = useState(0);
-  const [runs, setRuns] = useState<PreviewRun[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -159,7 +211,10 @@ export function PlacementDialog({ patch, activeZone, onPlaced, onClose }: Props)
   useEffect(() => {
     fixtureTypes().then(setTypes).catch(() => setTypes([]));
     nextFreeAddress()
-      .then(([u, c]) => { setUniverse(u); setChannel(c); })
+      .then(([u, c]) => {
+        setUniverse(u);
+        setChannel(c);
+      })
       .catch(() => {});
   }, []);
 
@@ -183,12 +238,6 @@ export function PlacementDialog({ patch, activeZone, onPlaced, onClose }: Props)
       zone: activeZone,
     };
   }, [types, typeIndex, namePrefix, startNumber, countX, countY, offsetX, offsetY, startX, startY, direction, snake, universe, channel, channelOffset, universeOffset, perUniverse, activeZone]);
-
-  // Live signal-path preview.
-  useEffect(() => {
-    if (!spec) return;
-    previewPlacement(spec).then(setRuns).catch(() => setRuns([]));
-  }, [spec]);
 
   const submit = async () => {
     if (!spec) return;
@@ -277,8 +326,8 @@ export function PlacementDialog({ patch, activeZone, onPlaced, onClose }: Props)
         </div>
 
         <div className="preview-section">
-          <div className="preview-label">Signal path preview</div>
-          <PreviewCanvas runs={runs} />
+          <div className="preview-label">Signal direction preview</div>
+          <DirectionPreview direction={direction} snake={snake} />
         </div>
 
         {error && <div className="modal-error">{error}</div>}

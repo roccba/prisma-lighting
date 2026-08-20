@@ -101,9 +101,12 @@ export default function MainWindow() {
               <div className="pr-region-title">
                 Grilla{selectedZone ? ` — ${selectedZone.name}` : ""}
               </div>
+              {/* No `key={zone.id}` — keying would REMOUNT the grid on every zone switch
+                  (unmount → blank → re-fetch), which is why the grid "disappeared" and felt
+                  slow. SceneGrid re-fetches in place on a zoneId change (its `useEffect`),
+                  so it stays mounted and just swaps its cells. */}
               {selectedZone ? (
                 <SceneGrid
-                  key={selectedZone.id}
                   zoneId={selectedZone.id}
                   onActiveChange={() => setGridRev((r) => r + 1)}
                 />
@@ -116,7 +119,7 @@ export default function MainWindow() {
                 Preview{selectedZone ? ` — ${selectedZone.name}` : ""}
               </div>
               {selectedZone ? (
-                <LargePreview key={selectedZone.id} zoneId={selectedZone.id} />
+                <LargePreview zoneId={selectedZone.id} />
               ) : (
                 <div className="pr-placeholder-body">Seleccioná una zona</div>
               )}

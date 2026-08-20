@@ -1,4 +1,5 @@
 import type { Patch } from "./api";
+import { Dropdown } from "./Dropdown";
 
 // The zone selector is the organising control of the editor (§6): with a single
 // zone it is a no-op and the editor feels like professional consoles; complexity appears only
@@ -44,111 +45,118 @@ interface Props {
   onHighlightMode: (m: HighlightMode) => void;
 }
 
+// Segmented control (View / Highlight modes): a tight row of `.pr-tabbtn`, the active
+// one on the accent. Presentation only.
+function Segmented<T extends string>(props: {
+  value: T;
+  options: { id: T; label: string; title: string }[];
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div className="pr-segmented">
+      {props.options.map((o) => (
+        <button
+          key={o.id}
+          title={o.title}
+          className={`pr-btn pr-tabbtn${o.id === props.value ? " is-active" : ""}`}
+          onClick={() => props.onChange(o.id)}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function Toolbar(p: Props) {
   const active = p.patch.zones.find((z) => z.id === p.activeZone);
+  const zoneOptions = p.patch.zones.map((z) => ({
+    value: z.id,
+    label: z.name,
+    swatch: `rgb(${z.display_color.join(",")})`,
+  }));
+
   return (
-    <div className="toolbar">
-      <div className="tb-group">
-        <button className="btn" onClick={p.onOpen} title="Open .prismap (Ctrl+O)">
+    <div className="pr-toolbar">
+      {/* File */}
+      <div className="pr-toolbar-group">
+        <button className="pr-btn" onClick={p.onOpen} title="Open .prismap (Ctrl+O)">
           Open
         </button>
-        <button className="btn" onClick={p.onSave} title="Save .prismap (Ctrl+S)">
+        <button className="pr-btn" onClick={p.onSave} title="Save .prismap (Ctrl+S)">
           Save
         </button>
       </div>
 
-      <div className="tb-sep" />
-
-      <div className="tb-group">
-        <button className="btn" onClick={p.onAddFixtures}>
+      {/* Fixtures / edit */}
+      <div className="pr-toolbar-group sep">
+        <button
+          className="pr-btn"
+          onClick={p.onAddFixtures}
+          disabled={!active}
+          title={active ? "Add fixtures into the selected zone" : "Create a zone first — fixtures live in a zone"}
+        >
           + Add fixtures
         </button>
-        <button className="btn" onClick={p.onLibrary} title="Manage the fixture library (§3.2)">
+        <button className="pr-btn" onClick={p.onLibrary} title="Manage the fixture library (§3.2)">
           Library…
         </button>
-        <button className="btn" onClick={p.onDelete} disabled={!p.canDelete}>
+        <button className="pr-btn" onClick={p.onDelete} disabled={!p.canDelete}>
           Delete
         </button>
-        <button className="btn" onClick={p.onUndo} disabled={!p.canUndo} title="Undo">
+        <button className="pr-btn pr-btn-icon" onClick={p.onUndo} disabled={!p.canUndo} title="Undo">
           ↶
         </button>
-        <button className="btn" onClick={p.onRedo} disabled={!p.canRedo} title="Redo">
+        <button className="pr-btn pr-btn-icon" onClick={p.onRedo} disabled={!p.canRedo} title="Redo">
           ↷
         </button>
       </div>
 
-      <div className="tb-sep" />
-
-      <label className="tb-group">
-        <span className="tb-label">Zone</span>
-        <span className="tb-select">
-          {active && (
-            <span className="swatch" style={{ background: `rgb(${active.display_color.join(",")})` }} />
-          )}
-          <select value={p.activeZone} onChange={(e) => p.onActiveZone(e.target.value)}>
-            {p.patch.zones.map((z) => (
-              <option key={z.id} value={z.id}>
-                {z.name}
-              </option>
-            ))}
-          </select>
-        </span>
-        <button className="btn" onClick={p.onAddZone} title="Add a new zone">
+      {/* Zone context — the organising control (§6) */}
+      <div className="pr-toolbar-group sep">
+        <span className="pr-toolbar-label">Zone</span>
+        <Dropdown
+          value={p.activeZone}
+          options={zoneOptions}
+          onChange={p.onActiveZone}
+          minWidth={150}
+          aria-label="Active zone"
+        />
+        <button className="pr-btn" onClick={p.onAddZone} title="Add a new zone">
           + Zona
         </button>
         <button
-          className="btn"
+          className="pr-btn"
           onClick={() => p.onRemoveZone(p.activeZone)}
-          disabled={!active || p.patch.zones.length <= 1}
-          title="Remove the selected zone (must have no fixtures)"
+          disabled={!active}
+          title="Remove the selected zone (must have no fixtures). The patch may have zero zones."
         >
           − Zona
         </button>
-      </label>
-      {active && (
-        <button
-          className="btn"
-          onClick={p.onEditMatrix}
-          title={`Matrix settings — ${active.mapping_size[0]}×${active.mapping_size[1]} (render resolution)`}
-        >
-          Matrix… {active.mapping_size[0]}×{active.mapping_size[1]}
-        </button>
-      )}
-
-      <div className="tb-group">
-        <span className="tb-label">View</span>
-        <div className="segmented">
-          {MODES.map((m) => (
-            <button
-              key={m.id}
-              title={m.title}
-              className={m.id === p.viewMode ? "seg active" : "seg"}
-              onClick={() => p.onViewMode(m.id)}
-            >
-              {m.label}
-            </button>
-          ))}
-        </div>
+        {active && (
+          <button
+            className="pr-btn"
+            onClick={p.onEditMatrix}
+            title={`Render resolution of zone ${active.name} — ${active.mapping_size[0]}×${active.mapping_size[1]} (the detail its effects run at; the world auto-fits to the rig)`}
+          >
+            Resolution… {active.mapping_size[0]}×{active.mapping_size[1]}
+          </button>
+        )}
       </div>
 
-      <div className="tb-group">
-        <span className="tb-label" title="Light the selected fixtures on the real rig (§7)">
+      {/* View modes (§5.3) */}
+      <div className="pr-toolbar-group sep">
+        <span className="pr-toolbar-label">View</span>
+        <Segmented value={p.viewMode} options={MODES} onChange={p.onViewMode} />
+      </div>
+
+      {/* Highlight on the real rig (§7) */}
+      <div className="pr-toolbar-group sep">
+        <span className="pr-toolbar-label" title="Light the selected fixtures on the real rig (§7)">
           Highlight
         </span>
-        <div className="segmented">
-          {HIGHLIGHT_MODES.map((m) => (
-            <button
-              key={m.id}
-              title={m.title}
-              className={m.id === p.highlightMode ? "seg active" : "seg"}
-              onClick={() => p.onHighlightMode(m.id)}
-            >
-              {m.label}
-            </button>
-          ))}
-        </div>
+        <Segmented value={p.highlightMode} options={HIGHLIGHT_MODES} onChange={p.onHighlightMode} />
       </div>
-
     </div>
   );
 }

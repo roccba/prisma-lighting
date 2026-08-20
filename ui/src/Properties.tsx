@@ -52,7 +52,9 @@ export function Properties({ patch, selection, aggregate }: Props) {
       <Row label="Zones" value={`${patch.zones.length}`} />
       <Row label="Pixels" value={`${pixels}`} />
       <Row label="DMX channels" value={`${channels}`} />
-      <Row label="Matrix" value={`${patch.matrix_size[0]} × ${patch.matrix_size[1]}`} />
+      {/* The world/venue canvas — auto-fitted to the rig (not an operator knob). Shown
+          as info only; distinct from a zone's own render resolution (toolbar → Resolution…). */}
+      <Row label="World (auto)" value={`${patch.matrix_size[0]} × ${patch.matrix_size[1]}`} />
       <div className="zones-legend">
         {patch.zones.map((z) => (
           <div key={z.id} className="legend-row">

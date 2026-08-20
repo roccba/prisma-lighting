@@ -58,18 +58,26 @@ fn zone(id: u128, name: &str) -> Zone {
 }
 
 /// A valid base patch: two zones, three RGB fixtures, no address collisions.
+///
+/// `matrix_size` is a *derived* fact (the world auto-fits to the rig — see
+/// [`Patch::fit_matrix_size`], which `PatchDraft` applies on load and after every
+/// edit), so the base fits itself here: the fitted world is what a draft built from
+/// this patch produces, keeping the undo-to-exact-start assertions comparing like for
+/// like (the six pixels span cells 0..=5, so the fitted world is `[6, 1, 1]`).
 fn base_patch() -> Patch {
-    Patch {
+    let mut p = Patch {
         id: Uuid::from_u128(0x1),
         name: "editor test".into(),
-        matrix_size: [8, 1, 1],
+        matrix_size: [1, 1, 1],
         fixtures: vec![
             fixture(FA, ZL, 1, 0.0),
             fixture(FB, ZR, 20, 2.0),
             fixture(FC, ZL, 40, 4.0),
         ],
         zones: vec![zone(ZL, "left"), zone(ZR, "right")],
-    }
+    };
+    p.fit_matrix_size();
+    p
 }
 
 /// A fresh fixture with a unique id (for insertion), addressed clear of the base.

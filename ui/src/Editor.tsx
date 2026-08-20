@@ -20,8 +20,8 @@ import { Canvas } from "./Canvas";
 import { FixtureList } from "./FixtureList";
 import { LibraryManager } from "./LibraryManager";
 import { MatrixDialog } from "./MatrixDialog";
+import { NewZoneDialog } from "./NewZoneDialog";
 import { PlacementDialog } from "./PlacementDialog";
-import { Preview } from "./Preview";
 import { Properties } from "./Properties";
 import { Toolbar, type HighlightMode, type ViewMode } from "./Toolbar";
 import { WireFaults } from "./WireFaults";
@@ -43,6 +43,7 @@ export default function Editor() {
   const [modalOpen, setModalOpen] = useState(false);
   const [matrixOpen, setMatrixOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [newZoneOpen, setNewZoneOpen] = useState(false);
   const [currentPath, setCurrentPath] = useState<string | null>(null);
 
   useEffect(() => {
@@ -199,16 +200,7 @@ export default function Editor() {
         patch={patch}
         activeZone={activeZone}
         onActiveZone={setActiveZone}
-        onAddZone={async () => {
-          try {
-            const s = await addZone("");
-            setEditor(s);
-            const added = s.patch.zones[s.patch.zones.length - 1];
-            if (added) setActiveZone(added.id);
-          } catch (e) {
-            setNotice(String(e));
-          }
-        }}
+        onAddZone={() => setNewZoneOpen(true)}
         onRemoveZone={async (id) => {
           try {
             const s = await removeZone(id);
@@ -243,7 +235,13 @@ export default function Editor() {
 
       <div className="body">
         <aside className="left">
-          <FixtureList patch={patch} selection={selection} onSelectionChange={setSelection} />
+          <FixtureList
+            patch={patch}
+            selection={selection}
+            onSelectionChange={setSelection}
+            activeZone={activeZone}
+            onActiveZone={setActiveZone}
+          />
         </aside>
         <main className="center">
           <Canvas
@@ -258,7 +256,6 @@ export default function Editor() {
         </main>
         <aside className="right">
           <Properties patch={patch} selection={selection} aggregate={aggregate} />
-          <Preview />
         </aside>
       </div>
 
@@ -280,6 +277,24 @@ export default function Editor() {
       )}
 
       {libraryOpen && <LibraryManager onClose={() => setLibraryOpen(false)} />}
+
+      {newZoneOpen && (
+        <NewZoneDialog
+          existingNames={patch.zones.map((z) => z.name)}
+          onClose={() => setNewZoneOpen(false)}
+          onCreate={async (name) => {
+            setNewZoneOpen(false);
+            try {
+              const s = await addZone(name);
+              setEditor(s);
+              const added = s.patch.zones[s.patch.zones.length - 1];
+              if (added) setActiveZone(added.id);
+            } catch (e) {
+              setNotice(String(e));
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

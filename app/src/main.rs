@@ -160,6 +160,7 @@ fn grid_dto(zs: &ZoneShow) -> Vec<CellInfo> {
 fn build_show() -> Show {
     let mut patch = prisma_editor::samples::wedding_rig();
     patch.fill_zone_members_from_ownership();
+    patch.fit_matrix_size(); // world = the rig's bounding box, a derived fact (not stored)
     let mut show = Show::new("Wedding", patch);
     // One effect per zone, cycled — enough variety to judge the row at a glance. Each
     // zone gets a grid of assignable cells with its initial effect in cell 0 (active).
@@ -437,12 +438,34 @@ const ZONE_COLORS: [[u8; 3]; 6] = [
 #[tauri::command]
 fn editor_add_zone(state: State<AppState>, name: String) -> Result<EditorState, String> {
     let mut draft = state.draft.lock().unwrap();
-    let at = draft.patch().zones.len();
-    let name = if name.trim().is_empty() {
-        format!("Zona {}", at + 1)
-    } else {
-        name.trim().to_string()
+    // Zone names must be unique (case-insensitive, trimmed). An empty name auto-generates
+    // a unique "Zona N" (picking the first free N, not `len()+1` which collided after a
+    // delete); a provided name that already exists is rejected so two zones never share a
+    // name and get confused for one another.
+    let existing: Vec<String> = draft
+        .patch()
+        .zones
+        .iter()
+        .map(|z| z.name.trim().to_lowercase())
+        .collect();
+    let name = {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            let mut n = existing.len() + 1;
+            loop {
+                let cand = format!("Zona {n}");
+                if !existing.contains(&cand.to_lowercase()) {
+                    break cand;
+                }
+                n += 1;
+            }
+        } else if existing.contains(&trimmed.to_lowercase()) {
+            return Err(format!("Ya existe una zona llamada «{trimmed}»."));
+        } else {
+            trimmed.to_string()
+        }
     };
+    let at = draft.patch().zones.len();
     let zone = Zone {
         id: Uuid::new_v4(),
         name,
@@ -502,8 +525,20 @@ fn editor_preview_port(state: State<AppState>) -> u16 {
 /// `layout-changed` event tells the main window to re-fetch the (possibly changed) zones.
 fn apply_editor_draft(app: &AppHandle, resume: bool) -> Result<(), String> {
     let state = app.state::<AppState>();
-    // Adopt the edited patch into the running show. The render path needs Zone::members
+
+    // Build the candidate patch and VALIDATE it BEFORE touching the running engine or
+    // the show. `recompile_show` tears the old engine down *before* it assembles the new
+    // one, so a patch that fails to compile would leave the app with no engine at all — a
+    // dead show. Compiling here first means an invalid edit is rejected with the live
+    // engine untouched (it keeps running); only a genuine post-validation assembly fault
+    // (e.g. GPU) can now reach the teardown path. The render path needs Zone::members
     // (the editor only tracks fixture→zone ownership), so derive them first.
+    let mut patch = state.draft.lock().unwrap().patch().clone();
+    patch.fill_zone_members_from_ownership();
+    patch.fit_matrix_size(); // world stays derived from the rig on every apply-to-live
+    patch.compile().map_err(|e| e.to_string())?;
+
+    // Adopt the edited patch into the running show.
     let show = {
         let mut show = state.show.lock().unwrap();
         // Preserve live state across the recompile (which rebuilds the Parameter Tree):
@@ -541,8 +576,6 @@ fn apply_editor_draft(app: &AppHandle, resume: bool) -> Result<(), String> {
                 }
             }
         }
-        let mut patch = state.draft.lock().unwrap().patch().clone();
-        patch.fill_zone_members_from_ownership();
         // Reconcile the per-zone grids to the new zone set: one ZoneShow per patch zone,
         // in patch order, keeping an existing zone's grid/live by id, an empty one for a
         // newly added zone, and dropping a removed zone's. This keeps `Show` a bijection
@@ -558,6 +591,10 @@ fn apply_editor_draft(app: &AppHandle, resume: bool) -> Result<(), String> {
                 None => {
                     let mut zs = ZoneShow::new(pz.id);
                     zs.grid = (0..GRID_CELLS).map(|_| Cell::empty()).collect();
+                    // A freshly created zone starts LIT (dimmer full) — master defaults to
+                    // full too, so the operator sees the zone's content the moment they
+                    // assign an effect, instead of a black zone that looks broken.
+                    zs.live.dimmer = 1.0;
                     zs
                 }
             })
@@ -819,6 +856,8 @@ fn main_open_editor(app: AppHandle) -> Result<(), String> {
     let win = WebviewWindowBuilder::new(&app, "editor", WebviewUrl::App("index.html".into()))
         .title("Prisma — Editor de Patch")
         .inner_size(1280.0, 800.0)
+        .min_inner_size(1280.0, 800.0)
+        .maximized(true)
         .build()
         .map_err(|e| e.to_string())?;
 

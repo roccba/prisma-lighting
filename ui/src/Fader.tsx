@@ -55,6 +55,16 @@ export function Fader({ value, onChange, onGrabbedChange, ...rest }: FaderProps)
     }
   };
 
+  // Mouse wheel nudges the value (up = raise). Fine step with Shift. preventDefault so
+  // the wheel adjusts the fader instead of scrolling the container it sits in (the zone
+  // row / params panel both scroll horizontally). React wheel handlers are cancelable.
+  const onWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    const step = e.shiftKey ? 0.01 : 0.03;
+    const dir = e.deltaY < 0 ? 1 : -1;
+    onChange(Math.max(0, Math.min(1, v + dir * step)));
+  };
+
   return (
     <div
       className="pr-hslider"
@@ -63,6 +73,7 @@ export function Fader({ value, onChange, onGrabbedChange, ...rest }: FaderProps)
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
+      onWheel={onWheel}
       role="slider"
       aria-valuemin={0}
       aria-valuemax={1}

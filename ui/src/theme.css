@@ -135,6 +135,9 @@ body {
 }
 .pr-btn.is-primary:hover { background: var(--accent-bright); }
 
+/* square icon-only button (HTML .btn-icon) */
+.pr-btn-icon { width: 30px; height: 28px; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+
 /* segmented tabs (button style) */
 .pr-tabbtn { border-radius: 0; border-right: none; padding: 5px 16px; }
 .pr-tabbtn:last-child { border-right: 1px solid var(--btn-border); }
@@ -144,6 +147,7 @@ body {
   background: transparent;
   border: 1px solid transparent;
   color: var(--text);
+  font-family: inherit; /* a <button> would otherwise use the UA font */
   display: flex; flex-direction: column; align-items: center; gap: 3px;
   padding: 5px 10px; min-width: 58px;
   cursor: pointer; border-radius: var(--r-sm);
@@ -152,6 +156,11 @@ body {
 .pr-tbtn:hover { background: var(--btn-face); border-color: var(--btn-border); }
 .pr-tbtn.is-active { background: var(--accent); border-color: var(--accent-bright); color: #fff; }
 .pr-tbtn .pr-ic { font-size: 16px; line-height: 1; }
+
+/* disabled state for the two button primitives (no demo case in the HTML reference) */
+.pr-btn:disabled, .pr-tbtn:disabled { opacity: .4; cursor: default; }
+.pr-btn:disabled:hover { background: var(--btn-face); }
+.pr-tbtn:disabled:hover { background: transparent; border-color: transparent; }
 
 /* ============================================================
    Numeric inputs
@@ -265,8 +274,13 @@ body {
 /* ============================================================
    Toolbar container
    ============================================================ */
-.pr-toolbar { background: linear-gradient(#2b2b2b, #232323); border: 1px solid var(--btn-border-dark); display: flex; gap: 2px; padding: 4px; }
+.pr-toolbar { background: linear-gradient(#2b2b2b, #232323); border: 1px solid var(--btn-border-dark); display: flex; align-items: center; gap: 2px; padding: 4px; }
 .pr-toolbar .sep { border-left: 1px solid var(--divider); margin-left: 4px; padding-left: 14px; }
+/* a labelled cluster of controls inside the toolbar (zone selector, view modes) */
+.pr-toolbar-group { display: flex; align-items: center; gap: 6px; }
+.pr-toolbar-label { font-size: var(--fs-small); color: var(--text-label); text-transform: uppercase; letter-spacing: .05em; }
+/* segmented button row (View / Highlight modes) — `.pr-tabbtn` children join seamlessly */
+.pr-segmented { display: inline-flex; }
 
 /* ============================================================
    Sliders — SHARED console knob (vertical + horizontal)
@@ -362,6 +376,22 @@ body {
 .pr-table tr.is-sel td { background: var(--accent); color: #fff; }
 .pr-table td.num { color: var(--accent-text); font-family: var(--font-mono); text-align: right; }
 .pr-table tr.is-sel td.num { color: #fff; }
+/* inline colour swatch inside a table cell (HTML .swatch-box) */
+.pr-swatch-box { width: 40px; height: 16px; border: 1px solid var(--bg-canvas); display: inline-block; vertical-align: middle; }
+
+/* ------------------------------------------------------------
+   Intentional divergences from prisma-style-system.html (Step 0
+   reconcile): documented so they are not "fixed" back later.
+   - `.pr-table td.num` carries the numeric-value styling that the
+     HTML demo names `td.num-val`; the `.pr-*` API uses `.num`.
+   - The storage-grid demo (`.cellgrid`/`.cell`, HTML ~375) is NOT
+     re-implemented as a primitive: the live scene grid below
+     (`.pr-grid`/`.pr-cell`, §M8) is its real, square, named-cell
+     descendant and owns the `.pr-cell` name deliberately.
+   - `.pr-colorfield .sw` and `.pr-swatch-box` carry no default fill:
+     the colour is always a data value applied inline.
+   - The pixel-P logo/wordmark (HTML ~393) is deferred (re-style §6).
+   ------------------------------------------------------------ */
 
 /* ============================================================
    List rows (fixture list, etc.)
@@ -371,6 +401,8 @@ body {
 .pr-listrow:nth-child(odd)  { background: var(--row-a); }
 .pr-listrow:nth-child(even) { background: var(--row-b); }
 .pr-listrow.is-sel { background: var(--accent); color: #fff; }
+.pr-listrow .zc { width: 10px; height: 10px; border-radius: var(--r-sm); flex: 0 0 auto; }
+.pr-listrow .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pr-listrow .meta { color: var(--text-dim); font-size: var(--fs-tiny); }
 .pr-listrow.is-sel .meta { color: rgba(255,255,255,.7); }
 

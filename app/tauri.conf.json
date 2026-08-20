@@ -12,6 +12,9 @@
         "title": "Prisma",
         "width": 1280,
         "height": 800,
+        "minWidth": 1280,
+        "minHeight": 800,
+        "maximized": true,
         "resizable": true
       }
     ],
