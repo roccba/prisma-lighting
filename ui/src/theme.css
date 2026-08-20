@@ -525,6 +525,22 @@ body {
 .pr-picker-items { display: flex; flex-wrap: wrap; gap: 5px; }
 .pr-picker-item { min-width: 76px; }
 
+/* --- Device manager (network output, screenshot 16) --- */
+.pr-devmgr { min-width: 380px; }
+.pr-devmgr-tabs { display: flex; gap: 2px; padding: 6px 12px 0; border-bottom: 1px solid var(--divider); }
+.pr-devmgr-check { display: flex; align-items: center; gap: 7px; font-size: var(--fs-base); color: var(--text); cursor: pointer; }
+.pr-devmgr-check input { accent-color: var(--accent); }
+.pr-devmgr-field { display: flex; align-items: center; gap: 10px; }
+.pr-devmgr-label { flex: 0 0 78px; font-size: var(--fs-small); color: var(--text-label); }
+.pr-devmgr-input { flex: 1 1 auto; min-width: 0; background: var(--bg-input); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); color: var(--text); font-family: var(--font-mono); font-size: var(--fs-base); padding: 5px 7px; outline: none; }
+.pr-devmgr-input:focus { border-color: var(--accent); }
+.pr-devmgr-input:disabled { color: var(--text-dim); background: var(--bg-panel-2); }
+.pr-devmgr-port { flex: 0 0 90px; }
+.pr-devmgr-hint { font-size: var(--fs-small); color: var(--text-dim); line-height: 1.5; }
+.pr-devmgr-hint code { font-family: var(--font-mono); color: var(--text); }
+.pr-devmgr-error { font-size: var(--fs-small); color: var(--accent-text); font-family: var(--font-mono); }
+.pr-devmgr-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--divider); }
+
 /* --- Large preview (M8 step 6 half, §3.4) --- */
 /* The selected zone at real geometry, effect running live. Fills the preview region
    over the app's canvas black; the draw fits the zone into the box each frame. */

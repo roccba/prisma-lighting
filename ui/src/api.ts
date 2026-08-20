@@ -282,6 +282,24 @@ export const setMasterStrobe = (rate: number, duty: number) =>
  *  applies the edits to the running show on close. */
 export const openEditor = () => invoke<void>("main_open_editor");
 
+// --- Device manager (network output, screenshot 16) ---
+
+/** Network output config: where the engine sends DMX. Disabled → the virtual sink;
+ *  enabled → an Art-Net node/broadcast at `artnet_ip:artnet_port`. */
+export interface NetworkConfig {
+  artnet_enabled: boolean;
+  artnet_ip: string;
+  artnet_port: number;
+}
+
+/** Read the current network output config. */
+export const networkGet = () => invoke<NetworkConfig>("main_network_get");
+
+/** Apply a network output config: persists it and recompiles the engine onto the new
+ *  Art-Net target (or the virtual sink when disabled). */
+export const networkSet = (config: NetworkConfig) =>
+  invoke<void>("main_network_set", { config });
+
 /** Save the live show (with its embedded patch) to a `.prisma` file (§5). */
 export const saveShow = (path: string) => invoke<void>("main_save_show", { path });
 /** Open a `.prisma` show and run it (recompiles the engine onto its embedded patch). */

@@ -24,7 +24,7 @@ use prisma_engine::{
 use prisma_patch::{load_patch, save_patch, BlendMode, Diagnostic, Patch, Zone};
 use prisma_preview::sink::WebSocketSink;
 use prisma_render::{AdapterPreference, ColorChannel, ParamRole};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{
     AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
@@ -234,6 +234,85 @@ struct AppState {
     /// is bound per engine, so a recompile never fights the old bind for a fixed port;
     /// the viewer re-queries and reconnects.
     preview_port: Mutex<u16>,
+    /// The network output config (device manager, screenshot 16): where DMX is sent.
+    network: Mutex<NetworkConfig>,
+    /// Where the network config file lives — the per-user app-config dir.
+    network_path: PathBuf,
+}
+
+/// Network output configuration — the device manager (screenshot 16). It decides WHERE
+/// the engine sends DMX: the loopback virtual sink (disabled, the dev default) or a real
+/// **Art-Net** target (enabled). Persisted to the per-user app-config dir so it survives
+/// restarts. First cut: one Art-Net target for **every** universe — a node that takes them
+/// all, or a subnet broadcast address (e.g. `2.255.255.255`); the per-node universe table
+/// (screenshot 16) is the richer later feature (CLAUDE.md Deferred). Universe numbers are
+/// in the packets, so a broadcast or an all-universes node receives every one.
+#[derive(Serialize, Deserialize, Clone)]
+struct NetworkConfig {
+    artnet_enabled: bool,
+    artnet_ip: String,
+    artnet_port: u16,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        // Disabled by default → the virtual sink, so a fresh install behaves exactly as
+        // before. A subnet broadcast is the safe first target to try against real gear.
+        Self {
+            artnet_enabled: false,
+            artnet_ip: "255.255.255.255".into(),
+            artnet_port: 6454,
+        }
+    }
+}
+
+/// The DMX destination for a network config: the configured Art-Net target when enabled
+/// and its IP parses, otherwise the loopback virtual sink. Every universe is sent here.
+fn resolve_target(net: &NetworkConfig) -> SocketAddr {
+    if net.artnet_enabled {
+        if let Ok(ip) = net.artnet_ip.trim().parse::<IpAddr>() {
+            return SocketAddr::new(ip, net.artnet_port);
+        }
+    }
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6454)
+}
+
+/// Write the network config to its file, creating the config directory if needed.
+fn persist_network(path: &Path, net: &NetworkConfig) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_string_pretty(net).map_err(|e| e.to_string())?;
+    std::fs::write(path, json).map_err(|e| e.to_string())
+}
+
+/// Fold the engine's CURRENT live values (master + per-zone) back into the show model, so
+/// a recompile (which rebuilds the Parameter Tree from the show) does not reset the
+/// operator's faders/colours. Keyed by zone slot, valid while `show.zones` still matches
+/// the engine's zone order (true here — the patch is unchanged).
+fn fold_live_into_show(engine: &EngineHandle, show: &mut Show) {
+    let m = engine.live().master();
+    show.master.dimmer = m.dimmer.read_real().unwrap_or(show.master.dimmer);
+    for i in 0..3 {
+        show.master.color[i] = m.color[i].read_real().unwrap_or(show.master.color[i]);
+    }
+    for (slot, zs) in show.zones.iter_mut().enumerate() {
+        if slot >= engine.zone_count() {
+            break;
+        }
+        let z = engine.live().zone(slot);
+        zs.live.dimmer = z.dimmer.read_real().unwrap_or(zs.live.dimmer);
+        for i in 0..3 {
+            zs.live.color_filter[i] = z.color[i].read_real().unwrap_or(zs.live.color_filter[i]);
+        }
+        zs.live.speed_multiplier = z.speed.read_real().unwrap_or(zs.live.speed_multiplier);
+        zs.live.solo = z.solo.read_real().map(|v| v > 0.5).unwrap_or(zs.live.solo);
+        zs.live.blackout = z
+            .blackout
+            .read_real()
+            .map(|v| v > 0.5)
+            .unwrap_or(zs.live.blackout);
+    }
 }
 
 /// Bind a live-preview WebSocket on an OS-assigned port and package it as an engine
@@ -627,7 +706,7 @@ fn apply_editor_draft(app: &AppHandle, resume: bool) -> Result<(), String> {
     // A FRESH preview WebSocket on a new port: port 0 never collides with the still-
     // running old engine's sink, and recompile drops the old one on teardown. The
     // viewer reconnects to the new port (re-queried on reconnect).
-    let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6454);
+    let target = resolve_target(&state.network.lock().unwrap());
     let (config, port) = preview_config(AdapterPreference::Software, target);
     let mut guard = state.engine.lock().unwrap();
     let engine = guard.take().ok_or("engine is not running")?;
@@ -680,7 +759,7 @@ fn main_open_show(app: AppHandle, path: String) -> Result<(), String> {
     show.patch.fit_matrix_size();
     show.patch.compile().map_err(|e| e.to_string())?;
 
-    let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6454);
+    let target = resolve_target(&state.network.lock().unwrap());
     let (config, port) = preview_config(AdapterPreference::Software, target);
     let mut guard = state.engine.lock().unwrap();
     let engine = guard.take().ok_or("engine is not running")?;
@@ -858,6 +937,51 @@ fn main_set_zone_strobe(state: State<AppState>, zone: Uuid, rate: f32, duty: f32
     };
     if let Some(engine) = state.engine.lock().unwrap().as_ref() {
         engine.set_zone_strobe(slot, rate, duty);
+    }
+}
+
+// --- Device manager (network output, screenshot 16) ---
+
+/// The current network output config, for the device manager UI.
+#[tauri::command]
+fn main_network_get(state: State<AppState>) -> NetworkConfig {
+    state.network.lock().unwrap().clone()
+}
+
+/// Apply a network output config: persist it, then **recompile the engine onto the new
+/// target** (reusing the GPU) so DMX starts flowing to the configured Art-Net node
+/// instead of the virtual sink — the point of the device manager (screenshot 16). Live
+/// values are folded into the show first so the retarget does not reset faders. A bad IP
+/// falls back to the virtual sink (never leaves the engine down).
+#[tauri::command]
+fn main_network_set(app: AppHandle, config: NetworkConfig) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    persist_network(&state.network_path, &config)?;
+    *state.network.lock().unwrap() = config.clone();
+
+    let target = resolve_target(&config);
+    let show = {
+        let mut show = state.show.lock().unwrap();
+        if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+            fold_live_into_show(engine, &mut show);
+        }
+        show.clone()
+    };
+    let (cfg, port) = preview_config(AdapterPreference::Software, target);
+    let mut guard = state.engine.lock().unwrap();
+    let engine = guard.take().ok_or("engine is not running")?;
+    match engine.recompile_show(show, cfg) {
+        Ok(new) => {
+            *guard = Some(new);
+            if let Some(port) = port {
+                *state.preview_port.lock().unwrap() = port;
+            }
+            drop(guard);
+            // The preview WebSocket moved to a fresh port; nudge the UI to re-fetch.
+            let _ = app.emit("layout-changed", ());
+            Ok(())
+        }
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -1201,6 +1325,8 @@ fn main() {
             main_zones,
             main_set_zone_dimmer,
             main_set_zone_speed,
+            main_network_get,
+            main_network_set,
             main_set_zone_solo,
             main_set_zone_blackout,
             main_set_zone_strobe,
@@ -1231,11 +1357,23 @@ fn main() {
             // runs its own copy and follows our triggers through the queue.
             let show_state = show.clone();
 
-            // Loopback Art-Net (not broadcast); prefer the real GPU, fall back to
-            // software so the window still opens without a configured Vulkan driver.
-            // Each attempt binds its own preview WebSocket (a failed attempt frees its
-            // port before the next binds).
-            let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6454);
+            // Network output config (device manager): where DMX goes. Loaded from the
+            // per-user app-config dir; a missing/invalid file → defaults (virtual sink),
+            // so a fresh install behaves exactly as before.
+            let network_path = app
+                .path()
+                .app_config_dir()
+                .map_err(|e| format!("no app config dir: {e}"))?
+                .join("network.json");
+            let network = std::fs::read_to_string(&network_path)
+                .ok()
+                .and_then(|json| serde_json::from_str::<NetworkConfig>(&json).ok())
+                .unwrap_or_default();
+
+            // Prefer the real GPU, fall back to software so the window still opens without
+            // a configured Vulkan driver. Each attempt binds its own preview WebSocket (a
+            // failed attempt frees its port before the next binds).
+            let target = resolve_target(&network);
             let (config_hp, port_hp) = preview_config(AdapterPreference::HighPerformance, target);
             let (engine, preview_port) = match Engine::start_show(show.clone(), config_hp) {
                 Ok(engine) => (engine, port_hp),
@@ -1287,6 +1425,8 @@ fn main() {
                 library: Mutex::new(library),
                 library_path,
                 preview_port: Mutex::new(preview_port.unwrap_or(0)),
+                network: Mutex::new(network),
+                network_path,
             });
             Ok(())
         })
