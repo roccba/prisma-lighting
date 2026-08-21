@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { setParam, type ParamInfo } from "./api";
 
-// The 8-direction rose (M8-SPEC §3.5, screenshot 15), reusing the editor's eight signal
+// The 8-direction rose (M8-SPEC §3.5), reusing the editor's eight signal
 // directions. It is WIRED but dormant: no built-in effect declares a `direction` param
 // yet, so the panel never renders one today — it lights up the day an effect's manifest
 // asks for it (that is the whole point of manifest-driven types). The direction is

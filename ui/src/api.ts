@@ -282,7 +282,7 @@ export const setMasterStrobe = (rate: number, duty: number) =>
  *  applies the edits to the running show on close. */
 export const openEditor = () => invoke<void>("main_open_editor");
 
-// --- Device manager (network output, screenshot 16) ---
+// --- Device manager (network output) ---
 
 /** Network output config: where the engine sends DMX. Disabled → the virtual sink;
  *  enabled → an Art-Net node/broadcast at `artnet_ip:artnet_port`. */
@@ -316,7 +316,7 @@ export interface CellInfo {
   active: boolean;
 }
 
-/** One entry the effect picker offers (screenshot 14). */
+/** One entry the effect picker offers. */
 export interface EffectListing {
   id: string;
   name: string;

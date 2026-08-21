@@ -138,7 +138,7 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
       {items.length === 0 ? (
         <div className="pr-params-none">Este efecto no tiene parámetros</div>
       ) : (
-        // Two columns, professional consoles-style (screenshot 15): the scalar sliders as a vertical
+        // Two columns: the scalar sliders as a vertical
         // list on the left, the effect-specific controls (direction rose, palette,
         // colour picker) on the right.
         <div className="pr-params-rows">

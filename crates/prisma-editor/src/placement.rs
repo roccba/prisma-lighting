@@ -122,7 +122,7 @@ pub struct PlacementSpec {
     pub snake: bool,
     pub start_universe: u16,
     pub start_channel: u16,
-    /// Extra channels left between consecutive fixtures (professional consoles "Desfase"). `0` =
+    /// Extra channels left between consecutive fixtures (a per-fixture offset). `0` =
     /// tight packing.
     pub channel_offset: u16,
     /// Extra universes skipped each time addressing wraps to a new universe. `0` =

@@ -2,7 +2,7 @@ import type { Patch } from "./api";
 import { Dropdown } from "./Dropdown";
 
 // The zone selector is the organising control of the editor (§6): with a single
-// zone it is a no-op and the editor feels like professional consoles; complexity appears only
+// zone it is a no-op and the editor stays simple; complexity appears only
 // when there are several zones. It drives the three view modes (§5.3).
 
 export type ViewMode = "all" | "highlight" | "isolate";

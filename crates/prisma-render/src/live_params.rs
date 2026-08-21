@@ -203,7 +203,7 @@ impl LiveParams {
                         &format!("{base}/speed"),
                         ParamDescriptor::level(
                             "zone.speed",
-                            // Bipolar velocity (professional consoles-style): 0 = static, sign = play
+                            // Bipolar velocity: 0 = static, sign = play
                             // direction (negative runs the zone's effects in reverse).
                             // The reverse is realised by the render's per-zone phase
                             // accumulator ([`zone_content`]), not by scaling absolute time.

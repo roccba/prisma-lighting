@@ -13,7 +13,7 @@ use uuid::Uuid;
 /// selection was empty (or matched no fixtures); a present value always covers at
 /// least one pixel.
 ///
-/// Ordinal fixture IDs (professional consoles's "ID de instalación", screenshot 04) are **not**
+/// Ordinal fixture IDs (a per-fixture install number) are **not**
 /// here: the model identifies fixtures by UUID + name, and the user-facing integer
 /// ID arrives with the placement dialog's "starting fixture ID" (§4.1). Until then
 /// the meaningful ranges are position and DMX address.

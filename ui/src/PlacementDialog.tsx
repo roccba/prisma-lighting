@@ -10,7 +10,7 @@ import {
   type PlacementSpec,
 } from "./api";
 
-// The "Add fixtures" dialog (screenshot 06): Fixture · Placement · Addressing,
+// The "Add fixtures" dialog: Fixture · Placement · Addressing,
 // into the ACTIVE zone (§4.1). Signal DIRECTION is separate from orientation and
 // all eight are reachable (§4.1). A schematic signal-direction preview shows the
 // routing before applying. Z and rotation exist but are inert while 2-D.
@@ -79,7 +79,7 @@ function NumField(props: {
 
 /** Normalised vertices (0..1) of a SCHEMATIC signal route for a given direction + snake
  *  — a fixed-resolution illustration of *where the signal starts and which way it runs*,
- *  NOT one mark per fixture. This is the professional consoles "Vista previa de direccionamiento" idea:
+ *  NOT one mark per fixture. This is the addressing-preview idea:
  *  the picture shows direction, never quantity, so a 4-pixel and a 10 000-pixel placement
  *  draw the same cheap schematic (and the dialog never chokes rendering thousands). */
 function schematicPoints(direction: Direction, snake: boolean): { x: number; y: number }[] {
