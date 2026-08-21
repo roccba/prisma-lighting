@@ -54,7 +54,7 @@ struct CellInfo {
     active: bool,
 }
 
-/// One entry the effect picker offers (screenshot 14), catalogue-driven (§5.3).
+/// One entry the effect picker offers, catalogue-driven (§5.3).
 #[derive(Serialize)]
 struct EffectListingInfo {
     id: String,
@@ -234,18 +234,18 @@ struct AppState {
     /// is bound per engine, so a recompile never fights the old bind for a fixed port;
     /// the viewer re-queries and reconnects.
     preview_port: Mutex<u16>,
-    /// The network output config (device manager, screenshot 16): where DMX is sent.
+    /// The network output config (device manager): where DMX is sent.
     network: Mutex<NetworkConfig>,
     /// Where the network config file lives — the per-user app-config dir.
     network_path: PathBuf,
 }
 
-/// Network output configuration — the device manager (screenshot 16). It decides WHERE
+/// Network output configuration — the device manager. It decides WHERE
 /// the engine sends DMX: the loopback virtual sink (disabled, the dev default) or a real
 /// **Art-Net** target (enabled). Persisted to the per-user app-config dir so it survives
 /// restarts. First cut: one Art-Net target for **every** universe — a node that takes them
 /// all, or a subnet broadcast address (e.g. `2.255.255.255`); the per-node universe table
-/// (screenshot 16) is the richer later feature (CLAUDE.md Deferred). Universe numbers are
+/// is the richer later feature (Deferred). Universe numbers are
 /// in the packets, so a broadcast or an all-universes node receives every one.
 #[derive(Serialize, Deserialize, Clone)]
 struct NetworkConfig {
@@ -940,7 +940,7 @@ fn main_set_zone_strobe(state: State<AppState>, zone: Uuid, rate: f32, duty: f32
     }
 }
 
-// --- Device manager (network output, screenshot 16) ---
+// --- Device manager (network output) ---
 
 /// The current network output config, for the device manager UI.
 #[tauri::command]
@@ -950,7 +950,7 @@ fn main_network_get(state: State<AppState>) -> NetworkConfig {
 
 /// Apply a network output config: persist it, then **recompile the engine onto the new
 /// target** (reusing the GPU) so DMX starts flowing to the configured Art-Net node
-/// instead of the virtual sink — the point of the device manager (screenshot 16). Live
+/// instead of the virtual sink — the point of the device manager. Live
 /// values are folded into the show first so the retarget does not reset faders. A bad IP
 /// falls back to the virtual sink (never leaves the engine down).
 #[tauri::command]
@@ -1051,6 +1051,21 @@ fn main_set_master_strobe(state: State<AppState>, rate: f32, duty: f32) {
 /// Highlight works, §7), and on **close** the editor's edits are applied to the running
 /// show and it resumes on the new layout ([`apply_editor_draft`]). A second open focuses
 /// the existing window.
+/// Swap the boot splash for the main window. Called by the splash webview once the engine
+/// and UI have signalled readiness (`prisma://ready`), or by the splash's own safety cap.
+/// Shows the (initially hidden) main window and closes the splash. Idempotent: a missing
+/// splash or an already-visible main window is fine, so a double-call cannot misbehave.
+#[tauri::command]
+fn close_splash(app: AppHandle) {
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.set_focus();
+    }
+    if let Some(splash) = app.get_webview_window("splash") {
+        let _ = splash.close();
+    }
+}
+
 #[tauri::command]
 fn main_open_editor(app: AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("editor") {
@@ -1090,7 +1105,7 @@ fn main_open_editor(app: AppHandle) -> Result<(), String> {
 
 // --- Main operation window (M8 step 4): the scene grid ---
 
-/// The effects the picker offers (screenshot 14), grouped by category — the M5 GPU
+/// The effects the picker offers, grouped by category — the M5 GPU
 /// effects. Catalogue-driven, so the picker is never hardcoded (§5.3).
 #[tauri::command]
 fn main_effect_catalogue() -> Vec<EffectListingInfo> {
@@ -1344,6 +1359,7 @@ fn main() {
             main_clear_cell,
             main_effect_panel,
             main_set_param,
+            close_splash,
         ])
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -1427,6 +1443,26 @@ fn main() {
                 preview_port: Mutex::new(preview_port.unwrap_or(0)),
                 network: Mutex::new(network),
                 network_path,
+            });
+
+            // Boot splash safety net: the splash webview normally reveals the main window
+            // (via `close_splash`) once the UI signals `prisma://ready`, and it has its own
+            // hard cap. This is the backstop for the case where the splash webview itself
+            // never runs its JS — after a generous timeout, reveal the main window and drop
+            // the splash so the app can never boot to nothing on screen. No-op if the main
+            // window is already visible (the normal path got there first).
+            let boot = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(20));
+                if let Some(main) = boot.get_webview_window("main") {
+                    if !main.is_visible().unwrap_or(true) {
+                        let _ = main.show();
+                        let _ = main.set_focus();
+                        if let Some(splash) = boot.get_webview_window("splash") {
+                            let _ = splash.close();
+                        }
+                    }
+                }
             });
             Ok(())
         })

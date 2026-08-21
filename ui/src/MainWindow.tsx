@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { mainZones, openEditor, openShow, saveShow, type ZoneInfo } from "./api";
 import { DeviceManager } from "./DeviceManager";
@@ -32,7 +32,7 @@ export default function MainWindow() {
   // Which menu is dropped down (null = none). Minimal for M8: only Preferencias has an
   // action (open the patch editor, §6). A full menu system is later polish.
   const [menuOpen, setMenuOpen] = useState<string | null>(null);
-  // Whether the device-manager modal (network output, screenshot 16) is open.
+  // Whether the device-manager modal (network output) is open.
   const [deviceMgrOpen, setDeviceMgrOpen] = useState(false);
   // Bumped whenever the selected zone's active cell changes (fire / assign / clear), so
   // the effect parameter panel re-fetches the now-active effect and its values. The
@@ -49,7 +49,13 @@ export default function MainWindow() {
       .catch((e) => setError(String(e)));
 
   useEffect(() => {
-    refreshZones();
+    // Once the first zone load resolves the operation window is ready to be shown, so tell
+    // the boot splash it can hand over (`prisma://ready` → the splash fades and calls
+    // close_splash, which reveals this window). `finally` so a load error still hands over
+    // rather than stranding the splash; the splash also has its own safety cap.
+    refreshZones().finally(() => {
+      emit("prisma://ready").catch(() => {});
+    });
   }, []);
 
   // The patch editor (secondary window) applies its edits to the running show on close

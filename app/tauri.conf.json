@@ -4,18 +4,34 @@
   "version": "0.1.0",
   "identifier": "com.prisma.lighting",
   "build": {
-    "frontendDist": "../ui/dist"
+    "frontendDist": "../ui/dist",
+    "beforeBuildCommand": "npm --prefix ui run build"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
+        "label": "main",
         "title": "Prisma",
         "width": 1280,
         "height": 800,
         "minWidth": 1280,
         "minHeight": 800,
         "maximized": true,
-        "resizable": true
+        "resizable": true,
+        "visible": false
+      },
+      {
+        "label": "splash",
+        "url": "splashscreen.html",
+        "width": 520,
+        "height": 340,
+        "decorations": false,
+        "resizable": false,
+        "center": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": true
       }
     ],
     "security": {
@@ -23,7 +39,19 @@
     }
   },
   "bundle": {
-    "active": false,
-    "icon": ["icons/icon.png"]
+    "active": true,
+    "targets": ["appimage", "deb"],
+    "publisher": "Prisma",
+    "category": "Video",
+    "shortDescription": "Zone-based LED pixel control",
+    "longDescription": "Prisma — real-time pixel-mapping and effects engine for LED installations, with fully independent effects, dimmers and control per zone.",
+    "homepage": "https://github.com/jbrocha/prisma",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
   }
 }
