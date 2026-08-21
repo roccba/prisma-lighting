@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Prisma</title>
+    <style>
+      /* Prisma boot splash. Self-contained (no bundler): the Tauri global (`__TAURI__`,
+         enabled by `withGlobalTauri`) is the only external. Design tokens mirror
+         ui/src/theme.css: accent VS Code blue #007ACC, bright #1F9CFF, near-black bg. The
+         pixel-P is the same 5-row P as the design system's logo (prisma-style-system.html).
+         Animation: the P lights LED-by-LED (a left→right scan), then "RISMA / LIGHTING
+         CONTROL" slides out from BEHIND the P (revealed by an overflow clip whose left edge
+         is the P's right edge). A loading line + indeterminate bar run until the engine and
+         UI report ready (`prisma://ready`), then the splash fades and closes. */
+      :root {
+        --accent: #007acc;
+        --accent-bright: #1f9cff;
+        --bg: #0f0f16;
+        --text: #f0f0f0;
+        --dim: #7a7a86;
+        --cell: 22px;
+        --gap: 5px;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; overflow: hidden; }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Segoe UI", "Inter", system-ui, -apple-system, sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        user-select: none;
+        cursor: default;
+        /* subtle radial lift behind the mark */
+        background-image: radial-gradient(120% 90% at 50% 38%, #16161f 0%, #0f0f16 60%, #0b0b10 100%);
+      }
+      #stage {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 30px;
+        transition: opacity 360ms ease, transform 360ms ease;
+      }
+      body.done #stage { opacity: 0; transform: scale(1.03); }
+
+      /* --- Lockup: pixel P + wordmark emerging from behind it --- */
+      .lockup { display: flex; align-items: center; }
+      .pixP {
+        display: grid;
+        grid-template-columns: repeat(4, var(--cell));
+        grid-auto-rows: var(--cell);
+        gap: var(--gap);
+        position: relative;
+        z-index: 2; /* the P sits in FRONT so the wordmark can slide out from behind it */
+        /* the P's own soft entrance */
+        filter: drop-shadow(0 0 0 rgba(0,0,0,0));
+      }
+      .pixP i {
+        width: var(--cell);
+        height: var(--cell);
+        border-radius: 3px;
+        background: var(--accent);
+        opacity: 0;
+        transform: scale(0.4);
+        animation: led 460ms cubic-bezier(.2, .8, .2, 1) forwards;
+      }
+      .pixP i.bright { background: var(--accent-bright); }
+      @keyframes led {
+        0%   { opacity: 0; transform: scale(0.4); box-shadow: 0 0 0 rgba(31,156,255,0); }
+        55%  { opacity: 1; transform: scale(1.12); box-shadow: 0 0 14px rgba(31,156,255,.75); }
+        100% { opacity: 1; transform: scale(1); box-shadow: 0 0 7px rgba(0,122,204,.45); }
+      }
+
+      /* The wordmark clip: its LEFT edge abuts the P; content starts fully left (hidden
+         under the clip, i.e. "behind the P") and slides right into view. */
+      .reveal { overflow: hidden; margin-left: 14px; }
+      .wordmark {
+        transform: translateX(-102%);
+        opacity: 0;
+        animation: emerge 620ms cubic-bezier(.18, .7, .16, 1) forwards;
+        white-space: nowrap;
+      }
+      @keyframes emerge {
+        0%   { transform: translateX(-102%); opacity: 0; }
+        30%  { opacity: 1; }
+        100% { transform: translateX(0); opacity: 1; }
+      }
+      .brand {
+        font-size: 62px;
+        font-weight: 700;
+        letter-spacing: 4px;
+        line-height: 0.82;
+        color: #f4f4f4;
+      }
+      .sub {
+        font-size: 12px;
+        letter-spacing: 9px;
+        color: var(--dim);
+        margin-top: 9px;
+        padding-left: 3px;
+      }
+
+      /* --- Loading: status line + indeterminate bar --- */
+      .load {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        opacity: 0;
+        animation: fadein 500ms ease 900ms forwards;
+      }
+      @keyframes fadein { to { opacity: 1; } }
+      .bar {
+        width: 260px;
+        height: 3px;
+        border-radius: 2px;
+        background: #22222c;
+        overflow: hidden;
+        position: relative;
+      }
+      .bar::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        height: 100%;
+        width: 40%;
+        border-radius: 2px;
+        background: linear-gradient(90deg, var(--accent), var(--accent-bright));
+        box-shadow: 0 0 10px rgba(31,156,255,.6);
+        animation: slide 1.25s cubic-bezier(.5, 0, .5, 1) infinite;
+      }
+      @keyframes slide {
+        0%   { left: -42%; }
+        100% { left: 102%; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage">
+      <div class="lockup">
+        <div class="pixP" id="pixP"></div>
+        <div class="reveal">
+          <div class="wordmark">
+            <div class="brand">RISMA</div>
+            <div class="sub">LIGHTING CONTROL</div>
+          </div>
+        </div>
+      </div>
+      <div class="load">
+        <div class="bar"></div>
+      </div>
+    </div>
+
+    <script>
+      // Build the pixel-P and light it LED-by-LED in a left→right scan. The 5th (empty)
+      // column of the design-system map is trimmed, so the block is 4 wide × 5 tall.
+      const P_MAP = [
+        [1, 1, 1, 1],
+        [1, 0, 0, 1],
+        [1, 1, 1, 1],
+        [1, 0, 0, 0],
+        [1, 0, 0, 0],
+      ];
+      const BRIGHT = new Set(["0,0", "0,1", "0,2", "0,3", "1,3", "2,3"]);
+      const rows = P_MAP.length,
+        cols = P_MAP[0].length;
+      const grid = document.getElementById("pixP");
+      // Pre-create every cell (grid order = row-major) so the P holds its shape...
+      const cells = [];
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const i = document.createElement("i");
+          if (!P_MAP[r][c]) {
+            i.style.visibility = "hidden";
+            i.style.animation = "none";
+          } else if (BRIGHT.has(r + "," + c)) {
+            i.classList.add("bright");
+          }
+          grid.appendChild(i);
+          cells.push({ el: i, r, c, on: !!P_MAP[r][c] });
+        }
+      }
+      // ...but sequence the LIGHT-UP column-by-column (a scan sweeping to the right),
+      // counting only lit pixels so the delay ramp is even.
+      const STEP = 55; // ms between LEDs
+      let order = 0;
+      for (let c = 0; c < cols; c++) {
+        for (let r = 0; r < rows; r++) {
+          const cell = cells[r * cols + c];
+          if (!cell.on) continue;
+          cell.el.style.animationDelay = order * STEP + "ms";
+          order++;
+        }
+      }
+      // The wordmark's `emerge` should start as the P finishes lighting.
+      const pFinish = order * STEP; // ms
+      document.querySelector(".wordmark").style.animationDelay = pFinish + 40 + "ms";
+
+      // --- Close handshake ---------------------------------------------------------
+      // Close only when BOTH the engine/UI are ready AND a minimum on-screen time has
+      // passed (so the animation is always seen). A hard cap closes it regardless, so a
+      // frontend that never signals cannot strand the splash.
+      const MIN_MS = 2800; // hold after the intro completes so the mark is enjoyed
+      const MAX_MS = 15000; // safety cap
+      const start = performance.now();
+      let ready = false,
+        closed = false;
+
+      function close() {
+        if (closed) return;
+        closed = true;
+        document.body.classList.add("done");
+        const T = window.__TAURI__;
+        // Wait out the fade, then ask Rust to swap splash → main.
+        setTimeout(() => {
+          if (T && T.core && T.core.invoke) T.core.invoke("close_splash").catch(() => {});
+        }, 380);
+      }
+      function maybeClose() {
+        if (!ready) return;
+        const wait = Math.max(0, MIN_MS - (performance.now() - start));
+        setTimeout(close, wait);
+      }
+
+      const T = window.__TAURI__;
+      if (T && T.event && T.event.listen) {
+        T.event.listen("prisma://ready", () => {
+          ready = true;
+          maybeClose();
+        });
+      }
+      // Safety cap: force the swap even if `prisma://ready` never arrives.
+      setTimeout(() => {
+        ready = true;
+        close();
+      }, MAX_MS);
+    </script>
+  </body>
+</html>
