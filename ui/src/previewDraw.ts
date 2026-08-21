@@ -47,6 +47,24 @@ function getOffscreen(gw: number, gh: number): HTMLCanvasElement | null {
   return offscreen;
 }
 
+// Reused ImageData per grid size — NOT allocated per draw. Allocating a fresh ImageData
+// every frame (≈9 minis + the large, 30 Hz, up to ~100 KB each) is tens of MB/s of
+// garbage; the JS engine then GCs it ~once a second, and that pause is the ~1 s
+// mini-preview flicker. Zones have stable grid sizes, so a small size-keyed cache reuses
+// the buffers indefinitely; `fill(0)` clears a reused one (cheap, no allocation).
+const imageDataCache = new Map<string, ImageData>();
+function getImageData(gw: number, gh: number): ImageData {
+  const key = `${gw}x${gh}`;
+  let img = imageDataCache.get(key);
+  if (img) {
+    img.data.fill(0);
+  } else {
+    img = new ImageData(gw, gh); // zero-initialised
+    imageDataCache.set(key, img);
+  }
+  return img;
+}
+
 /** Draw `zoneId`'s member pixels into `canvas` from the latest stream buffers. Resizes the
  *  backing store to the element's box (× dpr) and clears each call. A no-op (cleared canvas)
  *  when the descriptor, colours, or zone are missing. */
@@ -105,7 +123,7 @@ export function drawZone(
   // ops. A cell with no pixel stays transparent (alpha 0), so empty space reads as the
   // canvas background. Several pixels in one cell: last wins (a faithful-enough thumbnail;
   // the point here is cost, and it matches what a sub-sampled preview shows).
-  const img = offctx.createImageData(gw, gh);
+  const img = getImageData(gw, gh); // reused, not allocated per frame (see getImageData)
   const data = img.data;
   for (const p of zone.members) {
     const px = descriptor.pixels[p];
