@@ -3,7 +3,7 @@ import { useRef, useState } from "react";
 // The vertical console fader (DESIGN.md §4 "one knob"), on the design-system `.pr-fader`
 // primitive. Pointer-drag along the rail sets a 0..1 value (top = 1, bottom = 0); the
 // knob and blue fill track it. In `bipolar` mode the fill grows from the CENTRE (0.5),
-// so a professional consoles-style velocity fader reads its zero at the middle and its sign by which way
+// so a bipolar velocity fader reads its zero at the middle and its sign by which way
 // the fill runs. The value is always 0..1 here; the caller maps it to a real range.
 
 interface VFaderProps {

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { setParam, type ParamInfo } from "./api";
 import { hexToLinear, linearToHex } from "./srgb";
 
-// The palette editor (M8 parameter types, professional consoles's "Colores" behind Scroll de color).
+// The palette editor (M8 parameter types, the colours behind Scroll de color).
 // A palette is a fixed block of colour slots plus a length ("count") param; every value
 // is a plain linear-light scalar in the tree (§2.3), so the palette persists and
 // MIDI-maps like any other parameter — this control is presentation only. It shows the

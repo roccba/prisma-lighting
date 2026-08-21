@@ -1,4 +1,4 @@
-// Colour scroll (CLAUDE.md §5.3 — professional consoles's "Scroll de color", screenshot 15). Bands
+// Colour scroll. Bands
 // of a user palette scrolling across the matrix along one of eight directions. This
 // is the first effect to declare a PALETTE and a DIRECTION, lighting up the palette
 // editor and the 8-way rose that were wired but dormant.

@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { setZoneMappingSize, type EditorState, type Zone } from "./api";
 
-// Matrix settings dialog (§2.5), modelled on professional consoles's "Ajustes de Matriz" (screenshot
-// 11). Edits the selected zone's mapping_size — its effect RENDER RESOLUTION (§2.4),
+// Matrix settings dialog (§2.5). Edits the selected zone's mapping_size — its effect
+// RENDER RESOLUTION (§2.4),
 // not a visual bound. X/Y only (Z stays 1 while 2-D); capped at 512×512.
 
 const MAX = 512;

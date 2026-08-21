@@ -13,7 +13,7 @@ import {
 // Fixture library manager (§3.2): a simple CRUD over the operator's reusable pixel-LED
 // fixture types. Our domain is only pixel LED — N pixels + colour order — so a type is
 // just name / pixel count / arrangement / component set / colour order. NO DMX
-// personalities, channel modes or macros (this is deliberately not a professional consoles-style
+// personalities, channel modes or macros (this is deliberately not a full-blown
 // fixture editor). Intra-fixture roles (§3.2 hexagon) exist in the model but have no UI
 // yet. Every change persists to the library file via the backend.
 

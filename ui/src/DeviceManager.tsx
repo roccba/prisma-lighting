@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { networkGet, networkSet, type NetworkConfig } from "./api";
 
-// The device manager (screenshot 16): where the engine sends DMX. First cut is the
+// The device manager: where the engine sends DMX. First cut is the
 // Art-Net tab — enable it and point it at a node IP or a subnet broadcast, Apply
 // recompiles the engine onto that target (it was going to the loopback virtual sink).
 // The per-node universe table is a later feature; today every universe goes to one

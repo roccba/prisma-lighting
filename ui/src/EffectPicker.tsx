@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { effectCatalogue, type EffectListing } from "./api";
 
-// The effect picker (M8-SPEC §4, screenshot 14): assigning a cell opens this, an
+// The effect picker (M8-SPEC §4): assigning a cell opens this, an
 // effect list organised by category. Built from the engine's catalogue, never a
 // hardcoded list (§5.3) — the day Noise (or an audio-reactive category) is added on
 // the Rust side it appears here with no UI change. M8 offers the M5 generators.

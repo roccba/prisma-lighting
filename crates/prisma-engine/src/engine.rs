@@ -526,7 +526,7 @@ impl EngineHandle {
     }
 
     /// Toggle the master blackout — kills all output to black while holding the
-    /// dimmer's value (professional consoles's "Cegar"). Applied at the output stage over every pixel.
+    /// dimmer's value (blackout). Applied at the output stage over every pixel.
     pub fn set_master_blackout(&self, on: bool) {
         let v = if on { 1.0 } else { 0.0 };
         self.tree

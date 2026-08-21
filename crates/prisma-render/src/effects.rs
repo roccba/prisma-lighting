@@ -40,7 +40,7 @@ const PALETTE_CHANNELS: [[&str; 3]; PALETTE_SLOTS] = [
     ["c7r", "c7g", "c7b"],
 ];
 
-/// professional consoles's default colour-scroll palette: the saturated rainbow. Values are
+/// The default colour-scroll palette: the saturated rainbow. Values are
 /// LINEAR-light `0..1` — for fully-saturated sRGB primaries the sRGB curve maps 0→0
 /// and 255→1 unchanged, so these read the same in both spaces. The trailing two slots
 /// are inactive at the default `count` (6) but seeded so raising the count yields a
@@ -58,7 +58,7 @@ const PALETTE_DEFAULTS: [[f32; 3]; PALETTE_SLOTS] = [
 
 /// The 24 palette colour-channel params (8 slots × r/g/b), tagged with their slot index
 /// and channel so the panel collects them into one palette editor. Seeded with the
-/// professional consoles rainbow defaults; the value model is plain linear-light scalars (§2.3), so a
+/// Rainbow defaults; the value model is plain linear-light scalars (§2.3), so a
 /// palette persists and MIDI-maps like any other parameter.
 fn palette_color_params() -> Vec<ParamSpec> {
     let mut out = Vec::with_capacity(PALETTE_SLOTS * 3);
@@ -78,7 +78,7 @@ fn palette_color_params() -> Vec<ParamSpec> {
     out
 }
 
-/// Scrolling bands of a user palette (§5.3 "Scroll de color", screenshot 15) — the
+/// Scrolling bands of a user palette (§5.3 "Scroll de color") — the
 /// first effect to declare a **palette** and a **direction**, so it lights up the
 /// palette editor and the 8-way rose. `speed` is scroll rate, `width` the number of
 /// palette repetitions across the scroll axis, `offset` a static phase, `direction`
@@ -391,7 +391,7 @@ pub fn gradient() -> EffectManifest {
 }
 
 /// One entry in the effect catalogue: an effect the picker can offer, with a
-/// human-readable name and a category to group it under (screenshot 14). The UI
+/// human-readable name and a category to group it under. The UI
 /// builds the picker from this list, never a hardcoded one (§5.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EffectListing {

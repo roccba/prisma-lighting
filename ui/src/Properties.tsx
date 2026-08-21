@@ -1,6 +1,6 @@
 import type { Patch, SelectionAggregate } from "./api";
 
-// The right panel switches on selection state (screenshot 05): a whole-patch
+// The right panel switches on selection state: a whole-patch
 // summary when nothing is selected, the selection aggregate otherwise (§5.4).
 
 interface Props {
