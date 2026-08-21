@@ -1,7 +1,7 @@
 /* ============================================================================
    Prisma — Theme
-   Design system extracted from the professional consoles-style mockup.
-   Accent: VS Code blue. Structural greys mirror professional consoles.
+   Design system extracted from the dark-theme mockup.
+   Accent: VS Code blue. Structural greys use a dense, console-style palette.
 
    Usage: import once at the app root. Everything keys off the CSS custom
    properties in :root — never hardcode a colour in a component; reference a
@@ -68,7 +68,7 @@ body {
   margin: 0;
 }
 
-/* ---- Scrollbars (professional consoles-like) ---- */
+/* ---- Scrollbars ---- */
 ::-webkit-scrollbar { width: 14px; height: 14px; }
 ::-webkit-scrollbar-track { background: #0d0d0d; }
 ::-webkit-scrollbar-thumb {
@@ -285,8 +285,7 @@ body {
 /* ============================================================
    Sliders — SHARED console knob (vertical + horizontal)
    The knob is the signature control: metallic, grip ridges,
-   accent outline when grabbed (professional consoles turns its knob lime; we
-   use the accent).
+   accent outline when grabbed.
    ============================================================ */
 
 /* vertical fader */
@@ -436,8 +435,15 @@ body {
 .pr-placeholder .pr-placeholder-body { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; color: var(--text-dim); font-size: var(--fs-small); }
 
 /* --- Zone row --- */
-.pr-zonerow { display: flex; gap: 6px; padding: 8px; overflow-x: auto; align-items: stretch; }
+/* `position: relative` anchors the single mini-preview overlay canvas (below). */
+.pr-zonerow { position: relative; display: flex; gap: 6px; padding: 8px; overflow-x: auto; align-items: stretch; }
 .pr-zonerow-empty { color: var(--text-dim); font-size: var(--fs-small); padding: 12px; }
+/* ONE canvas for every card's mini-preview. It overlays the cards (drawn above them,
+   click-through) and paints each zone's thumbnail into that card's preview slot. A single
+   accelerated canvas is proven flicker-free on WebKitGTK, unlike ~9 small per-card ones
+   that thrash its GL-context pool (~1 s flash). As an absolutely-positioned child of the
+   scroll container it scrolls with the cards, so each card's rect stays valid. */
+.pr-zonerow-canvas { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 1; }
 
 /* --- Zone card --- */
 .pr-zonecard { flex: 0 0 auto; width: 178px; background: var(--bg-panel-2); border: 1px solid var(--btn-border); border-top-color: #3a3a3a; border-bottom-color: var(--btn-border-dark); border-radius: var(--r-md); display: flex; flex-direction: column; gap: 6px; padding: 6px; cursor: pointer; user-select: none; }
@@ -453,30 +459,26 @@ body {
 .pr-zonecard-fader .pr-fader { --pr-knob-h: 22px; width: 26px; height: 96px; }
 .pr-zonecard-fader .pr-fader .pr-knob { width: 24px; height: 22px; padding: 3px; }
 /* Fixed-width, tabular readout: its text width must NOT change with the value ("5" vs
-   "100", "0" vs "-10.0"), or the card reflows on every drag and WebKitGTK re-rasterizes
-   the mini-preview canvases → the flicker on dimmer/speed moves. */
+   "100", "0" vs "-10.0"), or the card reflows on every drag. That would shift the preview
+   slot, and the zone row's overlay canvas caches each slot's rect — a reflow mid-drag would
+   desync the thumbnail from its card until the next layout pass. Keep the width fixed. */
 .pr-zonecard-faderval { width: 36px; text-align: center; font-size: var(--fs-small); color: var(--accent); font-variant-numeric: tabular-nums; line-height: 1; overflow: hidden; white-space: nowrap; }
 .pr-zonecard-faderlbl { font-size: 9px; color: var(--text-label); letter-spacing: .05em; line-height: 1; }
 /* A centre reference line on the bipolar velocity fader, marking 0 (static). */
 .pr-fader.is-bipolar .pr-fader-center { position: absolute; top: calc(50% - 1px); left: 6px; right: 6px; height: 1px; background: var(--text-label); opacity: .5; pointer-events: none; z-index: 1; }
 
-/* `translateZ(0)` gives EVERY mini-preview its own compositing layer — each repaints at
-   ~30 Hz and deserves one. The symptom that forced it: the FIRST card's canvas sits in
-   the origin corner of the `overflow-x:auto` zone row (a scroll/clip container), and
-   WebKitGTK re-rasterized that corner on every canvas repaint → a flicker only there.
-   Promoting the canvas decouples its per-frame repaint from the container's compositing,
-   killing the flicker at the root (not a throttle — timing and draw are untouched).
-   Applied to the class, not just the first card, so a future layout change that puts a
-   different canvas at the compositing corner cannot bring it back. */
-.pr-zonecard-preview { position: relative; flex: 1 1 auto; min-width: 0; display: flex; }
-.pr-zonecard-canvas { width: 100%; height: 96px; display: block; background: var(--bg-canvas); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); transform: translateZ(0); }
+/* The mini-preview slot is an empty framed screen; the zone row's single overlay canvas
+   paints this zone's thumbnail into it (see `.pr-zonerow-canvas`). No canvas per card. */
+.pr-zonecard-preview { flex: 1 1 auto; min-width: 0; height: 96px; background: var(--bg-canvas); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); }
 
-/* Footer: solo / mute + the strobe rate. */
+/* Footer: solo / mute · strobe trigger · strobe rate. */
 .pr-zonecard-footer { display: flex; align-items: center; gap: 4px; }
 .pr-zonecard-sm { width: 24px; height: 22px; padding: 0; font-size: var(--fs-small); flex: 0 0 auto; }
 
-/* --- Per-zone strobe (§3.6): bolt over the mini-preview + a 0..1 rate slider --- */
+/* --- Per-zone strobe (§3.6): a trigger button + a 0..1 rate slider, both in the footer --- */
 .pr-strobe-trigger { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; line-height: 0; padding: 0; background: rgba(0,0,0,.45); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); color: var(--text-dim); cursor: pointer; user-select: none; }
+/* In the zone-card footer the trigger flows inline next to S/M (not overlaying a preview). */
+.pr-strobe-trigger-sm { position: static; width: 24px; height: 22px; flex: 0 0 auto; }
 .pr-strobe-trigger:hover { color: var(--text); border-color: var(--btn-border); }
 /* Engaged (held or latched): bright. Latched adds an inset ring so a "stuck on" strobe
    still reads as latched even mid-flash. */
@@ -501,7 +503,7 @@ body {
 
 /* --- Scene grid + effect picker (M8 step 4, §3.3 / §4) --- */
 .pr-grid-wrap { flex: 1 1 auto; overflow: auto; padding: 8px; min-height: 0; }
-/* Fixed 76px cells, left-aligned (like a professional consoles storage grid) instead of stretching to
+/* Fixed 76px cells, left-aligned (like a hardware storage grid) instead of stretching to
    fill the panel — 16 stretched cells left a huge dead area below and oversized squares. */
 .pr-grid { display: grid; grid-template-columns: repeat(8, 76px); grid-auto-rows: 76px; gap: 5px; justify-content: start; align-content: start; }
 .pr-cell { position: relative; background: var(--bg-input); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; color: var(--text-dim); user-select: none; overflow: hidden; }
@@ -525,7 +527,7 @@ body {
 .pr-picker-items { display: flex; flex-wrap: wrap; gap: 5px; }
 .pr-picker-item { min-width: 76px; }
 
-/* --- Device manager (network output, screenshot 16) --- */
+/* --- Device manager (network output) --- */
 .pr-devmgr { min-width: 380px; }
 .pr-devmgr-tabs { display: flex; gap: 2px; padding: 6px 12px 0; border-bottom: 1px solid var(--divider); }
 .pr-devmgr-check { display: flex; align-items: center; gap: 7px; font-size: var(--fs-base); color: var(--text); cursor: pointer; }
@@ -547,7 +549,7 @@ body {
 .pr-largepreview-canvas { flex: 1 1 auto; width: 100%; min-height: 0; display: block; background: var(--bg-canvas); border-radius: 0 0 var(--r-md) var(--r-md); }
 
 /* --- Effect parameter panel (M8 step 5, §3.5) --- */
-/* Built from the effect manifest (screenshot 15): TWO columns — the scalar sliders as a
+/* Built from the effect manifest: TWO columns — the scalar sliders as a
    vertical list of `label · value · fader` lines on the left, and the effect-specific
    controls (rose, palette, colour) on the right. All primitives (.pr-value, .pr-hslider). */
 .pr-params { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 6px 8px; gap: 6px; overflow: hidden; }
@@ -560,7 +562,7 @@ body {
 /* The effect-specific controls sit side by side (rose next to palette next to colour). */
 .pr-params-controls { flex-direction: row; gap: 20px; align-items: flex-start; }
 
-/* A scalar parameter on ONE line: label · value · horizontal fader (screenshot 15). */
+/* A scalar parameter on ONE line: label · value · horizontal fader. */
 .pr-param-row { flex: 0 0 auto; width: 236px; display: grid; grid-template-columns: 74px 34px 1fr; grid-template-areas: "label value fader"; align-items: center; gap: 8px; }
 .pr-param-label { grid-area: label; font-size: var(--fs-small); color: var(--text-label); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pr-param-value { grid-area: value; text-align: right; }
