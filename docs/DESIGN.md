@@ -1,8 +1,8 @@
 # Prisma — Design System
 
-The visual language for Prisma's UI. Modelled on professional consoles's density and
-control style, with the lime-green accent replaced by **VS Code blue**. The
-structural greys are kept close to professional consoles because they read well for dense,
+The visual language for Prisma's UI. Modelled on the density and control style
+of professional lighting consoles, with a **VS Code blue** accent. The
+structural greys stay dark and low-chroma because they read well for dense,
 professional lighting-control work.
 
 `theme.css` is the authoritative implementation — every value below lives
@@ -10,15 +10,15 @@ there as a CSS custom property or a `.pr-*` class. **Reference tokens; never
 hardcode a colour in a component.** To retheme (light build, per-client
 accent) you override `:root` only.
 
-Reference screenshots for the source look are in `Screenshots/` (professional consoles). The
-throwaway HTML explorations that produced this system are gitignored.
+The throwaway HTML explorations that produced this system are kept locally,
+not tracked.
 
 ---
 
 ## 1. Principles
 
 - **Dense, not sparse.** This is a professional tool. Controls are compact and
-  information-rich, closer to a DAW or professional consoles than a consumer app. Padding is
+  information-rich, closer to a DAW than a consumer app. Padding is
   tight; font sizes are small (11–12px base).
 - **The accent is a scalpel, not a wash.** Blue marks what is *active*,
   *selected*, or a *live value* — nothing else. Most of the UI is grey. When
@@ -90,8 +90,7 @@ Each maps to a `.pr-*` class in `theme.css`.
   `.is-primary` is a blue call-to-action. `.pr-tabbtn` = segmented tabs;
   `.pr-tbtn` = icon-over-label toolbar button.
 - **Numeric input** (`.pr-num`) — black field, blue mono value. Two spinner
-  variants: `.pr-spin` (stacked ▲▼) and `.pr-pm` (flanking − / +). Both come
-  straight from professional consoles.
+  variants: `.pr-spin` (stacked ▲▼) and `.pr-pm` (flanking − / +).
 - **Dropdown** (`.pr-dd`) — custom, never the native `<select>`. Black head
   with blue value + grey caret box; list drops with a blue top border, hover
   and selected options fill blue.
@@ -107,8 +106,7 @@ Each maps to a `.pr-*` class in `theme.css`.
   - The knob is a **console-style metallic slider cap**: taller/wider than the
     slot, a metallic vertical (or horizontal) gradient, and **grip ridges**
     like a real mixing-desk fader.
-  - **Grabbed state** (`.is-grabbed`) draws an accent outline around the knob.
-    professional consoles turns its knob lime while dragging; we use the accent blue.
+  - **Grabbed state** (`.is-grabbed`) draws an accent-blue outline around the knob.
   - Both have scale ticks along the rail (major every 5).
   - Value readout uses `.pr-value` (black field, blue mono).
 - **Transport** (`.pr-transport`) + **meter** (`.pr-meter`) — for live
@@ -140,8 +138,7 @@ could animate on a splash screen later. Not required.
 
 ## 6. What is NOT decided yet
 
-Deferred to when the relevant M8 surface is built, with its own professional consoles
-reference:
+Deferred to when the relevant M8 surface is built:
 - Live-operation specifics: the zone row with live thumbnails, the scene grid,
   the global operation bar (master/strobe/chaser).
 - Exact menu contents.
