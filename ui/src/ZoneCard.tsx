@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { VFader } from "./VFader";
 import { Bolt } from "./icons";
 import { drawZone } from "./previewDraw";
@@ -37,8 +37,14 @@ const fmtSpeed = (real: number) => {
 };
 
 /** The live mini-preview: this zone's member pixels, at their real positions, filled
- *  with the colour the engine rendered. Redraws each frame from the shared stream. */
-function ZoneMiniPreview({ zoneId }: { zoneId: string }) {
+ *  with the colour the engine rendered. Redraws each frame from the shared stream.
+ *
+ *  `memo` is load-bearing, not an optimisation: its only prop (`zoneId`) is stable, so
+ *  it must NOT re-render when the parent ZoneCard re-renders on every fader-drag frame.
+ *  Without it, dragging a card's dimmer/velocity reconciles this `<canvas>` ~60×/s, and
+ *  WebKitGTK re-rasterizes it each time → the mini-preview flicker while moving a fader.
+ *  The imperative 30 Hz stream draw below is untouched (it never goes through React). */
+const ZoneMiniPreview = memo(function ZoneMiniPreview({ zoneId }: { zoneId: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stream = usePreviewStream();
 
@@ -58,7 +64,7 @@ function ZoneMiniPreview({ zoneId }: { zoneId: string }) {
   }, [zoneId, stream]);
 
   return <canvas ref={canvasRef} className="pr-zonecard-canvas" />;
-}
+});
 
 export function ZoneCard({ zone, selected, onSelect }: ZoneCardProps) {
   // The card owns its control state after mount (seeded from the show's loaded values),
@@ -88,7 +94,10 @@ export function ZoneCard({ zone, selected, onSelect }: ZoneCardProps) {
     setZoneDimmer(zone.id, v).catch(() => {});
   };
   const changeSpeed = (norm: number) => {
-    const real = normToSpeed(norm);
+    // Detent at 0 (static): a small dead zone around centre snaps to exactly 0, so
+    // "leaving it in the middle" truly freezes the zone instead of a tiny residual speed.
+    let real = normToSpeed(norm);
+    if (Math.abs(real) < 0.4) real = 0;
     setSpeed(real);
     setZoneSpeed(zone.id, real).catch(() => {});
   };
