@@ -36,6 +36,21 @@ const fmtSpeed = (real: number) => {
   return r === 0 ? "0" : r.toFixed(1);
 };
 
+// DEBUG (flicker diagnosis, temporary): press "p" to FREEZE / unfreeze all mini-preview
+// redraws. Frozen = the canvases stop updating (content holds at the last frame) but the
+// elements stay in the layout. If the minis still flicker while FROZEN, the flicker is the
+// canvas element's compositing, not the redraw; if it stops, the redraw is the cause.
+let DEBUG_FREEZE_MINI = false;
+if (typeof window !== "undefined") {
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "p" || e.key === "P") {
+      DEBUG_FREEZE_MINI = !DEBUG_FREEZE_MINI;
+      // eslint-disable-next-line no-console
+      console.log("[debug] mini-preview redraw frozen:", DEBUG_FREEZE_MINI);
+    }
+  });
+}
+
 /** The live mini-preview: this zone's member pixels, at their real positions, filled
  *  with the colour the engine rendered. Redraws each frame from the shared stream.
  *
@@ -50,6 +65,7 @@ const ZoneMiniPreview = memo(function ZoneMiniPreview({ zoneId }: { zoneId: stri
 
   useEffect(() => {
     const draw = () => {
+      if (DEBUG_FREEZE_MINI) return; // debug: hold the last frame to isolate redraw vs compositing
       const canvas = canvasRef.current;
       if (!canvas) return;
       drawZone(canvas, stream.descriptorRef.current, stream.colorsRef.current, zoneId, {
