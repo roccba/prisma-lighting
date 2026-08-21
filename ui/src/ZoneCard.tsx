@@ -1,8 +1,6 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { VFader } from "./VFader";
 import { Bolt } from "./icons";
-import { drawZone } from "./previewDraw";
-import { usePreviewStream } from "./previewStream";
 import {
   setZoneBlackout,
   setZoneDimmer,
@@ -13,17 +11,26 @@ import {
 } from "./api";
 import { strobeHz } from "./strobe";
 
-// One zone's card in the zone row (M8-SPEC §3.1): name, a LIVE mini-preview of the
-// zone's own fixtures (a filter over the shared M6 preview stream), flanked by two
-// vertical faders — the dimmer on the left and the bipolar VELOCITY on the right (0 =
-// static, up = forward, down = reverse, like professional consoles) — with solo / mute / strobe below.
-// Selecting the card marks it with the accent border and changes the UI's *selected*
-// zone; it does NOT change what the lights do (selected ≠ active, §3.2).
+// One zone's card in the zone row (M8-SPEC §3.1): name, a LIVE mini-preview of the zone's
+// own fixtures, flanked by two vertical faders — the dimmer on the left and the bipolar
+// VELOCITY on the right (0 = static, up = forward, down = reverse) — with
+// solo / mute / strobe below. Selecting the card marks it with the accent border and
+// changes the UI's *selected* zone; it does NOT change what the lights do (selected ≠
+// active, §3.2).
+//
+// The mini-preview itself is NOT drawn here: the preview slot is an empty framed screen,
+// and the zone row paints every card's thumbnail into ONE shared overlay canvas (see
+// ZoneRow — the single-accelerated-canvas flicker fix). The card registers its preview
+// slot so the row knows where to draw. The per-zone strobe trigger lives in the footer (it
+// used to overlay the preview; kept off the canvas so the overlay stays a clean picture).
 
 interface ZoneCardProps {
   zone: ZoneInfo;
   selected: boolean;
   onSelect: () => void;
+  /** Register (or, with `null`, unregister) this card's preview slot with the zone row so
+   *  the row's single overlay canvas can draw this zone's thumbnail into it. */
+  registerPreview: (id: string, el: HTMLElement | null) => void;
 }
 
 // Zone velocity is a real -10..10 value; the fader works in 0..1 with 0.5 = 0 (static).
@@ -36,53 +43,7 @@ const fmtSpeed = (real: number) => {
   return r === 0 ? "0" : r.toFixed(1);
 };
 
-// DEBUG (flicker diagnosis, temporary): press "p" to FREEZE / unfreeze all mini-preview
-// redraws. Frozen = the canvases stop updating (content holds at the last frame) but the
-// elements stay in the layout. If the minis still flicker while FROZEN, the flicker is the
-// canvas element's compositing, not the redraw; if it stops, the redraw is the cause.
-let DEBUG_FREEZE_MINI = false;
-if (typeof window !== "undefined") {
-  window.addEventListener("keydown", (e) => {
-    if (e.key === "p" || e.key === "P") {
-      DEBUG_FREEZE_MINI = !DEBUG_FREEZE_MINI;
-      // eslint-disable-next-line no-console
-      console.log("[debug] mini-preview redraw frozen:", DEBUG_FREEZE_MINI);
-    }
-  });
-}
-
-/** The live mini-preview: this zone's member pixels, at their real positions, filled
- *  with the colour the engine rendered. Redraws each frame from the shared stream.
- *
- *  `memo` is load-bearing, not an optimisation: its only prop (`zoneId`) is stable, so
- *  it must NOT re-render when the parent ZoneCard re-renders on every fader-drag frame.
- *  Without it, dragging a card's dimmer/velocity reconciles this `<canvas>` ~60×/s, and
- *  WebKitGTK re-rasterizes it each time → the mini-preview flicker while moving a fader.
- *  The imperative 30 Hz stream draw below is untouched (it never goes through React). */
-const ZoneMiniPreview = memo(function ZoneMiniPreview({ zoneId }: { zoneId: string }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const stream = usePreviewStream();
-
-  useEffect(() => {
-    const draw = () => {
-      if (DEBUG_FREEZE_MINI) return; // debug: hold the last frame to isolate redraw vs compositing
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      drawZone(canvas, stream.descriptorRef.current, stream.colorsRef.current, zoneId, {
-        dotScale: 0.42,
-        maxDotCss: 6,
-        padCss: 6,
-      });
-    };
-    const unsub = stream.subscribe(draw);
-    draw();
-    return unsub;
-  }, [zoneId, stream]);
-
-  return <canvas ref={canvasRef} className="pr-zonecard-canvas" />;
-});
-
-export function ZoneCard({ zone, selected, onSelect }: ZoneCardProps) {
+export function ZoneCard({ zone, selected, onSelect, registerPreview }: ZoneCardProps) {
   // The card owns its control state after mount (seeded from the show's loaded values),
   // writing each change straight to the engine. Local state keeps the controls
   // responsive; the wire reflects it live.
@@ -91,9 +52,9 @@ export function ZoneCard({ zone, selected, onSelect }: ZoneCardProps) {
   const [solo, setSolo] = useState(zone.solo);
   const [mute, setMute] = useState(zone.blackout);
 
-  // Per-zone strobe (§3.6). The bolt over the mini-preview engages it: HOLD = momentary,
-  // DOUBLE-CLICK = latched. `rate` (0..1) is a separate speed. Engaged ⇒ strobe at
-  // `strobeHz(rate)`; not engaged ⇒ rate 0 (off). Written live to the engine.
+  // Per-zone strobe (§3.6). The bolt engages it: HOLD = momentary, DOUBLE-CLICK = latched.
+  // `rate` (0..1) is a separate speed. Engaged ⇒ strobe at `strobeHz(rate)`; not engaged ⇒
+  // rate 0 (off). Written live to the engine.
   const [strobeRate, setStrobeRate] = useState(0.4);
   const [strobeHeld, setStrobeHeld] = useState(false);
   const [strobeLatched, setStrobeLatched] = useState(false);
@@ -102,6 +63,13 @@ export function ZoneCard({ zone, selected, onSelect }: ZoneCardProps) {
   useEffect(() => {
     setZoneStrobe(zone.id, strobeOn ? strobeHz(strobeRate) : 0, 0.5).catch(() => {});
   }, [zone.id, strobeOn, strobeRate]);
+
+  // Stable ref callback so React does not deregister/reregister the preview slot on every
+  // re-render (a fresh inline arrow would). Keyed on the zone id + the stable registrar.
+  const previewRef = useCallback(
+    (el: HTMLElement | null) => registerPreview(zone.id, el),
+    [zone.id, registerPreview],
+  );
 
   const swatch = `rgb(${zone.color[0]},${zone.color[1]},${zone.color[2]})`;
 
@@ -141,8 +109,9 @@ export function ZoneCard({ zone, selected, onSelect }: ZoneCardProps) {
         <span className="pr-zonecard-name">{zone.name}</span>
       </div>
 
-      {/* Body: dimmer fader · mini-preview (with strobe bolt) · velocity fader. Faders
-          stop the pointer from bubbling to card-select. */}
+      {/* Body: dimmer fader · mini-preview slot · velocity fader. Faders stop the pointer
+          from bubbling to card-select. The preview slot is an empty framed screen; the zone
+          row's overlay canvas paints this zone's thumbnail into it. */}
       <div className="pr-zonecard-body">
         <div className="pr-zonecard-fader" onPointerDown={(e) => e.stopPropagation()}>
           <VFader value={dimmer} onChange={changeDimmer} aria-label={`${zone.name} dimmer`} />
@@ -150,24 +119,7 @@ export function ZoneCard({ zone, selected, onSelect }: ZoneCardProps) {
           <span className="pr-zonecard-faderlbl">DIM</span>
         </div>
 
-        <div className="pr-zonecard-preview">
-          <ZoneMiniPreview zoneId={zone.id} />
-          <button
-            className={`pr-strobe-trigger${strobeOn ? " is-on" : ""}${strobeLatched ? " is-latched" : ""}`}
-            onPointerDown={(e) => {
-              e.stopPropagation();
-              setStrobeHeld(true);
-            }}
-            onPointerUp={() => setStrobeHeld(false)}
-            onPointerLeave={() => setStrobeHeld(false)}
-            onDoubleClick={() => setStrobeLatched((l) => !l)}
-            title="Strobo — mantené = momentáneo, doble clic = fijo"
-            aria-label={`${zone.name} strobe`}
-            aria-pressed={strobeOn}
-          >
-            <Bolt />
-          </button>
-        </div>
+        <div className="pr-zonecard-preview" ref={previewRef} />
 
         <div className="pr-zonecard-fader" onPointerDown={(e) => e.stopPropagation()}>
           <VFader
@@ -181,7 +133,9 @@ export function ZoneCard({ zone, selected, onSelect }: ZoneCardProps) {
         </div>
       </div>
 
-      {/* Footer: solo / mute + the strobe rate (coarse on-screen; meant for MIDI, §3.6). */}
+      {/* Footer: solo / mute · strobe trigger · strobe rate (coarse on-screen; meant for
+          MIDI, §3.6). The strobe trigger sits here rather than over the preview so the row's
+          overlay canvas stays a clean picture. */}
       <div className="pr-zonecard-footer" onPointerDown={(e) => e.stopPropagation()}>
         <button
           className={`pr-btn pr-zonecard-sm${solo ? " is-active" : ""}`}
@@ -197,10 +151,22 @@ export function ZoneCard({ zone, selected, onSelect }: ZoneCardProps) {
         >
           M
         </button>
+        <button
+          className={`pr-strobe-trigger pr-strobe-trigger-sm${strobeOn ? " is-on" : ""}${strobeLatched ? " is-latched" : ""}`}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            setStrobeHeld(true);
+          }}
+          onPointerUp={() => setStrobeHeld(false)}
+          onPointerLeave={() => setStrobeHeld(false)}
+          onDoubleClick={() => setStrobeLatched((l) => !l)}
+          title="Strobo — mantené = momentáneo, doble clic = fijo"
+          aria-label={`${zone.name} strobe`}
+          aria-pressed={strobeOn}
+        >
+          <Bolt size={12} />
+        </button>
         <label className="pr-zonecard-strobe" title="Velocidad del strobo">
-          <span className="pr-strobe-ico">
-            <Bolt size={11} />
-          </span>
           <input
             type="range"
             className="pr-strobe-rate"
