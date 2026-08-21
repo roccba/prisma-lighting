@@ -1,0 +1,87 @@
+name: Release
+
+# Build the desktop installers on each OS and publish them to a GitHub Release.
+# Triggered by pushing a version tag, e.g.:
+#     git tag v0.1.0 && git push origin v0.1.0
+# Tauri cannot cross-compile, so Linux and Windows each build on their own runner.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            args: "--bundles appimage,deb"
+          - platform: windows-latest
+            args: "--bundles nsis,msi"
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            build-essential \
+            libssl-dev \
+            patchelf
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install UI dependencies
+        run: npm --prefix ui ci
+
+      - name: Build and publish the release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: app
+          tagName: ${{ github.ref_name }}
+          releaseName: "Prisma ${{ github.ref_name }}"
+          releaseBody: |
+            Primera versión — prototipo funcional.
+
+            El motor, la salida Art-Net, la vista previa en vivo y el editor de patch
+            funcionan; se opera con zonas independientes y efectos por zona. Quedan
+            mejoras estéticas pendientes, pero ya funciona de punta a punta.
+
+            Instaladores:
+            - Linux: AppImage (portable) y .deb
+            - Windows: instalador .exe (NSIS) y .msi
+
+            Los binarios de Windows no están firmados todavía: SmartScreen puede mostrar
+            un aviso de editor desconocido la primera vez.
+          releaseDraft: false
+          prerelease: true
+          args: ${{ matrix.args }}

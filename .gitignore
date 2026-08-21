@@ -7,6 +7,12 @@
 # Tauri-generated capability schemas (regenerated on every build)
 /app/gen/schemas/
 
+# Mobile / store icon variants emitted by `tauri icon` — desktop build doesn't use them.
+/app/icons/android/
+/app/icons/ios/
+/app/icons/Square*Logo.png
+/app/icons/StoreLogo.png
+
 # Frontend (ui/) — node modules and the Vite build output (rebuilt with npm)
 /ui/node_modules/
 /ui/dist/
@@ -28,10 +34,21 @@ Thumbs.db
 .playwright-mcp/
 
 # Local UI/design scratch — standalone dark-theme mockups and style experiments
-# feeding the design-system work, plus their reference captures. Deliberately NOT
-# tracked: they are throwaway explorations, not the visual references the spec
-# cites (those live in Screenshots/ and are committed with Screenshots/README.md).
+# feeding the design-system work. Throwaway explorations, kept local.
 /index1.html
 /prisma-ui.html
 /prisma-style.css
-/Screenshots/Design/
+/prisma-style-system.html
+
+# Reference captures used during development (includes third-party screenshots).
+# Kept local, not published.
+/Screenshots/
+
+# Internal development docs — specs, log, design scratch, investigations. Kept local.
+# Only the product-facing docs are published (see the exceptions below).
+/docs/*
+!/docs/DESIGN.md
+!/docs/BUILD-WINDOWS.md
+
+# AI assistant instructions — kept local, not published.
+/CLAUDE.md
