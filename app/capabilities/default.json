@@ -3,5 +3,12 @@
   "identifier": "default",
   "description": "Core APIs the windows use (window close-requested for the unsaved-changes guard, events) plus native file dialogs for .prismap (patch) and .prisma (show) open/save. Scoped to the main operation window, the patch-editor secondary window (M8 §7), and the boot splash (which listens for prisma://ready and invokes close_splash).",
   "windows": ["main", "editor", "splash"],
-  "permissions": ["core:default", "dialog:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-is-fullscreen",
+    "dialog:default"
+  ]
 }
