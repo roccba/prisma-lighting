@@ -168,46 +168,53 @@ fn grid_dto(zs: &ZoneShow) -> Vec<CellInfo> {
         .collect()
 }
 
-/// The M8 test show: the wedding rig with a distinct effect running per zone, so the
-/// zone row's live mini-previews show something worth looking at (not two trivial
-/// zones). The editor writes only fixture→zone *ownership*, so the overlap membership
-/// the render path needs is derived first ([`Patch::fill_zone_members_from_ownership`]).
-fn build_show() -> Show {
-    let mut patch = prisma_editor::samples::wedding_rig();
-    patch.fill_zone_members_from_ownership();
-    patch.fit_matrix_size(); // world = the rig's bounding box, a derived fact (not stored)
-    let mut show = Show::new("Wedding", patch);
-    // One effect per zone, cycled — enough variety to judge the row at a glance. Each
-    // zone gets a grid of assignable cells with its initial effect in cell 0 (active).
-    let catalogue = [
-        "color_scroll",
-        "plasma",
-        "fire",
-        "noise",
-        "radial",
-        "sparkle",
-    ];
-    for (i, zs) in show.zones.iter_mut().enumerate() {
-        let effect_id = catalogue[i % catalogue.len()];
-        let mut params = ParamSet::new();
-        if effect_id == "solid" {
-            params.set("r", 0.85);
-            params.set("g", 0.25);
-            params.set("b", 0.5);
-        }
-        zs.grid = (0..GRID_CELLS)
-            .map(|c| {
-                if c == 0 {
-                    Cell::single(Layer::shader(effect_id, params.clone()))
-                } else {
-                    Cell::empty()
-                }
-            })
-            .collect();
-        zs.active = Some(0);
-        zs.live.dimmer = 0.8; // lit, so the mini-previews are visible
+/// A fresh patch for a new show: no fixtures, a minimal 1×1×1 world, and ONE empty zone
+/// ("Zona 1") so the operator starts with something to select and populate rather than a
+/// blank console. Valid and compilable (`fit_matrix_size` yields `[1,1,1]` for a
+/// fixture-less rig; a member-less zone contributes no pixels). The operator adds fixtures
+/// to the zone (and more zones) in the patch editor.
+fn empty_patch() -> Patch {
+    Patch {
+        id: Uuid::new_v4(),
+        name: "Sin título".into(),
+        matrix_size: [1, 1, 1],
+        fixtures: Vec::new(),
+        zones: vec![Zone {
+            id: Uuid::new_v4(),
+            name: "Zona 1".into(),
+            members: Vec::new(),
+            bounds: None,
+            z_order: 0,
+            blend_mode: BlendMode::Normal,
+            mapping_size: [16, 16, 1],
+            display_color: ZONE_COLORS[0],
+            world_transform: None,
+        }],
     }
-    show
+}
+
+/// A blank show with no content at all (no zones/patch) — the app's "empty" state.
+fn empty_show() -> Show {
+    Show::new("Sin título", empty_patch())
+}
+
+/// Read the remembered last-show path, if any. Empty/missing file ⇒ `None` ⇒ boot empty.
+fn read_last_show(file: &Path) -> Option<PathBuf> {
+    let s = std::fs::read_to_string(file).ok()?;
+    let s = s.trim();
+    if s.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(s))
+    }
+}
+
+/// Remember (or, with `None`, forget) the last-show path so the next launch reopens it.
+fn write_last_show(file: &Path, path: Option<&Path>) {
+    let content = path
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let _ = std::fs::write(file, content);
 }
 
 /// Everything the shell owns for the life of the process.
@@ -238,6 +245,9 @@ struct AppState {
     network: Mutex<NetworkConfig>,
     /// Where the network config file lives — the per-user app-config dir.
     network_path: PathBuf,
+    /// File holding the path of the last opened/saved show, so the next launch reopens it.
+    /// Empty/missing ⇒ boot empty. Cleared by "Nueva configuración".
+    last_show_file: PathBuf,
 }
 
 /// Network output configuration — the device manager. It decides WHERE
@@ -584,6 +594,39 @@ fn editor_add_zone(state: State<AppState>, name: String) -> Result<EditorState, 
     Ok(state_of(&draft))
 }
 
+/// Rename a zone (undoable). The name must be non-empty and unique (case-insensitive),
+/// excluding the zone itself, so two zones never share a name.
+#[tauri::command]
+fn editor_rename_zone(
+    state: State<AppState>,
+    zone: Uuid,
+    name: String,
+) -> Result<EditorState, String> {
+    let mut draft = state.draft.lock().unwrap();
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("El nombre no puede estar vacío.".into());
+    }
+    let clash = draft
+        .patch()
+        .zones
+        .iter()
+        .any(|z| z.id != zone && z.name.trim().to_lowercase() == trimmed.to_lowercase());
+    if clash {
+        return Err(format!("Ya existe una zona llamada «{trimmed}»."));
+    }
+    draft
+        .apply(
+            EditOp::RenameZone {
+                zone,
+                name: trimmed.to_string(),
+            },
+            None,
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(state_of(&draft))
+}
+
 /// Remove a zone (undoable). Refused if fixtures still belong to it — the error names
 /// how many, so the UI can tell the operator to reassign or delete them first.
 #[tauri::command]
@@ -741,7 +784,41 @@ fn editor_apply_to_live(app: AppHandle) -> Result<(), String> {
 fn main_save_show(state: State<AppState>, path: String) -> Result<(), String> {
     let show = state.show.lock().unwrap();
     let json = save_show(&show).map_err(|e| e.to_string())?;
-    std::fs::write(&path, json).map_err(|e| e.to_string())
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    // Remember it so the next launch reopens this show.
+    write_last_show(&state.last_show_file, Some(Path::new(&path)));
+    Ok(())
+}
+
+/// "Nueva configuración": reset to a completely empty state — no zones, no patch, nothing
+/// running, exactly as a from-zero launch. The last-show memory is cleared, so the next
+/// launch also starts empty until a show is opened or saved. Validated before the engine is
+/// torn down, so a failure leaves the running show intact. The main window re-fetches on
+/// `layout-changed`.
+#[tauri::command]
+fn main_new_show(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let show = empty_show();
+    let target = resolve_target(&state.network.lock().unwrap());
+    let (config, port) = preview_config(AdapterPreference::Software, target);
+    let mut guard = state.engine.lock().unwrap();
+    let engine = guard.take().ok_or("engine is not running")?;
+    match engine.recompile_show(show.clone(), config) {
+        Ok(new) => {
+            new.set_frozen(false);
+            *guard = Some(new);
+            if let Some(port) = port {
+                *state.preview_port.lock().unwrap() = port;
+            }
+            drop(guard);
+            *state.draft.lock().unwrap() = PatchDraft::new(show.patch.clone());
+            *state.show.lock().unwrap() = show;
+            write_last_show(&state.last_show_file, None);
+            let _ = app.emit("layout-changed", ());
+            Ok(())
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Open a `.prisma` show and run it: load the Show, recompile the engine onto its embedded
@@ -749,6 +826,7 @@ fn main_save_show(state: State<AppState>, path: String) -> Result<(), String> {
 /// is validated (compile) BEFORE the engine is torn down, so a bad file is rejected with the
 /// running show intact rather than leaving the app with no engine. The main window re-fetches
 /// on the `layout-changed` event.
+
 #[tauri::command]
 fn main_open_show(app: AppHandle, path: String) -> Result<(), String> {
     let state = app.state::<AppState>();
@@ -775,6 +853,8 @@ fn main_open_show(app: AppHandle, path: String) -> Result<(), String> {
             // opened next, shows this rig), then tell the main window to re-fetch.
             *state.draft.lock().unwrap() = PatchDraft::new(show.patch.clone());
             *state.show.lock().unwrap() = show;
+            // Remember it so the next launch reopens this show.
+            write_last_show(&state.last_show_file, Some(Path::new(&path)));
             let _ = app.emit("layout-changed", ());
             Ok(())
         }
@@ -1328,6 +1408,7 @@ fn main() {
             editor_translate_fixtures,
             editor_set_zone_mapping_size,
             editor_add_zone,
+            editor_rename_zone,
             editor_remove_zone,
             editor_highlight,
             editor_apply_to_live,
@@ -1351,6 +1432,7 @@ fn main() {
             main_set_master_strobe,
             main_open_editor,
             main_save_show,
+            main_new_show,
             main_open_show,
             main_effect_catalogue,
             main_zone_grid,
@@ -1363,15 +1445,30 @@ fn main() {
         ])
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // M8: the app boots into the main operation window running a real Show (the
-            // wedding rig with a distinct effect per zone). This is where the engine
-            // stops rendering IdleContent and runs per-zone content — the zone row's
-            // live mini-previews light up. The editor draft below stays for the patch
-            // editor (a secondary window in a later step).
-            let show = build_show();
+            // The app boots EMPTY (no zones, no patch, nothing running) unless a last show
+            // is remembered — then it reopens that `.prisma` (which carries its own embedded
+            // patch). This is the "start from zero, or resume the last show" behaviour.
+            let config_dir = app
+                .path()
+                .app_config_dir()
+                .map_err(|e| format!("no app config dir: {e}"))?;
+            let last_show_file = config_dir.join("last-show.txt");
+            let show = read_last_show(&last_show_file)
+                .and_then(|p| std::fs::read_to_string(&p).ok())
+                .and_then(|json| load_show(&json).ok())
+                .map(|mut s| {
+                    s.patch.fill_zone_members_from_ownership();
+                    s.patch.fit_matrix_size();
+                    s
+                })
+                .filter(|s| s.patch.compile().is_ok())
+                .unwrap_or_else(empty_show);
             // Keep an editable copy as the grid's + zone-set source of truth; the engine
             // runs its own copy and follows our triggers through the queue.
             let show_state = show.clone();
+            // The editor draft opens on the same patch (empty until the operator builds a
+            // rig, or the loaded show's rig).
+            let draft_patch = show.patch.clone();
 
             // Network output config (device manager): where DMX goes. Loaded from the
             // per-user app-config dir; a missing/invalid file → defaults (virtual sink),
@@ -1401,10 +1498,6 @@ fn main() {
 
             // The show runs LIVE (not frozen) — the main window operates content. The
             // editor's freeze bracket returns with the editor window in a later step.
-
-            // The editor draft opens on the same rig (its own copy; the editor works in
-            // ownership terms and never needs the derived overlap membership).
-            let patch = prisma_editor::samples::wedding_rig();
 
             // Load the operator's fixture library from the per-user app-config dir
             // (§3.2). First run: seed a few generic types and write the file, so the
@@ -1437,12 +1530,13 @@ fn main() {
             app.manage(AppState {
                 engine: Mutex::new(Some(engine)),
                 show: Mutex::new(show_state),
-                draft: Mutex::new(PatchDraft::new(patch)),
+                draft: Mutex::new(PatchDraft::new(draft_patch)),
                 library: Mutex::new(library),
                 library_path,
                 preview_port: Mutex::new(preview_port.unwrap_or(0)),
                 network: Mutex::new(network),
                 network_path,
+                last_show_file,
             });
 
             // Boot splash safety net: the splash webview normally reveals the main window
