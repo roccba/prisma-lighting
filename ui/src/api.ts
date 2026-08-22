@@ -196,6 +196,9 @@ export const addZone = (name: string) => invoke<EditorState>("editor_add_zone", 
 /** Remove a zone (§7). Rejected (throws) if fixtures still belong to it. */
 export const removeZone = (zone: string) => invoke<EditorState>("editor_remove_zone", { zone });
 
+export const renameZone = (zone: string, name: string) =>
+  invoke<EditorState>("editor_rename_zone", { zone, name });
+
 export const undo = () => invoke<EditorState>("editor_undo");
 export const redo = () => invoke<EditorState>("editor_redo");
 
@@ -304,6 +307,9 @@ export const networkSet = (config: NetworkConfig) =>
 export const saveShow = (path: string) => invoke<void>("main_save_show", { path });
 /** Open a `.prisma` show and run it (recompiles the engine onto its embedded patch). */
 export const openShow = (path: string) => invoke<void>("main_open_show", { path });
+
+/** Start a clean show over the current patch (keeps zones/fixtures, clears all effects). */
+export const newShow = () => invoke<void>("main_new_show");
 
 // --- Main operation window (M8 step 4): the scene grid ---
 
