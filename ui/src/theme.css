@@ -57,6 +57,36 @@
   --r-md: 3px;
 }
 
+/* ---- Light theme ---- */
+/* Retheme by overriding tokens only (per the design system). Preliminary: the accent is
+   unchanged and the canvas/preview stays dark so LED colours read true; component CSS that
+   still hardcodes a grey will be reconciled to tokens as the light build matures. */
+:root[data-theme="light"] {
+  --bg-app:      #e7e7e7;
+  --bg-panel:    #f3f3f3;
+  --bg-panel-2:  #ffffff;
+  --bg-canvas:   #0a0a0a;   /* kept dark on purpose: light output reads best on black */
+  --bg-input:    #ffffff;
+  --menu-bg:     #e0e0e0;
+
+  --btn-face:        linear-gradient(#fbfbfb, #e9e9e9);
+  --btn-face-hover:  linear-gradient(#ffffff, #eee);
+  --btn-face-flat:   #ededed;
+
+  --btn-border:      #b6b6b6;
+  --btn-border-dark: #9a9a9a;
+
+  --row-a:     #f1f1f1;
+  --row-b:     #e9e9e9;
+  --header-bg: #d4d4d4;
+  --divider:   #cccccc;
+
+  --text:       #1a1a1a;
+  --text-dim:   #666666;
+  --text-label: #444444;
+  --accent-text: #005a99;   /* darker so data reads on light fields */
+}
+
 /* ---- Base ---- */
 * { box-sizing: border-box; }
 body {
@@ -260,16 +290,27 @@ body {
 .pr-menubar { background: var(--menu-bg); border: 1px solid var(--btn-border-dark); display: flex; height: 30px; }
 .pr-menubar .mi { padding: 0 14px; display: flex; align-items: center; font-size: var(--fs-base); cursor: pointer; position: relative; }
 .pr-menubar .mi:hover, .pr-menubar .mi.is-open { background: var(--accent); color: #fff; }
-.pr-menubar .submenu {
-  display: none; position: absolute; top: 30px; left: 0;
-  background: var(--menu-bg); border: 1px solid var(--btn-border-dark);
-  min-width: 200px; z-index: 60; box-shadow: 0 8px 18px rgba(0,0,0,.6);
+/* Drop-down opened from a top-level menu, and the nested fly-out for submenus. */
+.pr-menu-drop, .pr-menu-flyout {
+  position: absolute; background: var(--menu-bg); border: 1px solid var(--btn-border-dark);
+  min-width: 220px; z-index: 60; box-shadow: 0 8px 18px rgba(0,0,0,.5); padding: 3px 0;
+  cursor: default;
 }
-.pr-menubar .mi.is-open .submenu { display: block; }
-.pr-menubar .subitem { padding: 7px 16px; color: var(--text); display: flex; justify-content: space-between; gap: 30px; cursor: pointer; }
-.pr-menubar .subitem:hover { background: var(--accent-dim); color: #fff; }
-.pr-menubar .subitem .kbd { color: var(--text-dim); font-size: var(--fs-tiny); }
-.pr-menubar .subdivider { height: 1px; background: var(--divider); margin: 3px 0; }
+.pr-menu-drop { top: 30px; left: 0; }
+.pr-menu-flyout { display: none; top: -4px; left: 100%; min-width: 180px; z-index: 61; }
+.pr-menu-parent:hover > .pr-menu-flyout { display: block; }
+.pr-menu-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 30px;
+  padding: 6px 14px; color: var(--text); font-size: var(--fs-base); white-space: nowrap;
+  cursor: pointer; position: relative;
+}
+.pr-menu-item:hover:not(.is-disabled) { background: var(--accent-dim); color: #fff; }
+.pr-menu-item.is-disabled { color: var(--text-dim); opacity: .5; cursor: default; }
+.pr-menu-item.is-checked .pr-menu-label { color: var(--accent-text); }
+.pr-menu-kbd { color: var(--text-dim); font-size: var(--fs-tiny); font-family: var(--font-mono); }
+.pr-menu-item:hover:not(.is-disabled) .pr-menu-kbd { color: rgba(255,255,255,.75); }
+.pr-menu-caret { color: var(--text-dim); font-size: 9px; }
+.pr-menu-div { height: 1px; background: var(--divider); margin: 3px 6px; }
 
 /* ============================================================
    Toolbar container
@@ -500,6 +541,14 @@ body {
 .pr-globalbar-strobe { width: 130px; }
 
 .pr-mainwin-error { flex: 0 0 auto; color: var(--accent-text); background: var(--bg-panel); border-top: 1px solid var(--btn-border-dark); padding: 6px 10px; font-size: var(--fs-small); font-family: var(--font-mono); }
+
+/* Transient toast (bottom-centre) for not-yet-built menu actions. */
+.pr-toast {
+  position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+  background: var(--bg-panel-2); border: 1px solid var(--btn-border); color: var(--text);
+  padding: 8px 16px; border-radius: var(--r-md); font-size: var(--fs-base);
+  box-shadow: 0 6px 16px rgba(0,0,0,.5); z-index: 200; pointer-events: none;
+}
 
 /* --- Scene grid + effect picker (M8 step 4, §3.3 / §4) --- */
 .pr-grid-wrap { flex: 1 1 auto; overflow: auto; padding: 8px; min-height: 0; }

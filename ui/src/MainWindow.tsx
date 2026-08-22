@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { mainZones, openEditor, openShow, saveShow, type ZoneInfo } from "./api";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { mainZones, newShow, openEditor, openShow, saveShow, type ZoneInfo } from "./api";
 import { DeviceManager } from "./DeviceManager";
+import { MenuBar, type MenuDef } from "./MenuBar";
 import { EffectParams } from "./EffectParams";
 import { GlobalBar } from "./GlobalBar";
 import { LargePreview } from "./LargePreview";
@@ -21,19 +23,25 @@ import { ZoneRow } from "./ZoneRow";
 // changes output (selected ≠ active, §3.2); only the zone cards' faders / solo / mute
 // do that.
 
-const MENU = ["Archivo", "Vista", "Preferencias", "Herramientas", "Ayuda"];
-
 const PRISMA_FILTERS = [{ name: "Prisma show", extensions: ["prisma"] }];
 
 export default function MainWindow() {
   const [zones, setZones] = useState<ZoneInfo[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Which menu is dropped down (null = none). Minimal for M8: only Preferencias has an
-  // action (open the patch editor, §6). A full menu system is later polish.
-  const [menuOpen, setMenuOpen] = useState<string | null>(null);
   // Whether the device-manager modal (network output) is open.
   const [deviceMgrOpen, setDeviceMgrOpen] = useState(false);
+  // Colour theme (dark default), persisted per-viewer and applied as data-theme on <html>.
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    try {
+      return localStorage.getItem("prisma-theme") === "light" ? "light" : "dark";
+    } catch {
+      return "dark";
+    }
+  });
+  // Transient toast for menu entries whose feature is not built yet.
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimer = useRef<number | undefined>(undefined);
   // Bumped whenever the selected zone's active cell changes (fire / assign / clear), so
   // the effect parameter panel re-fetches the now-active effect and its values. The
   // large preview follows the stream on its own and needs no signal.
@@ -74,7 +82,6 @@ export default function MainWindow() {
   // Open a `.prisma` show: the backend recompiles the engine onto it and emits
   // `layout-changed`, which our listener above turns into a zone/grid refresh.
   const doOpenShow = async () => {
-    setMenuOpen(null);
     try {
       const path = await openDialog({ multiple: false, filters: PRISMA_FILTERS });
       if (typeof path === "string") await openShow(path);
@@ -85,7 +92,6 @@ export default function MainWindow() {
 
   // Save the live show (with its embedded patch) to a `.prisma` file.
   const doSaveShow = async () => {
-    setMenuOpen(null);
     try {
       const path = await saveDialog({ filters: PRISMA_FILTERS, defaultPath: "untitled.prisma" });
       if (path) await saveShow(path);
@@ -94,55 +100,163 @@ export default function MainWindow() {
     }
   };
 
+  // Apply + persist the theme whenever it changes.
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem("prisma-theme", theme);
+    } catch {
+      /* storage may be unavailable (private mode, etc.) */
+    }
+  }, [theme]);
+
+  const showNotice = (msg: string) => {
+    setNotice(msg);
+    window.clearTimeout(noticeTimer.current);
+    noticeTimer.current = window.setTimeout(() => setNotice(null), 2500);
+  };
+  // Placeholder for menu entries whose feature is not implemented yet.
+  const soon = () => showNotice("Función no disponible todavía");
+
+  const toggleFullscreen = async () => {
+    const w = getCurrentWindow();
+    try {
+      await w.setFullscreen(!(await w.isFullscreen()));
+    } catch {
+      /* ignore */
+    }
+  };
+  const doExit = () => {
+    getCurrentWindow()
+      .close()
+      .catch(() => {});
+  };
+  // New configuration: a clean show over the current rig (clears all effects).
+  const doNewShow = async () => {
+    try {
+      await newShow();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  // Global keyboard shortcuts. A ref holds the latest action closures so the listener
+  // subscribes once and never runs a stale one.
+  const actions = useRef({ doNewShow, doOpenShow, doSaveShow, toggleFullscreen, soon });
+  actions.current = { doNewShow, doOpenShow, doSaveShow, toggleFullscreen, soon };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const k = e.key;
+      const ctrlOnly = e.ctrlKey && !e.altKey && !e.metaKey;
+      if (ctrlOnly && (k === "o" || k === "O")) {
+        e.preventDefault();
+        actions.current.doOpenShow();
+      } else if (ctrlOnly && (k === "s" || k === "S")) {
+        e.preventDefault();
+        actions.current.doSaveShow();
+      } else if (ctrlOnly && (k === "n" || k === "N")) {
+        e.preventDefault();
+        actions.current.doNewShow();
+      } else if (e.ctrlKey && e.altKey && (k === "c" || k === "C")) {
+        e.preventDefault();
+        actions.current.soon();
+      } else if (k === "F3") {
+        e.preventDefault();
+        openEditor().catch(() => {});
+      } else if (k === "F4") {
+        e.preventDefault();
+        setDeviceMgrOpen(true);
+      } else if (k === "F11") {
+        e.preventDefault();
+        actions.current.toggleFullscreen();
+      } else if (k === "F7" || k === "F8" || k === "F9" || k === "F10") {
+        e.preventDefault();
+        actions.current.soon();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const selectedZone = zones.find((z) => z.id === selected) ?? null;
+
+  const menus: MenuDef[] = [
+    {
+      label: "Archivo",
+      children: [
+        { kind: "action", label: "Nueva configuración", shortcut: "Ctrl+N", onSelect: doNewShow },
+        { kind: "action", label: "Abrir configuración…", shortcut: "Ctrl+O", onSelect: doOpenShow },
+        { kind: "action", label: "Guardar configuración…", shortcut: "Ctrl+S", onSelect: doSaveShow },
+        { kind: "divider" },
+        {
+          kind: "submenu",
+          label: "Importar",
+          children: [{ kind: "action", label: "Próximamente", disabled: true }],
+        },
+        {
+          kind: "submenu",
+          label: "Exportar",
+          children: [{ kind: "action", label: "Próximamente", disabled: true }],
+        },
+        { kind: "divider" },
+        { kind: "action", label: "Salir", shortcut: "Alt+F4", onSelect: doExit },
+      ],
+    },
+    {
+      label: "Vista",
+      children: [
+        { kind: "action", label: "Tocar", shortcut: "F8", onSelect: soon },
+        {
+          kind: "submenu",
+          label: "Tema",
+          children: [
+            { kind: "action", label: "Claro", checked: theme === "light", onSelect: () => setTheme("light") },
+            { kind: "action", label: "Oscuro", checked: theme === "dark", onSelect: () => setTheme("dark") },
+          ],
+        },
+        { kind: "divider" },
+        { kind: "action", label: "Pantalla completa", shortcut: "F11", onSelect: toggleFullscreen },
+      ],
+    },
+    {
+      label: "Preferencias",
+      children: [
+        { kind: "action", label: "Editor de patch", shortcut: "F3", onSelect: () => openEditor().catch(() => {}) },
+        { kind: "action", label: "Gestor de dispositivos", shortcut: "F4", onSelect: () => setDeviceMgrOpen(true) },
+        { kind: "divider" },
+        {
+          kind: "submenu",
+          label: "Control remoto",
+          children: [
+            { kind: "action", label: "HTTP", onSelect: soon },
+            { kind: "action", label: "OSC", onSelect: soon },
+          ],
+        },
+        { kind: "action", label: "Opciones…", onSelect: soon },
+      ],
+    },
+    {
+      label: "Herramientas",
+      children: [
+        { kind: "action", label: "Colores", shortcut: "Ctrl+Alt+C", onSelect: soon },
+        { kind: "action", label: "Grupos", shortcut: "F9", onSelect: soon },
+        { kind: "action", label: "Listas de señales", shortcut: "F7", onSelect: soon },
+        { kind: "action", label: "Líneas de tiempo", shortcut: "F10", onSelect: soon },
+        { kind: "divider" },
+        { kind: "action", label: "Inspector DMX", shortcut: "Ctrl+Alt+D", onSelect: soon },
+        { kind: "action", label: "Inspector MIDI", shortcut: "Ctrl+Alt+M", onSelect: soon },
+      ],
+    },
+    {
+      label: "Ayuda",
+      children: [{ kind: "action", label: "Acerca de Prisma", onSelect: () => showNotice("Prisma 0.1.0") }],
+    },
+  ];
 
   return (
     <PreviewStreamProvider>
       <div className="pr-mainwin">
-        <div className="pr-menubar" onPointerLeave={() => setMenuOpen(null)}>
-          {MENU.map((m) => (
-            <span
-              className={`mi${menuOpen === m ? " is-open" : ""}`}
-              key={m}
-              onClick={() => setMenuOpen((cur) => (cur === m ? null : m))}
-            >
-              {m}
-              {m === "Archivo" && (
-                <div className="submenu" onClick={(e) => e.stopPropagation()}>
-                  <div className="subitem" onClick={doOpenShow}>
-                    Abrir show…
-                  </div>
-                  <div className="subitem" onClick={doSaveShow}>
-                    Guardar show…
-                  </div>
-                </div>
-              )}
-              {m === "Preferencias" && (
-                <div className="submenu" onClick={(e) => e.stopPropagation()}>
-                  <div
-                    className="subitem"
-                    onClick={() => {
-                      setMenuOpen(null);
-                      openEditor().catch(() => {});
-                    }}
-                  >
-                    Editor de Patch
-                    <span className="kbd">F3</span>
-                  </div>
-                  <div
-                    className="subitem"
-                    onClick={() => {
-                      setMenuOpen(null);
-                      setDeviceMgrOpen(true);
-                    }}
-                  >
-                    Gestor de dispositivos
-                  </div>
-                </div>
-              )}
-            </span>
-          ))}
-        </div>
+        <MenuBar menus={menus} />
 
         <div className="pr-mainwin-body">
           <section className="pr-region pr-region-zonerow">
@@ -197,6 +311,7 @@ export default function MainWindow() {
         </div>
 
         {error && <div className="pr-mainwin-error">Error: {error}</div>}
+        {notice && <div className="pr-toast">{notice}</div>}
         {deviceMgrOpen && <DeviceManager onClose={() => setDeviceMgrOpen(false)} />}
       </div>
     </PreviewStreamProvider>
