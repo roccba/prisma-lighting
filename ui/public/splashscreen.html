@@ -19,8 +19,10 @@
         --bg: #0f0f16;
         --text: #f0f0f0;
         --dim: #7a7a86;
-        --cell: 22px;
-        --gap: 5px;
+        /* Cell ≈ the text stroke weight; 5 rows + 4 gaps ≈ the cap-height of RISMA, so the
+           pixel-P stands the same height as the letters. P height = 5·10 + 4·2 = 58px. */
+        --cell: 10px;
+        --gap: 2px;
       }
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body { width: 100%; height: 100%; overflow: hidden; }
@@ -45,8 +47,12 @@
       }
       body.done #stage { opacity: 0; transform: scale(1.03); }
 
-      /* --- Lockup: pixel P + wordmark emerging from behind it --- */
-      .lockup { display: flex; align-items: center; }
+      /* --- Lockup: pixel P + wordmark emerging from behind it ---
+         The P shares a ROW with RISMA only (not with the sub-line), so it aligns to the
+         RISMA cap-height, not to the centre of the whole two-line block. LIGHTING CONTROL
+         sits on its own line below, starting under RISMA. */
+      .lockup { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+      .lead { display: flex; align-items: center; }
       .pixP {
         display: grid;
         grid-template-columns: repeat(4, var(--cell));
@@ -54,8 +60,6 @@
         gap: var(--gap);
         position: relative;
         z-index: 2; /* the P sits in FRONT so the wordmark can slide out from behind it */
-        /* the P's own soft entrance */
-        filter: drop-shadow(0 0 0 rgba(0,0,0,0));
       }
       .pixP i {
         width: var(--cell);
@@ -73,14 +77,16 @@
         100% { opacity: 1; transform: scale(1); box-shadow: 0 0 7px rgba(0,122,204,.45); }
       }
 
-      /* The wordmark clip: its LEFT edge abuts the P; content starts fully left (hidden
-         under the clip, i.e. "behind the P") and slides right into view. */
-      .reveal { overflow: hidden; margin-left: 14px; }
-      .wordmark {
+      /* Each clip's LEFT edge abuts the P (brand) / sits under RISMA (sub); content starts
+         fully left (hidden behind the clip, i.e. behind the P) and slides right into view. */
+      .reveal { overflow: hidden; }
+      .reveal-brand { margin-left: 12px; }
+      .reveal-sub { margin-left: calc(4 * var(--cell) + 3 * var(--gap) + 12px); }
+      .brand, .sub {
         transform: translateX(-102%);
         opacity: 0;
-        animation: emerge 620ms cubic-bezier(.18, .7, .16, 1) forwards;
         white-space: nowrap;
+        animation: emerge 620ms cubic-bezier(.18, .7, .16, 1) forwards;
       }
       @keyframes emerge {
         0%   { transform: translateX(-102%); opacity: 0; }
@@ -88,17 +94,16 @@
         100% { transform: translateX(0); opacity: 1; }
       }
       .brand {
-        font-size: 62px;
+        font-size: 76px;
         font-weight: 700;
         letter-spacing: 4px;
-        line-height: 0.82;
+        line-height: 0.76;
         color: #f4f4f4;
       }
       .sub {
         font-size: 12px;
         letter-spacing: 9px;
         color: var(--dim);
-        margin-top: 9px;
         padding-left: 3px;
       }
 
@@ -141,13 +146,11 @@
   <body>
     <div id="stage">
       <div class="lockup">
-        <div class="pixP" id="pixP"></div>
-        <div class="reveal">
-          <div class="wordmark">
-            <div class="brand">RISMA</div>
-            <div class="sub">LIGHTING CONTROL</div>
-          </div>
+        <div class="lead">
+          <div class="pixP" id="pixP"></div>
+          <div class="reveal reveal-brand"><div class="brand">RISMA</div></div>
         </div>
+        <div class="reveal reveal-sub"><div class="sub">LIGHTING CONTROL</div></div>
       </div>
       <div class="load">
         <div class="bar"></div>
@@ -195,9 +198,13 @@
           order++;
         }
       }
-      // The wordmark's `emerge` should start as the P finishes lighting.
+      // The wordmark's `emerge` should start as the P finishes lighting; the sub-line
+      // follows just after RISMA.
       const pFinish = order * STEP; // ms
-      document.querySelector(".wordmark").style.animationDelay = pFinish + 40 + "ms";
+      const brandEl = document.querySelector(".brand");
+      const subEl = document.querySelector(".sub");
+      if (brandEl) brandEl.style.animationDelay = pFinish + 40 + "ms";
+      if (subEl) subEl.style.animationDelay = pFinish + 160 + "ms";
 
       // --- Close handshake ---------------------------------------------------------
       // Close only when BOTH the engine/UI are ready AND a minimum on-screen time has

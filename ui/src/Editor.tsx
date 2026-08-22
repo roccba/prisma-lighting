@@ -7,6 +7,7 @@ import {
   highlight as highlightCmd,
   openFrom,
   removeZone,
+  renameZone,
   removeFixtures,
   saveTo,
   selectionAggregate,
@@ -44,6 +45,8 @@ export default function Editor() {
   const [matrixOpen, setMatrixOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [newZoneOpen, setNewZoneOpen] = useState(false);
+  // Zone id being renamed (null = dialog closed).
+  const [renameZoneId, setRenameZoneId] = useState<string | null>(null);
   const [currentPath, setCurrentPath] = useState<string | null>(null);
 
   useEffect(() => {
@@ -201,6 +204,7 @@ export default function Editor() {
         activeZone={activeZone}
         onActiveZone={setActiveZone}
         onAddZone={() => setNewZoneOpen(true)}
+        onRenameZone={(id) => setRenameZoneId(id)}
         onRemoveZone={async (id) => {
           try {
             const s = await removeZone(id);
@@ -295,6 +299,31 @@ export default function Editor() {
           }}
         />
       )}
+
+      {renameZoneId &&
+        (() => {
+          const zone = patch.zones.find((z) => z.id === renameZoneId);
+          if (!zone) return null;
+          return (
+            <NewZoneDialog
+              title="Renombrar zona"
+              initial={zone.name}
+              submitLabel="Renombrar"
+              // Exclude the zone itself so renaming to its own name is allowed.
+              existingNames={patch.zones.filter((z) => z.id !== renameZoneId).map((z) => z.name)}
+              onClose={() => setRenameZoneId(null)}
+              onCreate={async (name) => {
+                const id = renameZoneId;
+                setRenameZoneId(null);
+                try {
+                  setEditor(await renameZone(id, name));
+                } catch (e) {
+                  setNotice(String(e));
+                }
+              }}
+            />
+          );
+        })()}
     </div>
   );
 }
