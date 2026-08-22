@@ -27,6 +27,7 @@ interface Props {
   activeZone: string;
   onActiveZone: (id: string) => void;
   onAddZone: () => void;
+  onRenameZone: (id: string) => void;
   onRemoveZone: (id: string) => void;
   viewMode: ViewMode;
   onViewMode: (m: ViewMode) => void;
@@ -124,6 +125,14 @@ export function Toolbar(p: Props) {
         />
         <button className="pr-btn" onClick={p.onAddZone} title="Add a new zone">
           + Zona
+        </button>
+        <button
+          className="pr-btn"
+          onClick={() => p.onRenameZone(p.activeZone)}
+          disabled={!active}
+          title="Rename the selected zone"
+        >
+          Renombrar
         </button>
         <button
           className="pr-btn"
