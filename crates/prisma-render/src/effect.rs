@@ -156,7 +156,9 @@ const GLOBALS_F32: usize = 4;
 pub struct EffectInstance {
     /// Parallel to the manifest's params: resolved once, read wait-free per frame.
     handles: Vec<ParamHandle>,
-    pipeline: wgpu::RenderPipeline,
+    /// The effect's pipeline + bind-group layout, shared via the [`crate::cache`] across
+    /// zones running the same effect and across recompiles.
+    pipeline: std::sync::Arc<crate::cache::CachedRender>,
     uniform_buf: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     /// Scratch reused each frame to pack uniforms without allocating.
@@ -196,61 +198,72 @@ impl EffectInstance {
             mapped_at_creation: false,
         });
 
-        // 3. Pipeline: one uniform at group 0 binding 0.
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some(manifest.effect_id),
-            source: wgpu::ShaderSource::Wgsl(manifest.shader_source.into()),
-        });
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("effect-bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+        // 3. Pipeline: one uniform at group 0 binding 0. The pipeline + its layout
+        //    depend only on the effect's shader and the fixed target format, so they are
+        //    cached by `effect_id` and shared across every zone running this effect and
+        //    across recompiles (M8 live-apply optimisation). Only the per-instance
+        //    uniform buffer and bind group are built here each time.
+        let pipeline = gpu.cache.render(manifest.effect_id, || {
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(manifest.effect_id),
+                source: wgpu::ShaderSource::Wgsl(manifest.shader_source.into()),
+            });
+            let bind_group_layout =
+                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("effect-bgl"),
+                    entries: &[wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    }],
+                });
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("effect-pl"),
+                bind_group_layouts: &[Some(&bind_group_layout)],
+                immediate_size: 0,
+            });
+            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(manifest.effect_id),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
                 },
-                count: None,
-            }],
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
+            crate::cache::CachedRender {
+                pipeline,
+                bind_group_layout,
+            }
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("effect-bg"),
-            layout: &bind_group_layout,
+            layout: &pipeline.bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: uniform_buf.as_entire_binding(),
             }],
-        });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("effect-pl"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(manifest.effect_id),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba16Float,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
         });
 
         EffectInstance {
@@ -314,7 +327,7 @@ impl EffectInstance {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(&self.pipeline.pipeline);
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.draw(0..3, 0..1);
         }

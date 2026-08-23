@@ -226,6 +226,7 @@ fn main() {
             stop: Arc::new(AtomicBool::new(false)),
             zone_source: None,
             freeze: Arc::new(AtomicBool::new(false)),
+            frozen_rate_hz: RATE_HZ,
         },
     );
     let output_report = output.join().expect("output thread");

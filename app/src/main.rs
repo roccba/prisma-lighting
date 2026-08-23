@@ -1177,6 +1177,9 @@ fn main_open_editor(app: AppHandle) -> Result<(), String> {
                 if let Some(engine) = handle.state::<AppState>().engine.lock().unwrap().as_ref() {
                     engine.set_frozen(false);
                 }
+                // The previous layout keeps running (fail-safe), but that must NOT be
+                // silent — tell the main window the edits did not take, with the reason.
+                let _ = handle.emit("editor-apply-failed", e);
             }
         }
     });

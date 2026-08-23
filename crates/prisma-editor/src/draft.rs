@@ -40,6 +40,21 @@ impl PatchDraft {
     /// without marking the draft dirty.
     pub fn new(mut patch: Patch) -> Self {
         patch.fit_matrix_size();
+        // The editor works purely in fixture→zone OWNERSHIP space (§2.2): `Zone::members`
+        // — the engine's DERIVED overlap membership — is not the editor's to hold. A show
+        // patch arrives here with members already filled (a previous apply-to-live ran
+        // `fill_zone_members_from_ownership`), and a `.prisma`/`.prismap` may carry them
+        // too. Keeping them is a latent bug: `RemoveFixtures` (and any fixture deletion)
+        // deletes the fixture but NOT the members that point at it, leaving DANGLING refs.
+        // `fill_zone_members_from_ownership` only fills zones whose members are EMPTY, so
+        // it would skip those polluted zones — the dangling refs survive into
+        // `validate_zone_refs`, fail compile, and silently abort the next apply-to-live,
+        // freezing the running show on the pre-delete layout. Clearing members on seed
+        // keeps every edit in ownership space and lets the apply path re-derive membership
+        // fresh from what actually remains.
+        for zone in &mut patch.zones {
+            zone.members.clear();
+        }
         Self {
             patch,
             undo: Vec::new(),
@@ -161,5 +176,82 @@ impl PatchDraft {
     /// write to disk (S8).
     pub fn mark_saved(&mut self) {
         self.dirty = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::samples::wedding_rig;
+
+    /// Seeding a draft from a show patch (which carries DERIVED `Zone::members`) must
+    /// leave the draft in ownership space — members empty — so fixture edits never leave
+    /// dangling refs. Regression: previously members survived the seed, and deleting a
+    /// fixture left members pointing at it.
+    #[test]
+    fn new_clears_zone_members_from_a_show_patch() {
+        let mut show_patch = wedding_rig();
+        // A show patch has members filled by a prior apply-to-live.
+        show_patch.fill_zone_members_from_ownership();
+        assert!(show_patch.zones.iter().any(|z| !z.members.is_empty()));
+
+        let draft = PatchDraft::new(show_patch);
+        assert!(
+            draft.patch().zones.iter().all(|z| z.members.is_empty()),
+            "the editor draft must hold no overlap membership"
+        );
+    }
+
+    /// The reported bug end-to-end: open a show-derived patch in the editor, delete EVERY
+    /// fixture, then run the apply path's derive+compile. It must succeed (an empty rig),
+    /// not fail with a dangling-fixture ref — which is what froze the running show.
+    #[test]
+    fn deleting_all_fixtures_then_applying_compiles() {
+        let mut show_patch = wedding_rig();
+        show_patch.fill_zone_members_from_ownership();
+
+        let mut draft = PatchDraft::new(show_patch);
+        let all: Vec<_> = draft.patch().fixtures.iter().map(|f| f.id).collect();
+        draft
+            .apply(EditOp::RemoveFixtures { ids: all }, None)
+            .expect("removing all fixtures is a valid edit");
+        assert!(draft.patch().fixtures.is_empty());
+
+        // Reproduce what `apply_editor_draft` does before touching the engine.
+        let mut candidate = draft.patch().clone();
+        candidate.fill_zone_members_from_ownership();
+        candidate.fit_matrix_size();
+        candidate
+            .compile()
+            .expect("an empty rig must compile, not fail on a dangling zone ref");
+    }
+
+    /// Deleting SOME fixtures must also re-derive membership only over what remains.
+    #[test]
+    fn deleting_some_fixtures_then_applying_compiles() {
+        let mut show_patch = wedding_rig();
+        show_patch.fill_zone_members_from_ownership();
+
+        let mut draft = PatchDraft::new(show_patch);
+        let victims: Vec<_> = draft
+            .patch()
+            .fixtures
+            .iter()
+            .take(3)
+            .map(|f| f.id)
+            .collect();
+        draft
+            .apply(EditOp::RemoveFixtures { ids: victims }, None)
+            .expect("removing a subset is a valid edit");
+
+        let mut candidate = draft.patch().clone();
+        candidate.fill_zone_members_from_ownership();
+        candidate.fit_matrix_size();
+        let index = candidate
+            .compile()
+            .expect("the remaining rig must compile cleanly");
+        // Membership now covers only surviving fixtures' pixels.
+        let remaining_pixels: usize = candidate.fixtures.iter().map(|f| f.pixels.len()).sum();
+        assert_eq!(index.pixel_count() as usize, remaining_pixels);
     }
 }

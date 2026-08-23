@@ -24,6 +24,7 @@
 //!   position (§5.2 step 5).
 
 pub mod blend;
+pub mod cache;
 pub mod device;
 pub mod effect;
 pub mod effects;
@@ -37,6 +38,7 @@ pub mod render_loop;
 pub mod sample;
 
 pub use blend::{blend_code, create_cell_mask, Compositor, Layer, ZoneComposite};
+pub use cache::{CachedCompute, CachedRender, PipelineCache};
 pub use device::{AdapterPreference, Gpu, GpuError};
 pub use effect::{ColorChannel, EffectInstance, EffectManifest, ParamRole, ParamSpec};
 pub use effects::{catalogue, effect_params, manifest_by_id, EffectListing, EffectParam};

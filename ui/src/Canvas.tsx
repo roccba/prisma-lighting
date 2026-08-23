@@ -276,6 +276,28 @@ export function Canvas({ patch, selection, onSelectionChange, onMove, activeZone
     }
   }, [patch, selection, fixtureColor, emphasis, activeMatrix, faultPixels]);
 
+  // Coalesce redraws to one per animation frame. Pointer-move / pan / zoom fire far
+  // faster than the display refreshes (60–120 Hz of events), and each `draw()` repaints
+  // the WHOLE rig — so calling it per event was the drag lag. Scheduling on rAF collapses
+  // a burst of events into a single repaint of the final state. A ref holds the latest
+  // `draw` closure so the scheduled frame always paints with current deps.
+  const drawRef = useRef(draw);
+  drawRef.current = draw;
+  const rafId = useRef<number | null>(null);
+  const scheduleDraw = useCallback(() => {
+    if (rafId.current != null) return;
+    rafId.current = requestAnimationFrame(() => {
+      rafId.current = null;
+      drawRef.current();
+    });
+  }, []);
+  useEffect(
+    () => () => {
+      if (rafId.current != null) cancelAnimationFrame(rafId.current);
+    },
+    [],
+  );
+
   const fit = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -295,16 +317,25 @@ export function Canvas({ patch, selection, onSelectionChange, onMove, activeZone
       ox: (w - spanX * scale) / 2 - minX * scale + scale / 2,
       oy: (h - spanY * scale) / 2 - minY * scale + scale / 2,
     };
-    draw();
-  }, [patch, draw]);
+    scheduleDraw();
+  }, [patch, scheduleDraw]);
 
-  useEffect(() => { fit(); }, [fit]);
+  // Fit-to-view is an INITIAL/loaded-patch action, not a per-edit or per-selection one.
+  // `patch.id` is stable across edits (same patch being edited) and only changes when a
+  // genuinely different patch is loaded, so guard on it: clicking (which changes the
+  // selection, hence `draw`/`fit` identity) must NOT reset the zoom the user set.
+  const fittedId = useRef<string | null>(null);
+  useEffect(() => {
+    if (fittedId.current === patch.id) return;
+    fittedId.current = patch.id;
+    fit();
+  }, [patch.id, fit]);
   useEffect(() => { draw(); }, [draw]);
   useEffect(() => {
-    const onResize = () => draw();
+    const onResize = () => scheduleDraw();
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
-  }, [draw]);
+  }, [scheduleDraw]);
 
   const localXY = (e: React.PointerEvent | React.WheelEvent) => {
     const rect = canvasRef.current!.getBoundingClientRect();
@@ -361,7 +392,7 @@ export function Canvas({ patch, selection, onSelectionChange, onMove, activeZone
       rubber.current.x1 = x; rubber.current.y1 = y;
     }
     d.lastX = x; d.lastY = y;
-    draw();
+    scheduleDraw();
   };
 
   const fixturesInRect = (rx0: number, ry0: number, rx1: number, ry1: number) => {
@@ -385,10 +416,10 @@ export function Canvas({ patch, selection, onSelectionChange, onMove, activeZone
       const [mx, my] = moveDelta.current;
       moveDelta.current = [0, 0];
       if (mx !== 0 || my !== 0) onMove(d.moveIds, [mx, my, 0]);
-      else draw();
+      else scheduleDraw();
       return;
     }
-    if (d.mode === "pan") { rubber.current = null; draw(); return; }
+    if (d.mode === "pan") { rubber.current = null; scheduleDraw(); return; }
 
     // Select mode. A drag is a rectangle; a click hit-tests one fixture (this path
     // is only reached for empty clicks or shift/alt on a fixture — a plain click on
@@ -424,7 +455,7 @@ export function Canvas({ patch, selection, onSelectionChange, onMove, activeZone
     view.current.scale = Math.min(80, Math.max(0.5, view.current.scale * factor));
     view.current.ox = x - before.wx * view.current.scale;
     view.current.oy = y - before.wy * view.current.scale;
-    draw();
+    scheduleDraw();
   };
 
   return (

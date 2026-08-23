@@ -18,7 +18,8 @@ import {
   type SelectionAggregate,
 } from "./api";
 import { Canvas } from "./Canvas";
-import { FixtureList } from "./FixtureList";
+import { ZonesPanel } from "./ZonesPanel";
+import { GroupsPanel } from "./GroupsPanel";
 import { LibraryManager } from "./LibraryManager";
 import { MatrixDialog } from "./MatrixDialog";
 import { NewZoneDialog } from "./NewZoneDialog";
@@ -135,18 +136,18 @@ export default function Editor() {
     };
   }, []);
 
-  // Auto-apply edits to the running show (the manual "Apply to live" button is gone,
-  // §7 revised flow). Debounced so a burst of edits triggers one recompile after they
-  // settle; the tree's live values are preserved across it (`apply_editor_draft`), so
-  // the operator's master/colour/dimmers survive. Closing the window applies the final
-  // state too, so nothing is lost if a debounce is still pending. There is deliberately
-  // NO unsaved-changes guard: closing just closes — the edits already live in the show;
-  // saving a `.prismap` is an optional export, not a condition to close.
+  // Live-apply: edits flow to the running show automatically, debounced so a burst of
+  // edits triggers ONE apply after they settle. This is affordable now that the engine
+  // caches its GPU pipelines across recompiles (prisma-render `PipelineCache`) — the old
+  // per-edit full pipeline rebuild was the lag. Live values (master/colour/dimmers) are
+  // preserved across the apply (`apply_editor_draft`). Closing the window applies the
+  // final state too (backend window-Destroyed handler), so a pending debounce is never
+  // lost. Highlight (§7) is a separate live path, unaffected.
   useEffect(() => {
     if (!editor?.dirty) return;
     const t = setTimeout(() => {
       applyToLive().catch((e) => setNotice(String(e)));
-    }, 400);
+    }, 350);
     return () => clearTimeout(t);
   }, [editor]);
 
@@ -202,24 +203,11 @@ export default function Editor() {
       <Toolbar
         patch={patch}
         activeZone={activeZone}
-        onActiveZone={setActiveZone}
-        onAddZone={() => setNewZoneOpen(true)}
-        onRenameZone={(id) => setRenameZoneId(id)}
-        onRemoveZone={async (id) => {
-          try {
-            const s = await removeZone(id);
-            setEditor(s);
-            if (activeZone === id) setActiveZone(s.patch.zones[0]?.id ?? "");
-          } catch (e) {
-            setNotice(String(e));
-          }
-        }}
         viewMode={viewMode}
         onViewMode={setViewMode}
         onOpen={doOpen}
         onSave={doSave}
         onAddFixtures={() => setModalOpen(true)}
-        onEditMatrix={() => setMatrixOpen(true)}
         onLibrary={() => setLibraryOpen(true)}
         onDelete={del}
         canDelete={selection.size > 0}
@@ -239,13 +227,26 @@ export default function Editor() {
 
       <div className="body">
         <aside className="left">
-          <FixtureList
+          <ZonesPanel
             patch={patch}
-            selection={selection}
-            onSelectionChange={setSelection}
             activeZone={activeZone}
             onActiveZone={setActiveZone}
+            onAddZone={() => setNewZoneOpen(true)}
+            onRenameZone={(id) => setRenameZoneId(id)}
+            onRemoveZone={async (id) => {
+              try {
+                const s = await removeZone(id);
+                setEditor(s);
+                if (activeZone === id) setActiveZone(s.patch.zones[0]?.id ?? "");
+              } catch (e) {
+                setNotice(String(e));
+              }
+            }}
+            onEditMatrix={() => setMatrixOpen(true)}
+            selection={selection}
+            onSelectionChange={setSelection}
           />
+          <GroupsPanel />
         </aside>
         <main className="center">
           <Canvas
