@@ -397,6 +397,12 @@ impl Engine {
                         stop,
                         zone_source: Some(Box::new(zones)),
                         freeze,
+                        // While frozen (editor open) the content is static, so render at a
+                        // low rate — re-rendering the identical frame at the full rate is
+                        // waste that competes with the editor webview on an integrated GPU.
+                        // Output keeps its own fixed rate; Highlight (output-stage) is
+                        // unaffected. See RenderLoopConfig::frozen_rate_hz.
+                        frozen_rate_hz: 10,
                     };
                     // The content (built at load on the setup thread) was moved in.
                     // Either arm runs the SAME loop; only the FrameContent type differs.

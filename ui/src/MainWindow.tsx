@@ -115,6 +115,18 @@ export default function MainWindow() {
     window.clearTimeout(noticeTimer.current);
     noticeTimer.current = window.setTimeout(() => setNotice(null), 2500);
   };
+
+  // If applying the editor's edits to the live show fails (e.g. on editor close), the
+  // backend keeps the previous layout running (fail-safe) and emits this — surface it so
+  // the operator knows their edits did NOT take, instead of the change silently vanishing.
+  useEffect(() => {
+    const un = listen<string>("editor-apply-failed", (e) => {
+      setError(`No se pudieron aplicar los cambios del editor: ${e.payload}`);
+    });
+    return () => {
+      un.then((f) => f()).catch(() => {});
+    };
+  }, []);
   // Placeholder for menu entries whose feature is not implemented yet.
   const soon = () => showNotice("Función no disponible todavía");
 

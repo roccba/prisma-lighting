@@ -215,6 +215,7 @@ fn freeze_holds_show_time_while_the_loop_keeps_rendering() {
             stop: Arc::new(AtomicBool::new(false)),
             zone_source: None,
             freeze: Arc::new(AtomicBool::new(true)), // frozen the whole run
+            frozen_rate_hz: 200, // this test asserts the loop keeps rendering while frozen
         },
     );
 
@@ -257,6 +258,7 @@ fn the_loop_renders_and_publishes_frames() {
             stop: Arc::new(AtomicBool::new(false)),
             zone_source: None,
             freeze: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            frozen_rate_hz: 200,
         },
     );
 

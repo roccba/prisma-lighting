@@ -114,8 +114,9 @@ impl SamplePlan {
 /// Runs the gather compute pass. Owns the GPU-side plan and the master/staging
 /// buffers, all sized once at construction — the dispatch allocates nothing.
 pub struct Sampler {
-    pipeline: wgpu::ComputePipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
+    /// Compute pipeline + bind-group layout, shared via the [`crate::cache`] across
+    /// recompiles (the gather shader is layout-independent).
+    cached: std::sync::Arc<crate::cache::CachedCompute>,
     samples_buf: wgpu::Buffer,
     /// `array<f32>`, one entry per master component (see the shader docs for why
     /// the gather writes f32 rather than packed f16).
@@ -167,44 +168,55 @@ impl Sampler {
             mapped_at_creation: false,
         });
 
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("sample"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../../../shaders/sample.wgsl").into()),
-        });
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("sample-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                storage_entry(1, true),
-                storage_entry(2, false),
-            ],
-        });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("sample-pl"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("sample"),
-            layout: Some(&layout),
-            module: &shader,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
+        // The gather pipeline + layout depend only on the shader, so they are cached and
+        // reused across recompiles (M8 live-apply optimisation). The buffers above are
+        // per-layout and stay per-instance.
+        let cached = gpu.cache.compute("sample", || {
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("sample"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("../../../shaders/sample.wgsl").into(),
+                ),
+            });
+            let bind_group_layout =
+                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("sample-bgl"),
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        storage_entry(1, true),
+                        storage_entry(2, false),
+                    ],
+                });
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("sample-pl"),
+                bind_group_layouts: &[Some(&bind_group_layout)],
+                immediate_size: 0,
+            });
+            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("sample"),
+                layout: Some(&layout),
+                module: &shader,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            crate::cache::CachedCompute {
+                pipeline,
+                bind_group_layout,
+            }
         });
 
         Sampler {
-            pipeline,
-            bind_group_layout,
+            cached,
             samples_buf,
             master_buf,
             staging,
@@ -249,7 +261,7 @@ impl Sampler {
         let view = framebuffer.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("sample-bg"),
-            layout: &self.bind_group_layout,
+            layout: &self.cached.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -276,7 +288,7 @@ impl Sampler {
                 label: Some("sample-pass"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(&self.cached.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
             // 64 threads per workgroup, matching @workgroup_size in the shader.
             pass.dispatch_workgroups(self.pixel_count.div_ceil(64).max(1), 1, 1);

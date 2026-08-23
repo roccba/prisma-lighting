@@ -1,40 +1,50 @@
 import type { Patch } from "./api";
-import { Dropdown } from "./Dropdown";
+import {
+  AddFixtures,
+  Bolt,
+  Bulb,
+  Eye,
+  EyeOff,
+  FolderOpen,
+  Isolate,
+  Library,
+  Redo,
+  Save,
+  Target,
+  Trash,
+  Undo,
+} from "./icons";
 
-// The zone selector is the organising control of the editor (§6): with a single
-// zone it is a no-op and the editor stays simple; complexity appears only
-// when there are several zones. It drives the three view modes (§5.3).
+// MADRIX-style icon-over-label toolbar (§M7 restyle): every action is a `.pr-tbtn`
+// (icon on top, label under), grouped into labelled sections separated by `.sep`.
+// Zone management lives in the left ZonesPanel now, not here — the toolbar is
+// file / fixtures / edit / view / rig-highlight only.
 
 export type ViewMode = "all" | "highlight" | "isolate";
 
 /** Live-rig identify mode (§7): off, or blink/solid the current selection on the wire. */
 export type HighlightMode = "off" | "solid" | "blink";
 
-const MODES: { id: ViewMode; label: string; title: string }[] = [
-  { id: "all", label: "All", title: "Show every zone" },
-  { id: "highlight", label: "Highlight", title: "Emphasise the active zone, dim the rest" },
-  { id: "isolate", label: "Isolate", title: "Show only the active zone" },
+const MODES: { id: ViewMode; label: string; title: string; icon: React.ReactNode }[] = [
+  { id: "all", label: "Todo", title: "Show every zone", icon: <Eye /> },
+  { id: "highlight", label: "Resaltar", title: "Emphasise the active zone, dim the rest", icon: <Target /> },
+  { id: "isolate", label: "Aislar", title: "Show only the active zone", icon: <Isolate /> },
 ];
 
-const HIGHLIGHT_MODES: { id: HighlightMode; label: string; title: string }[] = [
-  { id: "off", label: "Off", title: "Do not light the rig" },
-  { id: "solid", label: "Solid", title: "Light the selection solid (compare two without flicker)" },
-  { id: "blink", label: "Blink", title: "Blink the selection (~2 Hz) to spot it among many" },
+const HIGHLIGHT_MODES: { id: HighlightMode; label: string; title: string; icon: React.ReactNode }[] = [
+  { id: "off", label: "Off", title: "Do not light the rig", icon: <EyeOff /> },
+  { id: "solid", label: "Fijo", title: "Light the selection solid (compare two without flicker)", icon: <Bulb /> },
+  { id: "blink", label: "Parpadeo", title: "Blink the selection (~2 Hz) to spot it among many", icon: <Bolt size={18} /> },
 ];
 
 interface Props {
   patch: Patch;
   activeZone: string;
-  onActiveZone: (id: string) => void;
-  onAddZone: () => void;
-  onRenameZone: (id: string) => void;
-  onRemoveZone: (id: string) => void;
   viewMode: ViewMode;
   onViewMode: (m: ViewMode) => void;
   onOpen: () => void;
   onSave: () => void;
   onAddFixtures: () => void;
-  onEditMatrix: () => void;
   onLibrary: () => void;
   onDelete: () => void;
   canDelete: boolean;
@@ -46,125 +56,84 @@ interface Props {
   onHighlightMode: (m: HighlightMode) => void;
 }
 
-// Segmented control (View / Highlight modes): a tight row of `.pr-tabbtn`, the active
-// one on the accent. Presentation only.
-function Segmented<T extends string>(props: {
-  value: T;
-  options: { id: T; label: string; title: string }[];
-  onChange: (v: T) => void;
+/** One icon-over-label toolbar button. */
+function TButton(props: {
+  icon: React.ReactNode;
+  label: string;
+  title?: string;
+  onClick: () => void;
+  disabled?: boolean;
+  active?: boolean;
 }) {
   return (
-    <div className="pr-segmented">
-      {props.options.map((o) => (
-        <button
-          key={o.id}
-          title={o.title}
-          className={`pr-btn pr-tabbtn${o.id === props.value ? " is-active" : ""}`}
-          onClick={() => props.onChange(o.id)}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
+    <button
+      className={`pr-tbtn${props.active ? " is-active" : ""}`}
+      title={props.title ?? props.label}
+      onClick={props.onClick}
+      disabled={props.disabled}
+    >
+      <span className="pr-ic">{props.icon}</span>
+      {props.label}
+    </button>
   );
 }
 
 export function Toolbar(p: Props) {
   const active = p.patch.zones.find((z) => z.id === p.activeZone);
-  const zoneOptions = p.patch.zones.map((z) => ({
-    value: z.id,
-    label: z.name,
-    swatch: `rgb(${z.display_color.join(",")})`,
-  }));
 
   return (
     <div className="pr-toolbar">
       {/* File */}
       <div className="pr-toolbar-group">
-        <button className="pr-btn" onClick={p.onOpen} title="Open .prismap (Ctrl+O)">
-          Open
-        </button>
-        <button className="pr-btn" onClick={p.onSave} title="Save .prismap (Ctrl+S)">
-          Save
-        </button>
+        <TButton icon={<FolderOpen />} label="Abrir" title="Open .prismap (Ctrl+O)" onClick={p.onOpen} />
+        <TButton icon={<Save />} label="Guardar" title="Save .prismap (Ctrl+S)" onClick={p.onSave} />
       </div>
 
-      {/* Fixtures / edit */}
+      {/* Fixtures */}
       <div className="pr-toolbar-group sep">
-        <button
-          className="pr-btn"
+        <TButton
+          icon={<AddFixtures />}
+          label="Añadir"
+          title={active ? "Add fixtures into the selected zone" : "Create a zone first — fixtures live in a zone"}
           onClick={p.onAddFixtures}
           disabled={!active}
-          title={active ? "Add fixtures into the selected zone" : "Create a zone first — fixtures live in a zone"}
-        >
-          + Add fixtures
-        </button>
-        <button className="pr-btn" onClick={p.onLibrary} title="Manage the fixture library (§3.2)">
-          Library…
-        </button>
-        <button className="pr-btn" onClick={p.onDelete} disabled={!p.canDelete}>
-          Delete
-        </button>
-        <button className="pr-btn pr-btn-icon" onClick={p.onUndo} disabled={!p.canUndo} title="Undo">
-          ↶
-        </button>
-        <button className="pr-btn pr-btn-icon" onClick={p.onRedo} disabled={!p.canRedo} title="Redo">
-          ↷
-        </button>
+        />
+        <TButton icon={<Library />} label="Librería" title="Manage the fixture library (§3.2)" onClick={p.onLibrary} />
+        <TButton icon={<Trash />} label="Eliminar" onClick={p.onDelete} disabled={!p.canDelete} />
       </div>
 
-      {/* Zone context — the organising control (§6) */}
+      {/* Edit */}
       <div className="pr-toolbar-group sep">
-        <span className="pr-toolbar-label">Zone</span>
-        <Dropdown
-          value={p.activeZone}
-          options={zoneOptions}
-          onChange={p.onActiveZone}
-          minWidth={150}
-          aria-label="Active zone"
-        />
-        <button className="pr-btn" onClick={p.onAddZone} title="Add a new zone">
-          + Zona
-        </button>
-        <button
-          className="pr-btn"
-          onClick={() => p.onRenameZone(p.activeZone)}
-          disabled={!active}
-          title="Rename the selected zone"
-        >
-          Renombrar
-        </button>
-        <button
-          className="pr-btn"
-          onClick={() => p.onRemoveZone(p.activeZone)}
-          disabled={!active}
-          title="Remove the selected zone (must have no fixtures). The patch may have zero zones."
-        >
-          − Zona
-        </button>
-        {active && (
-          <button
-            className="pr-btn"
-            onClick={p.onEditMatrix}
-            title={`Render resolution of zone ${active.name} — ${active.mapping_size[0]}×${active.mapping_size[1]} (the detail its effects run at; the world auto-fits to the rig)`}
-          >
-            Resolution… {active.mapping_size[0]}×{active.mapping_size[1]}
-          </button>
-        )}
+        <TButton icon={<Undo />} label="Deshacer" onClick={p.onUndo} disabled={!p.canUndo} />
+        <TButton icon={<Redo />} label="Rehacer" onClick={p.onRedo} disabled={!p.canRedo} />
       </div>
 
       {/* View modes (§5.3) */}
       <div className="pr-toolbar-group sep">
-        <span className="pr-toolbar-label">View</span>
-        <Segmented value={p.viewMode} options={MODES} onChange={p.onViewMode} />
+        {MODES.map((m) => (
+          <TButton
+            key={m.id}
+            icon={m.icon}
+            label={m.label}
+            title={m.title}
+            onClick={() => p.onViewMode(m.id)}
+            active={p.viewMode === m.id}
+          />
+        ))}
       </div>
 
       {/* Highlight on the real rig (§7) */}
       <div className="pr-toolbar-group sep">
-        <span className="pr-toolbar-label" title="Light the selected fixtures on the real rig (§7)">
-          Highlight
-        </span>
-        <Segmented value={p.highlightMode} options={HIGHLIGHT_MODES} onChange={p.onHighlightMode} />
+        {HIGHLIGHT_MODES.map((m) => (
+          <TButton
+            key={m.id}
+            icon={m.icon}
+            label={m.label}
+            title={m.title}
+            onClick={() => p.onHighlightMode(m.id)}
+            active={p.highlightMode === m.id}
+          />
+        ))}
       </div>
     </div>
   );

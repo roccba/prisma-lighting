@@ -340,6 +340,14 @@ pub struct RenderLoopConfig {
     /// emitting, which is what makes the editor's Highlight possible. Cleared = the
     /// clock runs. `None`-equivalent default is "never frozen".
     pub freeze: Arc<AtomicBool>,
+    /// Render cadence **while frozen** (the editor is open). Frozen content does not
+    /// animate, so re-rendering the identical frame at `target_rate_hz` is pure waste —
+    /// and on an integrated GPU that continuous work competes with the editor webview's
+    /// own compositing, which reads as general UI sluggishness. Dropping to a low rate
+    /// while frozen frees the GPU; the output thread keeps emitting at its own fixed rate
+    /// (Highlight is applied there, §7, so it is unaffected), and any zone-state change
+    /// is still reflected within one slow frame. Clamped to at most `target_rate_hz`.
+    pub frozen_rate_hz: u32,
 }
 
 impl Default for RenderLoopConfig {
@@ -350,6 +358,7 @@ impl Default for RenderLoopConfig {
             stop: Arc::new(AtomicBool::new(false)),
             zone_source: None,
             freeze: Arc::new(AtomicBool::new(false)),
+            frozen_rate_hz: 10,
         }
     }
 }
@@ -365,14 +374,33 @@ pub fn run_render_loop(
     content: &mut impl FrameContent,
     config: RenderLoopConfig,
 ) -> RenderStats {
-    let period = Duration::from_nanos(1_000_000_000 / config.target_rate_hz.max(1) as u64);
+    let fast_period = Duration::from_nanos(1_000_000_000 / config.target_rate_hz.max(1) as u64);
+    // Never faster than the target rate; a mis-set frozen rate cannot speed render up.
+    let frozen_hz = config
+        .frozen_rate_hz
+        .max(1)
+        .min(config.target_rate_hz.max(1));
+    let frozen_period = Duration::from_nanos(1_000_000_000 / frozen_hz as u64);
     let start = Instant::now();
-    let mut frame: u64 = 0;
+    // Incremental deadline: the period is chosen per frame from the freeze state (a
+    // constant `start + period * frame` cannot express a rate that changes at runtime).
+    let mut deadline = start;
 
     loop {
+        // The cadence for THIS frame's wait: slow while frozen (editor open), full rate
+        // otherwise. Read once so the wait and the advance agree.
+        let frozen = config.freeze.load(Ordering::Relaxed);
+        let period = if frozen { frozen_period } else { fast_period };
+        deadline += period;
+        // Resync if we fell behind (a slow frame, or the rate just changed on
+        // freeze/unfreeze) so the loop never bursts back-to-back frames to catch up.
+        let now = Instant::now();
+        if deadline < now {
+            deadline = now + period;
+        }
+
         // Wait for the next deadline, but spend the idle time polling for
         // completed readbacks instead of sleeping through them.
-        let deadline = start + period * frame as u32;
         loop {
             let now = Instant::now();
             if now >= deadline {
@@ -385,7 +413,7 @@ pub fn run_render_loop(
         // Frame boundary: match the clock's run/pause to the freeze flag (§7 / S9),
         // then advance time. When frozen, `tick()` returns the held show time, so the
         // content re-renders the same frame and the rig holds — output stays live.
-        if config.freeze.load(Ordering::Relaxed) {
+        if frozen {
             clock.pause();
         } else {
             clock.play();
@@ -399,7 +427,6 @@ pub fn run_render_loop(
 
         engine.tick(gpu, &snapshot_clock, &zones, &overlap, content);
 
-        frame += 1;
         if config.stop.load(Ordering::Relaxed) {
             break;
         }

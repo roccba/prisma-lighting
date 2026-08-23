@@ -41,6 +41,10 @@ pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     info: wgpu::AdapterInfo,
+    /// Pipelines memoised across recompiles (M8 live-apply optimisation). The `Gpu`
+    /// outlives every recompile and is dropped only at shutdown, so a cached pipeline
+    /// never outlives its device. See [`crate::cache`].
+    pub cache: crate::cache::PipelineCache,
 }
 
 /// Why bring-up failed. Kept coarse; the caller decides whether to fall back to
@@ -100,6 +104,7 @@ impl Gpu {
             device,
             queue,
             info,
+            cache: crate::cache::PipelineCache::default(),
         })
     }
 

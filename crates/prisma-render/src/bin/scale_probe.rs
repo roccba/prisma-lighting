@@ -328,6 +328,7 @@ fn run_one(gpu: &Gpu, pixels: u32, seconds: u64) -> ScaleResult {
             stop: Arc::new(AtomicBool::new(false)),
             zone_source: None,
             freeze: Arc::new(AtomicBool::new(false)),
+            frozen_rate_hz: RATE_HZ,
         },
     );
     let (report, out_cpu_pct) = output.join().expect("output thread");

@@ -64,9 +64,10 @@ html, body, #root {
 }
 .editor-notice button { flex: 0 0 auto; padding: 0 8px; }
 
-/* Toolbar migrated to .pr-toolbar + .pr-tbtn + .pr-tabbtn + shared Dropdown
-   (re-style section 4.1). Its legacy classes (toolbar, tb-group, tb-label,
-   tb-select, segmented, seg, tb-sep) were removed. */
+/* Toolbar migrated to .pr-toolbar + .pr-tbtn icon-over-label buttons (§M7 restyle).
+   Keep it one MADRIX-style row; scroll horizontally rather than clip on a narrow
+   window (the buttons must never wrap into a ragged second row). */
+.editor .pr-toolbar { flex-wrap: nowrap; overflow-x: auto; }
 
 /* Buttons */
 .btn {
@@ -255,10 +256,84 @@ html, body, #root {
   min-height: 0;
 }
 
-.left { border-right: 1px solid var(--line); }
+/* Left column: two stacked sectors (Zonas on top, Grupos below), MADRIX-style.
+   Each sector scrolls its own list; the column itself does not scroll as a whole. */
+.left {
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
 .right { border-left: 1px solid var(--line); display: flex; flex-direction: column; }
-.left, .right { background: var(--panel); overflow-y: auto; }
+.right { background: var(--panel); overflow-y: auto; }
 .center { min-width: 0; position: relative; }
+
+/* A sectorised block in the left column. Zones grows to fill; Groups is a shorter,
+   fixed footer sector. */
+.left-sector { display: flex; flex-direction: column; min-height: 0; }
+.zones-sector { flex: 1 1 auto; border-bottom: 1px solid var(--line); }
+.groups-sector { flex: 0 0 auto; }
+
+/* Horizontal splitter (drag vertically) between stacked panes. */
+.pr-splitter-h {
+  flex: none;
+  height: 7px;
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel-2);
+  border-top: 1px solid var(--btn-border-dark);
+  border-bottom: 1px solid var(--btn-border-dark);
+  touch-action: none;
+}
+.pr-splitter-h:hover { background: var(--header-bg); }
+.pr-splitter-grip { width: 26px; height: 2px; border-radius: 1px; background: var(--btn-border); }
+.pr-splitter-h:hover .pr-splitter-grip { background: var(--accent); }
+
+.sector-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px 5px 12px;
+  background: var(--header-bg);
+  border-bottom: 1px solid var(--btn-border-dark);
+}
+.sector-title {
+  font-size: var(--fs-small);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-label);
+  font-weight: 600;
+}
+.sector-actions { display: flex; gap: 3px; }
+.sector-actions .pr-btn-icon { width: 24px; height: 22px; }
+
+/* A secondary header inside a sector (the active zone's fixtures under the zone list). */
+.sub-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  font-size: var(--fs-tiny);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  background: var(--panel-2);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.sub-count { margin-left: auto; color: var(--text-label); font-variant-numeric: tabular-nums; }
+
+.sector-scroll { overflow-y: auto; min-height: 0; }
+/* The zone list height is user-set via the splitter (inline height); the fixtures list
+   below takes the remaining space. */
+.zones-sector .fixture-list { flex: 1 1 auto; }
+.sector-empty { padding: 8px 12px; color: var(--muted); font-size: var(--fs-small); }
 
 /* Live preview (S10) — the engine's render streamed into the app (§M6 debt closed). */
 .preview {
@@ -294,18 +369,6 @@ html, body, #root {
   border-bottom: 1px solid var(--line);
 }
 
-/* Fixture list */
-.fixture-list { list-style: none; margin: 0; padding: 0; }
-.row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  cursor: pointer;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
-}
-.row:hover { background: var(--panel-2); }
-.row.selected { background: rgba(106, 168, 255, 0.16); }
 .swatch {
   width: 11px;
   height: 11px;
@@ -313,9 +376,6 @@ html, body, #root {
   flex: none;
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
 }
-.fx-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.fx-meta { color: var(--muted); font-size: 11px; }
-
 /* Canvas */
 .canvas-wrap { position: absolute; inset: 0; }
 .canvas { width: 100%; height: 100%; display: block; touch-action: none; }
