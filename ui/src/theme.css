@@ -467,8 +467,14 @@ body {
    grid stops stretching its cells to fill half the window. */
 .pr-region-grid { flex: 1 1 0; }
 .pr-region-preview { flex: 1.5 1 0; }
-.pr-region-params { flex: 0 0 auto; height: 150px; }
-.pr-region-global { flex: 0 0 auto; height: 46px; }
+/* Bottom work row: FIXED height, not resizable (MADRIX-style). The effect-parameters
+   panel (a swappable slot — groups will share it later) sits left at a fixed width where
+   every parameter fits without scrolling; the master strip sits right at a fixed width. */
+.pr-workrow { flex: 0 0 auto; height: 270px; display: flex; gap: 6px; }
+/* The params panel FILLS the row (minus the fixed master), so faders/controls use the
+   width instead of leaving a gap. Its content is sized so the densest effect still fits. */
+.pr-workrow-panel { flex: 1 1 auto; min-width: 0; }
+.pr-workrow-master { flex: 0 0 150px; }
 .pr-region-title { font-size: var(--fs-small); color: var(--text-label); padding: 5px 8px; border-bottom: 1px solid var(--divider); text-transform: uppercase; letter-spacing: .04em; flex: 0 0 auto; }
 
 /* Placeholder regions (filled in steps 4–6): centred dim caption, so the operator sees
@@ -530,15 +536,20 @@ body {
 .pr-strobe-rate { flex: 1 1 auto; min-width: 0; height: 4px; -webkit-appearance: none; appearance: none; background: #050505; border: 1px solid var(--btn-border-dark); border-radius: var(--r-md); outline: none; cursor: pointer; }
 .pr-strobe-rate::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 10px; height: 14px; background: linear-gradient(90deg,#575757,#2c2c2c); border: 1px solid #6e6e6e; border-radius: 2px; cursor: pointer; }
 
-/* --- Global operation bar (M8 step 6, §3.6): master + blackout + global strobe --- */
-.pr-globalbar { flex: 1 1 auto; display: flex; align-items: center; gap: 12px; padding: 0 10px; min-width: 0; overflow-x: auto; }
-.pr-globalbar-group { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-.pr-globalbar-label { font-size: var(--fs-small); color: var(--text-label); text-transform: uppercase; letter-spacing: .04em; }
-.pr-globalbar-fader { width: 220px; }
-.pr-globalbar-fader .pr-hslider { height: 34px; }
-.pr-globalbar-sep { width: 1px; align-self: stretch; margin: 8px 0; background: var(--divider); flex: 0 0 auto; }
-.pr-strobe-trigger-lg { position: static; width: 30px; height: 26px; font-size: 14px; }
-.pr-globalbar-strobe { width: 130px; }
+/* --- Master strip (M8 §3.6): a vertical dimmer + blackout + global strobe, on the RIGHT
+   of the bottom work row (fixed width). --- */
+/* The master column: fixed-height row, so the FADER flexes to fill whatever vertical
+   space the fixed elements (title, value, buttons, strobe rate) leave. This guarantees
+   the whole stack always fits inside the row — nothing spills below the window. */
+.pr-master { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 8px; }
+.pr-master-title { flex: 0 0 auto; font-size: var(--fs-base); color: var(--text-label); text-transform: uppercase; letter-spacing: .05em; }
+.pr-master-fader { flex: 1 1 auto; min-height: 40px; display: flex; align-items: center; justify-content: center; }
+.pr-master-fader .pr-fader { height: 100%; width: 48px; }
+.pr-master-value { flex: 0 0 auto; font-size: var(--fs-value); color: var(--accent-text); font-variant-numeric: tabular-nums; font-weight: 600; }
+.pr-master-actions { flex: 0 0 auto; display: flex; gap: 8px; }
+.pr-master-actions .pr-btn { min-width: 40px; }
+.pr-master-actions .pr-strobe-trigger { position: static; width: 40px; height: 28px; font-size: 14px; }
+.pr-master-strobe-rate { flex: 0 0 auto; width: 100%; height: 6px; }
 
 .pr-mainwin-error { flex: 0 0 auto; color: var(--accent-text); background: var(--bg-panel); border-top: 1px solid var(--btn-border-dark); padding: 6px 10px; font-size: var(--fs-small); font-family: var(--font-mono); }
 
@@ -601,40 +612,56 @@ body {
 /* Built from the effect manifest: TWO columns — the scalar sliders as a
    vertical list of `label · value · fader` lines on the left, and the effect-specific
    controls (rose, palette, colour) on the right. All primitives (.pr-value, .pr-hslider). */
-.pr-params { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 6px 8px; gap: 6px; overflow: hidden; }
-.pr-params-head { flex: 0 0 auto; display: flex; align-items: baseline; gap: 8px; }
-.pr-params-effect { font-size: var(--fs-base); color: var(--text); font-weight: 600; }
+.pr-params { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 8px 10px; gap: 8px; overflow: hidden; }
+.pr-params-head { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--divider); }
+.pr-params-effect { font-size: var(--fs-base); color: var(--accent-text); font-weight: 600; letter-spacing: .02em; }
 .pr-params-none { flex: 1 1 auto; display: flex; align-items: center; color: var(--text-dim); font-size: var(--fs-small); }
-.pr-params-rows { flex: 1 1 auto; min-height: 0; display: flex; gap: 28px; align-items: flex-start; overflow-x: auto; overflow-y: hidden; }
-.pr-params-col { display: flex; flex-direction: column; flex: 0 0 auto; }
-.pr-params-scalars { gap: 5px; }
-/* The effect-specific controls sit side by side (rose next to palette next to colour). */
-.pr-params-controls { flex-direction: row; gap: 20px; align-items: flex-start; }
+.pr-params-rows { flex: 1 1 auto; min-height: 0; display: flex; gap: 36px; align-items: stretch; overflow: hidden; }
+.pr-params-col { flex: 0 0 auto; min-height: 0; }
+/* Scalars are moderate fixed-width rows that FLOW top-to-bottom and WRAP into the next
+   column when they fill the panel's height — dense, MADRIX-style, using the vertical
+   space. Packed left; a simple effect leaves the right of the panel empty (by design,
+   like MADRIX), rather than stretching a few faders across the whole window. */
+.pr-params-scalars { flex: 0 1 auto; min-height: 0; display: flex; flex-flow: column wrap; align-content: flex-start; gap: 12px 40px; }
+.pr-params-scalars .pr-field { width: 330px; }
+/* Effect-specific controls (rose, colour, palette, dropdown) sit just to their right. */
+.pr-params-controls { flex: 0 0 auto; display: flex; flex-flow: row wrap; align-content: flex-start; gap: 18px 28px; }
+/* The ONE shared parameter frame (ParamField): every control — scalar, enum, colour,
+   rose, palette — renders inside it so labels and value boxes are identical and aligned.
+   Inline (scalars): label · value box · control (the control is the flexible `1fr` cell,
+   so a fader stretches to fill). Block (rose/colour/palette/dropdown): label above. */
+.pr-field { width: auto; min-width: 0; display: grid; grid-template-columns: 92px 52px 1fr; grid-template-areas: "label value control"; align-items: center; gap: 10px; }
+.pr-field-label { grid-area: label; font-size: var(--fs-base); color: var(--text-label); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-field-control { grid-area: control; min-width: 0; }
+.pr-field-control .pr-hslider { height: 30px; }
+.pr-field-block { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+.pr-field-block .pr-field-label { grid-area: auto; }
+.pr-field-block .pr-field-control { grid-area: auto; }
+/* The consistent editable value box (grid `value` column). */
+input.pr-field-value { grid-area: value; width: 100%; height: 26px; background: var(--bg-input); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); color: var(--accent-text); font: inherit; font-size: var(--fs-value); text-align: center; font-variant-numeric: tabular-nums; -moz-appearance: textfield; appearance: textfield; }
+input.pr-field-value::-webkit-outer-spin-button, input.pr-field-value::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input.pr-field-value:focus { outline: 1px solid var(--accent); outline-offset: -1px; }
 
-/* A scalar parameter on ONE line: label · value · horizontal fader. */
-.pr-param-row { flex: 0 0 auto; width: 236px; display: grid; grid-template-columns: 74px 34px 1fr; grid-template-areas: "label value fader"; align-items: center; gap: 8px; }
-.pr-param-label { grid-area: label; font-size: var(--fs-small); color: var(--text-label); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pr-param-value { grid-area: value; text-align: right; }
-.pr-param-fader { grid-area: fader; }
-.pr-param-fader .pr-hslider { height: 24px; }
-
-/* Colour param: label + 255 readout + a swatch that opens the native picker. The value
-   stays linear in the model; the swatch shows its sRGB (§2.3). A compact vertical block. */
-.pr-color-row { width: auto; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
-.pr-color-255 { min-width: 0; }
-.pr-color-swatch { position: relative; width: 64px; height: 28px; border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); cursor: pointer; overflow: hidden; box-shadow: inset 0 0 0 1px rgba(0,0,0,.35); }
-.pr-color-swatch input[type="color"] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: none; padding: 0; cursor: pointer; }
+/* Colour param (MADRIX-style): a swatch that opens a VERTICAL preset palette, plus three
+   0–255 R/G/B boxes for manual entry. Values stay linear in the model (§2.3). */
+.pr-color { position: relative; display: flex; flex-direction: column; gap: 4px; }
+.pr-color-fields { display: flex; align-items: stretch; gap: 5px; }
+.pr-color-swatch-btn { width: 40px; height: 34px; border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); cursor: pointer; padding: 0; box-shadow: inset 0 0 0 1px rgba(0,0,0,.35); }
+.pr-color-box { display: flex; width: 52px; height: 34px; border: 1px solid var(--btn-border-dark); border-top-width: 3px; border-radius: var(--r-sm); background: var(--bg-input); overflow: hidden; }
+.pr-color-box input { width: 100%; border: none; background: transparent; color: var(--text); font: inherit; font-size: var(--fs-base); text-align: center; -moz-appearance: textfield; appearance: textfield; }
+.pr-color-box input::-webkit-outer-spin-button, .pr-color-box input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.pr-color-palette { position: absolute; top: 100%; left: 0; margin-top: 4px; z-index: 20; display: flex; flex-direction: column; gap: 3px; max-height: 236px; overflow-y: auto; padding: 5px; background: var(--bg-panel-2); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); box-shadow: 0 8px 24px rgba(0,0,0,.5); }
+.pr-color-preset { width: 58px; height: 18px; border: 1px solid rgba(0,0,0,.4); border-radius: var(--r-sm); cursor: pointer; padding: 0; }
+.pr-color-preset:hover { outline: 2px solid var(--accent); outline-offset: -1px; }
 
 /* Direction rose: a 3×3 compass of the editor's eight signal directions (centre empty). */
-.pr-rose-row { width: auto; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
-.pr-rose { grid-area: rose; display: grid; grid-template-columns: repeat(3, 22px); grid-template-rows: repeat(3, 20px); gap: 2px; }
+.pr-rose { display: grid; grid-template-columns: repeat(3, 30px); grid-template-rows: repeat(3, 28px); gap: 3px; }
 .pr-rose-btn { background: var(--btn-face); border: 1px solid var(--btn-border); border-bottom-color: var(--btn-border-dark); color: var(--text); border-radius: var(--r-sm); cursor: pointer; font-size: 12px; line-height: 1; padding: 0; }
 .pr-rose-btn:hover { background: var(--btn-face-hover); }
 .pr-rose-btn.is-active { border-color: var(--accent); color: var(--accent-text); box-shadow: 0 0 0 1px var(--accent) inset; }
 
 /* Palette editor (Scroll de color) — a row of editable colour slots + add/remove. */
-.pr-palette-row { width: auto; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
-.pr-palette { grid-area: palette; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.pr-palette { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .pr-palette-slot { position: relative; width: 24px; height: 30px; }
 .pr-palette-slot.is-dragging { opacity: .5; }
 .pr-palette-swatch { display: block; width: 100%; height: 100%; position: relative; border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); cursor: grab; overflow: hidden; box-shadow: inset 0 0 0 1px rgba(0,0,0,.35); }

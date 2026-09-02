@@ -306,20 +306,24 @@ export default function MainWindow() {
             </section>
           </div>
 
-          <section className="pr-region pr-region-params">
-            <div className="pr-region-title">
-              Parámetros{selectedZone ? ` — ${selectedZone.name}` : ""}
-            </div>
-            {selectedZone ? (
-              <EffectParams zoneId={selectedZone.id} rev={gridRev} />
-            ) : (
-              <div className="pr-placeholder-body">Seleccioná una zona</div>
-            )}
-          </section>
+          {/* Bottom work row — FIXED size (no resize): the effect parameters on the left
+              (a swappable slot: groups will share it later) and the master on the right. */}
+          <div className="pr-workrow">
+            <section className="pr-region pr-workrow-panel">
+              <div className="pr-region-title">
+                Parámetros{selectedZone ? ` — ${selectedZone.name}` : ""}
+              </div>
+              {selectedZone ? (
+                <EffectParams zoneId={selectedZone.id} rev={gridRev} />
+              ) : (
+                <div className="pr-placeholder-body">Seleccioná una zona</div>
+              )}
+            </section>
 
-          <section className="pr-region pr-region-global">
-            <GlobalBar />
-          </section>
+            <section className="pr-region pr-workrow-master">
+              <GlobalBar />
+            </section>
+          </div>
         </div>
 
         {error && <div className="pr-mainwin-error">Error: {error}</div>}
