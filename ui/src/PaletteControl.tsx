@@ -94,10 +94,9 @@ export function PaletteControl({ zoneId, slots, count }: PaletteControlProps) {
     commit(next, len);
   };
 
+  // Just the palette swatches; the "Colores" label is provided by the enclosing ParamField.
   return (
-    <div className="pr-param-row pr-palette-row">
-      <span className="pr-param-label">Colores</span>
-      <div className="pr-palette">
+    <div className="pr-palette">
         {Array.from({ length: len }, (_, i) => {
           const hex = linearToHex(cols[i].r, cols[i].g, cols[i].b);
           return (
@@ -139,7 +138,6 @@ export function PaletteControl({ zoneId, slots, count }: PaletteControlProps) {
             +
           </button>
         )}
-      </div>
     </div>
   );
 }

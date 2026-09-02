@@ -358,14 +358,19 @@ export interface ParamInfo {
   max: number;
   value_norm: number; // 0..1
   /** Presentation type the panel switches on (§3.5): a plain slider, a channel of a
-   *  colour picker, the direction rose, a channel of a palette slot, or a palette's
-   *  active-length. Value model is scalar regardless. */
-  role: "scalar" | "color" | "direction" | "palette" | "palette_count";
+   *  colour picker, the direction rose, a channel of a palette slot, a palette's
+   *  active-length, or a discrete choice → a dropdown. Value model is scalar regardless
+   *  (an `enum` is an index 0..max). */
+  role: "scalar" | "color" | "direction" | "palette" | "palette_count" | "enum";
   /** A grouping key: the colour group id for `role === "color"`, or the palette slot
    *  index (as a string) for `role === "palette"`. Null otherwise. */
   group: string | null;
   /** Colour channel — set for `role === "color"` or `"palette"`. */
   channel: "r" | "g" | "b" | null;
+  /** The named options for `role === "enum"` — the dropdown labels, in index order.
+   *  Absent for every other role (the shape effects that declare enums land in a later
+   *  step; the panel already renders them). */
+  choices?: string[] | null;
 }
 
 /** The effect work panel for a zone: its active cell's effect + its parameters.

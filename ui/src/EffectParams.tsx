@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { effectPanel, setParam, type EffectPanelInfo, type ParamInfo } from "./api";
 import { ColorControl } from "./ColorControl";
+import { Dropdown } from "./Dropdown";
 import { Fader } from "./Fader";
 import { PaletteControl } from "./PaletteControl";
+import { ParamField, ValueBox } from "./ParamField";
 import { Rose } from "./Rose";
 
 // The effect parameter panel for the SELECTED zone (M8-SPEC §3.5). It builds itself from
@@ -26,6 +28,7 @@ type PaletteSlot = { index: number; r?: ParamInfo; g?: ParamInfo; b?: ParamInfo 
 type PanelItem =
   | { kind: "scalar"; param: ParamInfo }
   | { kind: "direction"; param: ParamInfo }
+  | { kind: "enum"; param: ParamInfo }
   | { kind: "color"; group: string; r?: ParamInfo; g?: ParamInfo; b?: ParamInfo }
   | { kind: "palette"; slots: Map<number, PaletteSlot>; count?: ParamInfo };
 
@@ -68,6 +71,8 @@ function buildItems(params: ParamInfo[]): PanelItem[] {
       else if (p.channel === "b") slot.b = p;
     } else if (p.role === "direction") {
       items.push({ kind: "direction", param: p });
+    } else if (p.role === "enum") {
+      items.push({ kind: "enum", param: p });
     } else {
       items.push({ kind: "scalar", param: p });
     }
@@ -75,18 +80,9 @@ function buildItems(params: ParamInfo[]): PanelItem[] {
   return items;
 }
 
-/** Format a normalized value as its real value, for a scalar readout. All current
- *  effect scalars use linear curves, so `min + t*(max-min)` is exact; decimals scale
- *  with the range so a 1–20 scale reads "12" and a 0–1 amount reads "0.85". */
-function formatReal(p: ParamInfo, norm: number): string {
-  const real = p.min + norm * (p.max - p.min);
-  const span = p.max - p.min;
-  const decimals = span >= 10 ? 0 : span >= 3 ? 1 : 2;
-  return real.toFixed(decimals);
-}
-
-/** One scalar parameter row: label · value · fader, owning its value locally for a
- *  smooth drag while writing every change straight to the engine. */
+/** One scalar parameter: label · value box · fader, all through the shared `ParamField`
+ *  so it is identical to every other control. Owns its value locally for a smooth drag
+ *  while writing every change straight to the engine; the value box edits the same value. */
 function ScalarRow({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
   const [value, setValue] = useState(param.value_norm);
   useEffect(() => setValue(param.value_norm), [param.value_norm]);
@@ -97,13 +93,38 @@ function ScalarRow({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
   };
 
   return (
-    <div className="pr-param-row">
-      <span className="pr-param-label">{param.label}</span>
-      <span className="pr-value pr-param-value">{formatReal(param, value)}</span>
-      <div className="pr-param-fader">
-        <Fader value={value} onChange={change} aria-label={param.label} />
-      </div>
-    </div>
+    <ParamField label={param.label} value={<ValueBox param={param} valueNorm={value} onCommit={change} />}>
+      <Fader value={value} onChange={change} aria-label={param.label} />
+    </ParamField>
+  );
+}
+
+/** One enum parameter: a labelled dropdown (a block control on the right). The value is a
+ *  scalar INDEX (0..steps): the normalized value maps linearly to the choice index, and
+ *  picking a choice writes the index back as `i / steps`. Used by the shape/mode selectors. */
+function EnumRow({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
+  const choices = param.choices ?? [];
+  const steps = Math.max(1, choices.length - 1);
+  const idxOf = (norm: number) => Math.min(choices.length - 1, Math.max(0, Math.round(norm * steps)));
+  const [idx, setIdx] = useState(idxOf(param.value_norm));
+  useEffect(() => setIdx(idxOf(param.value_norm)), [param.value_norm]);
+
+  const change = (v: string) => {
+    const i = Number(v);
+    setIdx(i);
+    setParam(zoneId, param.name, i / steps).catch(() => {});
+  };
+
+  return (
+    <ParamField label={param.label} block>
+      <Dropdown
+        value={String(idx)}
+        options={choices.map((label, i) => ({ value: String(i), label }))}
+        onChange={change}
+        minWidth={140}
+        aria-label={param.label}
+      />
+    </ParamField>
   );
 }
 
@@ -168,14 +189,9 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
     if (item.kind === "color") {
       if (item.r && item.g && item.b) {
         return (
-          <ColorControl
-            key={`${effectId}:color:${item.group}`}
-            zoneId={zoneId}
-            label="Color"
-            r={item.r}
-            g={item.g}
-            b={item.b}
-          />
+          <ParamField key={`${effectId}:color:${item.group}`} label="Color" block>
+            <ColorControl zoneId={zoneId} r={item.r} g={item.g} b={item.b} />
+          </ParamField>
         );
       }
       return [item.r, item.g, item.b]
@@ -184,7 +200,14 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
     }
     if (item.kind === "direction") {
       return (
-        <Rose key={`${effectId}:${item.param.name}`} zoneId={zoneId} param={item.param} />
+        <ParamField key={`${effectId}:${item.param.name}`} label={item.param.label} block>
+          <Rose zoneId={zoneId} param={item.param} />
+        </ParamField>
+      );
+    }
+    if (item.kind === "enum") {
+      return (
+        <EnumRow key={`${effectId}:${item.param.name}`} zoneId={zoneId} param={item.param} />
       );
     }
     if (item.kind === "palette") {
@@ -198,12 +221,9 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
         .sort((a, b) => a.index - b.index);
       if (item.count && slots.length > 0) {
         return (
-          <PaletteControl
-            key={`${effectId}:palette`}
-            zoneId={zoneId}
-            slots={slots}
-            count={item.count}
-          />
+          <ParamField key={`${effectId}:palette`} label="Colores" block>
+            <PaletteControl zoneId={zoneId} slots={slots} count={item.count} />
+          </ParamField>
         );
       }
       const stray = [item.count, ...slots.flatMap((s) => [s.r, s.g, s.b])].filter(

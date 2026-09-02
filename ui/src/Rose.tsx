@@ -37,22 +37,20 @@ export function Rose({ zoneId, param }: RoseProps) {
     setParam(zoneId, param.name, i / (DIRS.length - 1)).catch(() => {});
   };
 
+  // Just the 3×3 rose grid; the label is provided by the enclosing ParamField.
   return (
-    <div className="pr-param-row pr-rose-row">
-      <span className="pr-param-label">{param.label}</span>
-      <div className="pr-rose">
-        {DIRS.map((d, i) => (
-          <button
-            key={d.name}
-            className={`pr-rose-btn${i === index ? " is-active" : ""}`}
-            style={{ gridColumn: d.col, gridRow: d.row }}
-            onClick={() => pick(i)}
-            title={d.name}
-          >
-            {d.glyph}
-          </button>
-        ))}
-      </div>
+    <div className="pr-rose">
+      {DIRS.map((d, i) => (
+        <button
+          key={d.name}
+          className={`pr-rose-btn${i === index ? " is-active" : ""}`}
+          style={{ gridColumn: d.col, gridRow: d.row }}
+          onClick={() => pick(i)}
+          title={d.name}
+        >
+          {d.glyph}
+        </button>
+      ))}
     </div>
   );
 }
