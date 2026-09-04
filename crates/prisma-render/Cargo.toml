@@ -19,7 +19,11 @@ prisma-output = { path = "../prisma-output" }
 # One-way: prisma-preview knows nothing about rendering.
 prisma-preview = { path = "../prisma-preview" }
 # GPU pipeline (CLAUDE.md §2). Vulkan on Linux/Windows via the same codebase.
-wgpu = { version = "30", default-features = false, features = ["wgsl", "vulkan"] }
+# Backends: Vulkan is the dev/Linux path (RADV + lavapipe); dx12 + gles let the same
+# binary run on Windows, where there is usually no Vulkan driver — dx12 gives WARP (a CPU
+# fallback) on a bare VM. The dx12/metal deps are target-gated inside wgpu, so enabling
+# them here is a no-op on Linux builds.
+wgpu = { version = "30", default-features = false, features = ["wgsl", "vulkan", "dx12", "gles"] }
 # Half-precision floats: the canonical master buffer is linear-light f16 so the
 # render→output chain keeps precision until the single round-to-wire at the
 # output stage (CLAUDE.md §5.2 color pipeline). Matches the Rgba16Float GPU

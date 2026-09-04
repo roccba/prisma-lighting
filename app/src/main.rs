@@ -1505,9 +1505,24 @@ fn main() {
             let (config_hp, port_hp) = preview_config(AdapterPreference::HighPerformance, target);
             let (engine, preview_port) = match Engine::start_show(show.clone(), config_hp) {
                 Ok(engine) => (engine, port_hp),
-                Err(_) => {
+                Err(e_hp) => {
                     let (config_sw, port_sw) = preview_config(AdapterPreference::Software, target);
-                    (Engine::start_show(show, config_sw)?, port_sw)
+                    match Engine::start_show(show, config_sw) {
+                        Ok(engine) => (engine, port_sw),
+                        Err(e_sw) => {
+                            // No GPU at all (a bare VM with neither a Vulkan driver nor a
+                            // DX12/WARP fallback). Release builds have no console
+                            // (`windows_subsystem = "windows"`), so record why the boot
+                            // failed to a file the operator can read, then surface the error.
+                            let msg = format!(
+                                "Prisma could not start the render engine — no usable GPU.\n\
+                                 HighPerformance adapter: {e_hp}\n\
+                                 Software adapter: {e_sw}\n"
+                            );
+                            let _ = std::fs::write(config_dir.join("boot-error.txt"), &msg);
+                            return Err(msg.into());
+                        }
+                    }
                 }
             };
 
