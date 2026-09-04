@@ -364,6 +364,142 @@ fn color_scroll_scrolls_over_show_time_and_turns_with_direction() {
 }
 
 #[test]
+fn simple_shape_draws_a_centred_shape_and_the_enum_switches_it() {
+    // A white circle at the default centre lights the middle and leaves the corners
+    // dark; selecting a different shape through the enum index changes the field.
+    let gpu = software_gpu();
+    let tree = ParameterTree::with_defaults();
+    let mut shape = EffectInstance::new(gpu, &tree, "/fx/shape", &effects::simple_shape());
+    // Sharpen the edge so the small test grid classifies cleanly.
+    tree.write_path("/fx/shape/param/border", 0.02, ui());
+
+    let n = 9usize;
+    let circle = render_2d(gpu, &mut shape, &clock_at(0.0), n as u32, n as u32);
+    let at = |v: &[[f32; 4]], x: usize, y: usize| v[y * n + x][0];
+    assert!(
+        at(&circle, n / 2, n / 2) > 0.5,
+        "circle must light the centre, got {}",
+        at(&circle, n / 2, n / 2)
+    );
+    for (name, x, y) in [("tl", 0, 0), ("tr", n - 1, 0), ("br", n - 1, n - 1)] {
+        assert!(
+            at(&circle, x, y) < 0.5,
+            "circle must leave corner {name} dark, got {}",
+            at(&circle, x, y)
+        );
+    }
+
+    // The enum selects the SDF by index: the star (index 5) differs from the circle.
+    let shape_h = tree.resolve("/fx/shape/param/shape").unwrap();
+    tree.write_real(&shape_h, 5.0, ui());
+    let star = render_2d(gpu, &mut shape, &clock_at(0.0), n as u32, n as u32);
+    assert!(
+        circle
+            .iter()
+            .zip(&star)
+            .any(|(a, b)| (a[0] - b[0]).abs() > 0.1),
+        "changing the shape enum must change the rendered field"
+    );
+}
+
+#[test]
+fn metaballs_form_a_field_that_moves_and_responds_to_count() {
+    let gpu = software_gpu();
+    let tree = ParameterTree::with_defaults();
+    let mut mb = EffectInstance::new(gpu, &tree, "/fx/mb", &effects::metaballs());
+    tree.write_path("/fx/mb/param/speed", 1.5, ui());
+
+    let (w, h) = (12u32, 12u32);
+    let at0 = render_2d(gpu, &mut mb, &clock_at(0.0), w, h);
+    let reds: Vec<f32> = at0.iter().map(|p| p[0]).collect();
+    assert!(
+        reds.iter().any(|x| *x > 0.5),
+        "metaballs must light some cells, got max {}",
+        reds.iter().cloned().fold(0.0f32, f32::max)
+    );
+    assert!(
+        reds.iter().any(|x| (x - reds[0]).abs() > 0.05),
+        "metaballs must vary across the matrix"
+    );
+    assert!(
+        reds.iter().all(|x| (0.0..=1.0).contains(x)),
+        "stays in range: {reds:?}"
+    );
+    // The field evolves over show time.
+    let later = render_2d(gpu, &mut mb, &clock_at(0.7), w, h);
+    assert!(
+        at0.iter()
+            .zip(&later)
+            .any(|(a, b)| (a[0] - b[0]).abs() > 0.05),
+        "metaballs must move over show time"
+    );
+    // `count` is a real parameter: fewer blobs changes the field.
+    let count = tree.resolve("/fx/mb/param/count").unwrap();
+    tree.write_real(&count, 1.0, ui());
+    let one = render_2d(gpu, &mut mb, &clock_at(0.0), w, h);
+    assert!(
+        at0.iter()
+            .zip(&one)
+            .any(|(a, b)| (a[0] - b[0]).abs() > 0.05),
+        "changing the blob count must change the field"
+    );
+}
+
+#[test]
+fn drops_fall_and_animate() {
+    let gpu = software_gpu();
+    let tree = ParameterTree::with_defaults();
+    let mut drops = EffectInstance::new(gpu, &tree, "/fx/drops", &effects::drops());
+    tree.write_path("/fx/drops/param/speed", 1.5, ui());
+
+    let (w, h) = (12u32, 12u32);
+    // Sample several instants: with moving heads, at least one instant must light cells
+    // and the field must change between instants.
+    let a = render_2d(gpu, &mut drops, &clock_at(0.10), w, h);
+    let b = render_2d(gpu, &mut drops, &clock_at(0.37), w, h);
+    let lit_any = a.iter().chain(&b).any(|p| p[0] > 0.3);
+    assert!(lit_any, "drops must light some cells across the fall");
+    assert!(
+        a.iter().zip(&b).any(|(x, y)| (x[0] - y[0]).abs() > 0.1),
+        "drops must animate over show time"
+    );
+    assert!(
+        a.iter().all(|p| (0.0..=1.0).contains(&p[0])),
+        "stays in range"
+    );
+}
+
+#[test]
+fn explosions_burst_and_animate() {
+    let gpu = software_gpu();
+    let tree = ParameterTree::with_defaults();
+    let mut ex = EffectInstance::new(gpu, &tree, "/fx/ex", &effects::explosions());
+    // One burst per second, plenty of particles, so a burst is clearly visible.
+    tree.write_path("/fx/ex/param/rate", 1.0, ui());
+    tree.write_path("/fx/ex/param/particles", 40.0, ui());
+    tree.write_path("/fx/ex/param/size", 0.7, ui());
+
+    let (w, h) = (16u32, 16u32);
+    // Sample across one burst's life: early (just fired) it lights near its centre,
+    // and the field changes as particles expand and fall.
+    let early = render_2d(gpu, &mut ex, &clock_at(0.05), w, h);
+    let mid = render_2d(gpu, &mut ex, &clock_at(0.45), w, h);
+    let lit = early.iter().chain(&mid).any(|p| p[0] > 0.3);
+    assert!(lit, "an explosion must light some cells");
+    assert!(
+        early
+            .iter()
+            .zip(&mid)
+            .any(|(a, b)| (a[0] - b[0]).abs() > 0.1),
+        "explosion particles must move over show time"
+    );
+    assert!(
+        early.iter().all(|p| (0.0..=1.0).contains(&p[0])),
+        "stays in range"
+    );
+}
+
+#[test]
 fn the_four_core_effects_are_distinguishable_patterns() {
     // The milestone asks for three or four core effects. Four that look alike
     // would not let anyone judge a preview, so assert they actually differ.

@@ -19,6 +19,10 @@ const FIRE_WGSL: &str = include_str!("../../../shaders/fire.wgsl");
 const RADIAL_WGSL: &str = include_str!("../../../shaders/radial.wgsl");
 const SPARKLE_WGSL: &str = include_str!("../../../shaders/sparkle.wgsl");
 const COLOR_SCROLL_WGSL: &str = include_str!("../../../shaders/color_scroll.wgsl");
+const SIMPLE_SHAPE_WGSL: &str = include_str!("../../../shaders/simple_shape.wgsl");
+const METABALLS_WGSL: &str = include_str!("../../../shaders/metaballs.wgsl");
+const DROPS_WGSL: &str = include_str!("../../../shaders/drops.wgsl");
+const EXPLOSIONS_WGSL: &str = include_str!("../../../shaders/explosions.wgsl");
 
 /// The fixed number of palette slots a palette effect carries. Slots beyond the live
 /// `count` are packed but unread by the shader. Raising this means more uniform slots
@@ -334,6 +338,246 @@ pub fn sparkle() -> EffectManifest {
     }
 }
 
+/// The three `r`/`g`/`b` params of a single "color" group, defaulting to white. Effects
+/// that carry one tint colour share this instead of spelling out the triple each time;
+/// the panel collapses the group into one 255-space picker (§3.5). `keys` are the three
+/// `label_key`s in r/g/b order.
+fn color_group(keys: [&'static str; 3]) -> Vec<ParamSpec> {
+    let channels = [ColorChannel::R, ColorChannel::G, ColorChannel::B];
+    let names = ["r", "g", "b"];
+    names
+        .into_iter()
+        .zip(channels)
+        .zip(keys)
+        .map(|((name, channel), key)| {
+            ParamSpec::color(
+                name,
+                ParamDescriptor::unit_level(key, 1.0),
+                "color",
+                channel,
+            )
+        })
+        .collect()
+}
+
+/// The Simple Shape dropdown labels, in index order. The shader's `switch` arms and
+/// the enum's real range (`0 ..= len-1`) are kept in lockstep with this array; the
+/// shader receives the selected index directly.
+const SHAPES: [&str; 7] = [
+    "Círculo",
+    "Cuadrado",
+    "Triángulo",
+    "Diamante",
+    "Cruz",
+    "Estrella",
+    "Corazón",
+];
+
+/// One centred shape drawn from a signed distance function (§5.3, NEW-EFFECTS §3.2) —
+/// the showcase for the `enum` role. `shape` picks the SDF (a real dropdown), `size` its
+/// radius, `pos_x`/`pos_y` its centre, `border` the edge softness, and the `color` group
+/// tints the fill. Param order here **is** the uniform layout the shader reads.
+pub fn simple_shape() -> EffectManifest {
+    let mut params = vec![
+        ParamSpec::enum_choice(
+            "shape",
+            ParamDescriptor::level(
+                "effect.simple_shape.shape",
+                RealRange {
+                    min: 0.0,
+                    max: (SHAPES.len() - 1) as f32,
+                },
+                Curve::Linear,
+                // Default to the circle (index 0).
+                0.0,
+            ),
+            &SHAPES,
+        ),
+        ParamSpec::scalar(
+            "size",
+            ParamDescriptor::unit_level("effect.simple_shape.size", 0.4),
+        ),
+        ParamSpec::scalar(
+            "pos_x",
+            ParamDescriptor::unit_level("effect.simple_shape.pos_x", 0.5),
+        ),
+        ParamSpec::scalar(
+            "pos_y",
+            ParamDescriptor::unit_level("effect.simple_shape.pos_y", 0.5),
+        ),
+        ParamSpec::scalar(
+            "border",
+            ParamDescriptor::unit_level("effect.simple_shape.border", 0.12),
+        ),
+    ];
+    params.extend(color_group([
+        "effect.simple_shape.r",
+        "effect.simple_shape.g",
+        "effect.simple_shape.b",
+    ]));
+    EffectManifest {
+        effect_id: "simple_shape",
+        params,
+        shader_source: SIMPLE_SHAPE_WGSL,
+    }
+}
+
+/// Organic blobs that orbit and merge (§5.3, NEW-EFFECTS §3.3) — the inverse-square-sum
+/// scalar field. `count` is the number of live blobs (1–8), `size` their radius, `speed`
+/// their motion, `threshold` the iso-level where the surface forms, and the `color` group
+/// tints the fill. Param order here **is** the uniform layout the shader reads.
+pub fn metaballs() -> EffectManifest {
+    let mut params = vec![
+        ParamSpec::scalar(
+            "count",
+            ParamDescriptor::level(
+                "effect.metaballs.count",
+                RealRange { min: 1.0, max: 8.0 },
+                Curve::Linear,
+                // ~4 blobs by default: (4-1)/(8-1).
+                3.0 / 7.0,
+            ),
+        ),
+        ParamSpec::scalar(
+            "size",
+            ParamDescriptor::unit_level("effect.metaballs.size", 0.4),
+        ),
+        ParamSpec::scalar(
+            "speed",
+            ParamDescriptor::level(
+                "effect.metaballs.speed",
+                RealRange { min: 0.0, max: 4.0 },
+                Curve::Linear,
+                // Mid-low so the blobs drift out of the box.
+                0.25,
+            ),
+        ),
+        ParamSpec::scalar(
+            "threshold",
+            ParamDescriptor::unit_level("effect.metaballs.threshold", 0.5),
+        ),
+    ];
+    params.extend(color_group([
+        "effect.metaballs.r",
+        "effect.metaballs.g",
+        "effect.metaballs.b",
+    ]));
+    EffectManifest {
+        effect_id: "metaballs",
+        params,
+        shader_source: METABALLS_WGSL,
+    }
+}
+
+/// Falling drops with trailing tails (§5.3, NEW-EFFECTS §3.1). `speed` is the fall rate,
+/// `density` the number of columns, `length` the tail length, `fade` its falloff sharpness,
+/// `direction` the 8-way travel axis, and the `color` group the tint. Param order here
+/// **is** the uniform layout the shader reads.
+pub fn drops() -> EffectManifest {
+    let mut params = vec![
+        ParamSpec::scalar(
+            "speed",
+            ParamDescriptor::level(
+                "effect.drops.speed",
+                RealRange { min: 0.0, max: 4.0 },
+                Curve::Linear,
+                // Mid-slider so drops fall out of the box.
+                0.4,
+            ),
+        ),
+        ParamSpec::scalar(
+            "density",
+            ParamDescriptor::level(
+                "effect.drops.density",
+                RealRange {
+                    min: 1.0,
+                    max: 40.0,
+                },
+                Curve::Linear,
+                // ~12 columns: (12-1)/(40-1).
+                0.28,
+            ),
+        ),
+        ParamSpec::scalar(
+            "length",
+            ParamDescriptor::unit_level("effect.drops.length", 0.35),
+        ),
+        ParamSpec::scalar(
+            "fade",
+            ParamDescriptor::unit_level("effect.drops.fade", 0.5),
+        ),
+        ParamSpec::direction(
+            "direction",
+            // Default rose index 2 → Down (2/7), the natural fall.
+            ParamDescriptor::unit_level("effect.drops.direction", 2.0 / 7.0),
+        ),
+    ];
+    params.extend(color_group([
+        "effect.drops.r",
+        "effect.drops.g",
+        "effect.drops.b",
+    ]));
+    EffectManifest {
+        effect_id: "drops",
+        params,
+        shader_source: DROPS_WGSL,
+    }
+}
+
+/// Periodic radial particle bursts with gravity (§5.3, NEW-EFFECTS §3.4). `rate` is
+/// bursts per second, `size` the burst reach, `particles` how many per burst, `gravity`
+/// the downward pull, `fade` the decay sharpness, and the `color` group the tint. Param
+/// order here **is** the uniform layout the shader reads.
+pub fn explosions() -> EffectManifest {
+    let mut params = vec![
+        ParamSpec::scalar(
+            "rate",
+            ParamDescriptor::level(
+                "effect.explosions.rate",
+                RealRange { min: 0.0, max: 4.0 },
+                Curve::Linear,
+                // ~1 burst/s.
+                0.25,
+            ),
+        ),
+        ParamSpec::scalar(
+            "size",
+            ParamDescriptor::unit_level("effect.explosions.size", 0.5),
+        ),
+        ParamSpec::scalar(
+            "particles",
+            ParamDescriptor::level(
+                "effect.explosions.particles",
+                RealRange {
+                    min: 1.0,
+                    max: 40.0,
+                },
+                Curve::Linear,
+                // ~20 particles: (20-1)/(40-1).
+                0.49,
+            ),
+        ),
+        ParamSpec::scalar(
+            "gravity",
+            ParamDescriptor::unit_level("effect.explosions.gravity", 0.4),
+        ),
+        ParamSpec::scalar(
+            "fade",
+            ParamDescriptor::unit_level("effect.explosions.fade", 0.5),
+        ),
+    ];
+    params.extend(color_group([
+        "effect.explosions.r",
+        "effect.explosions.g",
+        "effect.explosions.b",
+    ]));
+    EffectManifest {
+        effect_id: "explosions",
+        params,
+        shader_source: EXPLOSIONS_WGSL,
+    }
+}
+
 /// A flat linear-light color from three unit-range parameters `r`, `g`, `b`. The
 /// simplest effect (§5.3 "solid color") and a clean, known building block for the
 /// compositor tests. Param order here is the uniform layout the shader reads.
@@ -454,6 +698,26 @@ pub fn catalogue() -> Vec<EffectListing> {
             name: "Scroll de color",
             category: "Generadores",
         },
+        EffectListing {
+            id: "simple_shape",
+            name: "Forma sencilla",
+            category: "Generadores",
+        },
+        EffectListing {
+            id: "metaballs",
+            name: "Metaballs",
+            category: "Generadores",
+        },
+        EffectListing {
+            id: "drops",
+            name: "Gotas",
+            category: "Generadores",
+        },
+        EffectListing {
+            id: "explosions",
+            name: "Explosiones",
+            category: "Generadores",
+        },
     ]
 }
 
@@ -511,6 +775,10 @@ pub fn manifest_by_id(id: &str) -> Option<EffectManifest> {
         "radial" => Some(radial()),
         "sparkle" => Some(sparkle()),
         "color_scroll" => Some(color_scroll()),
+        "simple_shape" => Some(simple_shape()),
+        "metaballs" => Some(metaballs()),
+        "drops" => Some(drops()),
+        "explosions" => Some(explosions()),
         _ => None,
     }
 }
