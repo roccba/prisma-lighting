@@ -61,7 +61,7 @@ pub enum GpuError {
 impl fmt::Display for GpuError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            GpuError::NoAdapter(p) => write!(f, "no Vulkan adapter matched preference {p:?}"),
+            GpuError::NoAdapter(p) => write!(f, "no GPU adapter matched preference {p:?}"),
             GpuError::DeviceRequest(e) => write!(f, "failed to create GPU device: {e}"),
         }
     }
@@ -71,11 +71,12 @@ impl std::error::Error for GpuError {}
 
 impl Gpu {
     /// Bring up the GPU for the given preference. Blocks (setup path, never the
-    /// render hot loop). Vulkan-only backend: it is the shared path across Linux
-    /// (dev) and Windows (target), and the only one lavapipe implements.
+    /// render hot loop). Enables Vulkan (Linux dev + lavapipe), DX12 and GL so the
+    /// same binary also runs on Windows, where a bare VM has no Vulkan driver but
+    /// DX12 offers a CPU WARP fallback.
     pub fn new(preference: AdapterPreference) -> Result<Gpu, GpuError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
+            backends: wgpu::Backends::VULKAN | wgpu::Backends::DX12 | wgpu::Backends::GL,
             flags: wgpu::InstanceFlags::default(),
             memory_budget_thresholds: Default::default(),
             backend_options: Default::default(),
@@ -141,9 +142,17 @@ fn select_adapter(
             .map_err(|_| GpuError::NoAdapter(preference))
         }
         AdapterPreference::Software => {
-            pollster::block_on(instance.enumerate_adapters(wgpu::Backends::VULKAN))
-                .into_iter()
-                .find(|a| a.get_info().device_type == wgpu::DeviceType::Cpu)
+            // Prefer a CPU Vulkan adapter (lavapipe) so the correctness tests stay
+            // bit-for-bit deterministic on the dev/CI box; then fall back to a CPU
+            // adapter on any backend — DX12 WARP on a Windows VM with no Vulkan — so
+            // the app still runs without a real GPU on the target.
+            let first_cpu = |backends| {
+                pollster::block_on(instance.enumerate_adapters(backends))
+                    .into_iter()
+                    .find(|a| a.get_info().device_type == wgpu::DeviceType::Cpu)
+            };
+            first_cpu(wgpu::Backends::VULKAN)
+                .or_else(|| first_cpu(wgpu::Backends::all()))
                 .ok_or(GpuError::NoAdapter(preference))
         }
     }
