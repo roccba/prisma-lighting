@@ -61,6 +61,11 @@ pub enum ParamRole {
     /// scalar in the tree; tagged so the palette editor can find it and so the shader
     /// reads it to gate its slot loop.
     PaletteCount,
+    /// A discrete choice → a dropdown. The value is a scalar INDEX in
+    /// `0..=choices.len()-1`, carried like any other scalar (the descriptor's real range
+    /// is `0.0 ..= (len-1)` so the real value the shader receives is the index itself,
+    /// selected with `i32(round(u.<name>))`). The panel draws the labels in index order.
+    Enum { choices: &'static [&'static str] },
 }
 
 /// One parameter an effect exposes. `name` is the trailing path segment (the
@@ -130,6 +135,21 @@ impl ParamSpec {
             name,
             descriptor,
             role: ParamRole::PaletteCount,
+        }
+    }
+
+    /// A discrete choice — the panel draws a dropdown of `choices`. The descriptor's
+    /// real range must be `0.0 ..= (choices.len()-1)` with [`Curve::Linear`](prisma_core::Curve)
+    /// so the shader receives the selected index directly (`i32(round(u.<name>))`).
+    pub fn enum_choice(
+        name: &'static str,
+        descriptor: ParamDescriptor,
+        choices: &'static [&'static str],
+    ) -> Self {
+        Self {
+            name,
+            descriptor,
+            role: ParamRole::Enum { choices },
         }
     }
 }

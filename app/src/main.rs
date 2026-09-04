@@ -84,6 +84,8 @@ struct ParamInfo {
     /// The colour channel (`"r"`/`"g"`/`"b"`), `Some` for `role == "color"` or
     /// `"palette"`.
     channel: Option<&'static str>,
+    /// Dropdown labels for `role == "enum"`, in index order; `None` for every other role.
+    choices: Option<Vec<String>>,
 }
 
 /// The effect work panel's data for the selected zone (M8 step 5): the zone's active
@@ -133,6 +135,9 @@ fn role_dto(role: &ParamRole) -> (&'static str, Option<String>, Option<&'static 
             ("palette", Some(index.to_string()), Some(ch_str(channel)))
         }
         ParamRole::PaletteCount => ("palette_count", None, None),
+        // The labels travel in `ParamInfo::choices`, computed at the call site; the
+        // group/channel slots are unused for an enum.
+        ParamRole::Enum { .. } => ("enum", None, None),
     }
 }
 
@@ -1338,6 +1343,12 @@ fn main_effect_panel(state: State<AppState>, zone: Uuid) -> EffectPanelInfo {
         .into_iter()
         .map(|p| {
             let (role, group, channel) = role_dto(&p.role);
+            let choices = match &p.role {
+                ParamRole::Enum { choices } => {
+                    Some(choices.iter().map(|s| s.to_string()).collect())
+                }
+                _ => None,
+            };
             ParamInfo {
                 value_norm: stored.0.get(&p.name).copied().unwrap_or(p.default_norm),
                 label: humanize(&p.name),
@@ -1347,6 +1358,7 @@ fn main_effect_panel(state: State<AppState>, zone: Uuid) -> EffectPanelInfo {
                 role,
                 group,
                 channel,
+                choices,
             }
         })
         .collect();
