@@ -1151,8 +1151,13 @@ fn close_splash(app: AppHandle) {
     }
 }
 
+// `async` on purpose: a Tauri v2 sync command runs on the main (event-loop) thread,
+// and `WebviewWindowBuilder::build()` blocks waiting for that same event loop to create
+// the window — a deadlock that hangs on Windows/WebView2 (GTK tolerated it, so it only
+// showed up on Windows). An async command runs off the main thread, so `build()` can be
+// serviced by the event loop and the editor window actually opens.
 #[tauri::command]
-fn main_open_editor(app: AppHandle) -> Result<(), String> {
+async fn main_open_editor(app: AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("editor") {
         let _ = win.set_focus();
         return Ok(());
@@ -1161,13 +1166,27 @@ fn main_open_editor(app: AppHandle) -> Result<(), String> {
     if let Some(engine) = app.state::<AppState>().engine.lock().unwrap().as_ref() {
         engine.set_frozen(true);
     }
-    let win = WebviewWindowBuilder::new(&app, "editor", WebviewUrl::App("index.html".into()))
+    let win = match WebviewWindowBuilder::new(&app, "editor", WebviewUrl::App("index.html".into()))
         .title("Prisma — Editor de Patch")
         .inner_size(1280.0, 800.0)
         .min_inner_size(1280.0, 800.0)
         .maximized(true)
         .build()
-        .map_err(|e| e.to_string())?;
+    {
+        Ok(win) => win,
+        Err(e) => {
+            let msg = format!("editor window failed to open: {e}");
+            // Release builds have no console; record why and unfreeze so the show is
+            // not left stuck frozen with no editor.
+            if let Ok(dir) = app.path().app_config_dir() {
+                let _ = std::fs::write(dir.join("editor-error.txt"), &msg);
+            }
+            if let Some(engine) = app.state::<AppState>().engine.lock().unwrap().as_ref() {
+                engine.set_frozen(false);
+            }
+            return Err(msg);
+        }
+    };
 
     // On **Destroyed** (not CloseRequested): apply the edits to the running show and
     // resume it. `Destroyed` is the reliable "the window is truly gone" event across
