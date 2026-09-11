@@ -198,9 +198,29 @@ fn empty_patch() -> Patch {
     }
 }
 
-/// A blank show with no content at all (no zones/patch) — the app's "empty" state.
+/// Give every zone that has no grid yet a full set of assignable (empty) cells. A zone
+/// with an empty grid renders no scene cells and looks broken — and `Show::new` leaves
+/// every `ZoneShow` with an empty grid, so the default boot zone (and any zone in an old
+/// save) needs this. Idempotent: only fills empty grids, so it never wipes real scenes.
+fn seed_missing_grids(show: &mut Show) {
+    for zs in &mut show.zones {
+        if zs.grid.is_empty() {
+            zs.grid = (0..GRID_CELLS).map(|_| Cell::empty()).collect();
+        }
+    }
+}
+
+/// A blank show with a single default zone whose scene grid is seeded and LIT, so the
+/// operator can map pixels and immediately assign effects (matching a freshly added zone).
 fn empty_show() -> Show {
-    Show::new("Sin título", empty_patch())
+    let mut show = Show::new("Sin título", empty_patch());
+    seed_missing_grids(&mut show);
+    // The default zone starts at full dimmer (like the reconcile path's new-zone branch),
+    // so its content is visible the moment an effect is assigned instead of a black zone.
+    for zs in &mut show.zones {
+        zs.live.dimmer = 1.0;
+    }
+    show
 }
 
 /// Read the remembered last-show path, if any. Empty/missing file ⇒ `None` ⇒ boot empty.
@@ -1493,6 +1513,9 @@ fn main() {
                 .map(|mut s| {
                     s.patch.fill_zone_members_from_ownership();
                     s.patch.fit_matrix_size();
+                    // Safety net: an old save (or one made while a zone had an empty grid)
+                    // gets its missing grids seeded so every zone's scene cells work.
+                    seed_missing_grids(&mut s);
                     s
                 })
                 .filter(|s| s.patch.compile().is_ok())
@@ -1625,4 +1648,41 @@ fn main() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_show_default_zone_has_a_seeded_lit_grid() {
+        // Regression: the default boot zone must have assignable scene cells and start lit,
+        // otherwise mapping pixels into it leaves the effect grid disabled (the reconcile
+        // path preserves an existing zone's grid, so an empty one would never fill in).
+        let show = empty_show();
+        assert_eq!(show.zones.len(), 1, "empty show has one default zone");
+        assert_eq!(
+            show.zones[0].grid.len(),
+            GRID_CELLS,
+            "default zone's scene grid must be seeded"
+        );
+        assert_eq!(show.zones[0].live.dimmer, 1.0, "default zone starts lit");
+    }
+
+    #[test]
+    fn seed_missing_grids_only_fills_empty_ones() {
+        // Idempotent: it fills a zone with no grid but never touches a zone that already
+        // has scenes (so a loaded show's real cells are preserved).
+        let mut show = Show::new("t", empty_patch());
+        assert!(show.zones[0].grid.is_empty());
+        // Pretend a second zone already has one authored cell.
+        let mut authored = ZoneShow::new(Uuid::new_v4());
+        authored.grid = vec![Cell::empty()];
+        show.zones.push(authored);
+
+        seed_missing_grids(&mut show);
+
+        assert_eq!(show.zones[0].grid.len(), GRID_CELLS, "empty grid seeded");
+        assert_eq!(show.zones[1].grid.len(), 1, "authored grid left untouched");
+    }
 }
