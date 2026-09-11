@@ -9,6 +9,11 @@ import App from "./App";
 // document; the app background and every component keep their current look.)
 import "./theme.css";
 import "./styles.css";
+import { installDesktopShell } from "./desktopShell";
+
+// Make the webview read as a native program (no browser menu/zoom/selection/shortcuts)
+// before anything renders. Covers both windows — they share this entry.
+installDesktopShell();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

@@ -98,6 +98,28 @@ body {
   margin: 0;
 }
 
+/* ---- Native desktop shell: the app must not read as a web page ---- */
+/* No text selection, drag-ghosts, rubber-band scroll or I-beam by default — this is a
+   program, not a document. Real editable fields opt back in below. The browser context
+   menu, zoom and reload/find/print shortcuts are suppressed in JS (see desktopShell.ts). */
+html { overscroll-behavior: none; }
+body {
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+  -webkit-tap-highlight-color: transparent;
+}
+img { -webkit-user-drag: none; user-drag: none; }
+/* Text inputs keep selection, a caret and native editing. */
+input, textarea, [contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+/* A selection can only appear inside those fields now — tint it with the accent. */
+::selection { background: var(--accent); color: #fff; }
+
 /* ---- Scrollbars ---- */
 ::-webkit-scrollbar { width: 14px; height: 14px; }
 ::-webkit-scrollbar-track { background: #0d0d0d; }
