@@ -115,26 +115,9 @@ export default function Editor() {
     } catch (e) { setNotice(String(e)); }
   };
 
-  // --- Disable browser zoom app-wide (§5.7) ---
-  // Ctrl+wheel and trackpad pinch (which the browser reports as a wheel event with
-  // ctrlKey) zoom the entire web UI — fonts, panels, layout — which breaks the editor.
-  // The only zoom is the canvas GRID (plain wheel, handled in Canvas). A non-passive
-  // window listener is required: React's onWheel is passive, so preventDefault there is
-  // ignored. Ctrl +/-/0 keyboard zoom is blocked too.
-  useEffect(() => {
-    const onWheel = (e: WheelEvent) => {
-      if (e.ctrlKey) e.preventDefault();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && ["=", "-", "+", "0"].includes(e.key)) e.preventDefault();
-    };
-    window.addEventListener("wheel", onWheel, { passive: false });
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("wheel", onWheel);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, []);
+  // (Browser zoom — Ctrl+wheel / Ctrl +/-/0 — is disabled app-wide in desktopShell.ts,
+  // installed once at the entry for both windows. The canvas grid's own plain-wheel zoom is
+  // handled in Canvas.)
 
   // Live-apply: edits flow to the running show automatically, debounced so a burst of
   // edits triggers ONE apply after they settle. This is affordable now that the engine
