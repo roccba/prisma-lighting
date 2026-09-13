@@ -93,7 +93,12 @@ impl Gpu {
             required_features: wgpu::Features::empty(),
             required_limits: wgpu::Limits::downlevel_defaults(),
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
-            memory_hints: wgpu::MemoryHints::Performance,
+            // Small allocator blocks (8–64 MB) instead of `Performance`'s 128–256 MB:
+            // Prisma's GPU resources are small (per-zone textures of KBs–MBs) and are
+            // created at show compile, never per frame, so big pre-reserved blocks buy
+            // nothing and cost ~150 MiB of VRAM — which on a 1 GB integrated GPU left
+            // the desktop compositor too little to present and froze the session.
+            memory_hints: wgpu::MemoryHints::MemoryUsage,
             trace: wgpu::Trace::Off,
         }))
         .map_err(GpuError::DeviceRequest)?;
