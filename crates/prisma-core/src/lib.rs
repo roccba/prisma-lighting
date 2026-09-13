@@ -27,6 +27,7 @@
 pub mod arbitration;
 pub mod clock;
 pub mod descriptor;
+pub mod mappings;
 pub mod notify;
 pub mod overlap;
 pub mod show;
@@ -40,6 +41,10 @@ pub mod zone;
 
 pub use clock::{ClockShared, ClockSnapshot, MasterClock, MAX_BPM, MIN_BPM};
 pub use descriptor::{Curve, ParamDescriptor, ParamKind, RealRange};
+pub use mappings::{
+    load_mappings, save_mappings, ControlKind, ControlMode, ControllerMappings, MapTarget,
+    MappingsError, MidiControl, MidiMapping, ResponseCurve, ZoneSub,
+};
 pub use notify::{Filter, Subscription};
 pub use overlap::{OverlapSnapshot, NO_CELL, NO_ZONE};
 pub use show::{

@@ -15,6 +15,10 @@
   --accent-bright: #1F9CFF;  /* hover / active borders / grabbed handles */
   --accent-dim:    #005A99;  /* pressed / secondary hover backgrounds */
   --accent-text:   #4FC1FF;  /* numeric values & data on dark — reads brighter */
+  /* ---- MIDI Learn (M9): a soft orange, deliberately NOT the accent — "armed, waiting
+     for hardware" must never be mistaken for "selected" or "active". ---- */
+  --learn:         #E8912D;
+  --learn-soft:    rgba(232, 145, 45, .22);
 
   /* ---- Structural surfaces ---- */
   --bg-app:      #0a0a0a;    /* app background */
@@ -692,3 +696,49 @@ input.pr-field-value:focus { outline: 1px solid var(--accent); outline-offset: -
 .pr-palette-slot:hover .pr-palette-remove { display: flex; }
 .pr-palette-add { width: 24px; height: 30px; padding: 0; font-size: 15px; line-height: 1; background: var(--btn-face); color: var(--text); border: 1px dashed var(--btn-border); border-radius: var(--r-sm); cursor: pointer; }
 .pr-palette-add:hover { background: var(--btn-face-hover); border-color: var(--accent); color: var(--accent-text); }
+
+/* --- MIDI Learn (M9-SPEC §7) ---------------------------------------------------------
+   Learn mode overlays every learnable control. Mapped = thin orange outline + its control
+   label; ARMED = orange tint that pulses until the hardware is touched; a short green-free
+   flash (brighter orange) confirms the bind. */
+.pr-learn-host { position: relative; display: flex; }
+.pr-learn-overlay {
+  position: absolute; inset: -2px; z-index: 5; cursor: pointer;
+  border: 1px dashed var(--btn-border); border-radius: var(--r-sm);
+  background: rgba(0,0,0,.18);
+  display: flex; align-items: flex-end; justify-content: center;
+}
+.pr-learn-overlay:hover { border-color: var(--learn); background: var(--learn-soft); }
+.pr-learn-overlay.is-mapped { border: 1px solid var(--learn); background: rgba(232,145,45,.08); }
+.pr-learn-overlay.is-armed {
+  border: 1px solid var(--learn); background: var(--learn-soft);
+  animation: pr-learn-pulse 1s ease-in-out infinite;
+}
+.pr-learn-overlay.is-learned { background: rgba(232,145,45,.45); animation: none; }
+@keyframes pr-learn-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(232,145,45,.0); background: rgba(232,145,45,.12); }
+  50%      { box-shadow: 0 0 10px 1px rgba(232,145,45,.55); background: rgba(232,145,45,.34); }
+}
+.pr-learn-badge {
+  max-width: 100%; margin: 2px; padding: 0 3px; border-radius: 2px;
+  background: var(--learn); color: #111; font-family: var(--font-mono); font-size: var(--fs-tiny);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+}
+.pr-learn-bar {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+  padding: 5px 10px; background: var(--bg-panel); border-top: 1px solid var(--learn);
+  color: var(--text); font-size: var(--fs-small);
+}
+.pr-learn-bar .pr-btn { margin-left: auto; }
+.pr-learn-bar-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--learn); animation: pr-learn-pulse 1s ease-in-out infinite; }
+
+/* Device manager — MIDI tab (M9). */
+.pr-devmgr-select { flex: 1 1 auto; min-width: 0; }
+.pr-devmgr-status { font-size: var(--fs-small); font-family: var(--font-mono); color: var(--text-dim); }
+.pr-devmgr-status.is-ok { color: var(--accent-text); }
+.pr-devmgr-maps { display: flex; flex-direction: column; gap: 2px; max-height: 180px; overflow: auto; border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); padding: 4px; background: var(--bg-input); }
+.pr-devmgr-map { display: flex; align-items: center; gap: 8px; font-size: var(--fs-small); color: var(--text); }
+.pr-devmgr-map code { font-family: var(--font-mono); color: var(--learn); flex: 0 0 110px; }
+.pr-devmgr-map span { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-devmgr-map button { background: transparent; border: none; color: var(--text-dim); cursor: pointer; }
+.pr-devmgr-map button:hover { color: var(--text); }

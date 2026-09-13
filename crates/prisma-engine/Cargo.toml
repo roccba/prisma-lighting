@@ -18,6 +18,9 @@ prisma-patch = { path = "../prisma-patch" }
 prisma-render = { path = "../prisma-render" }
 prisma-output = { path = "../prisma-output" }
 prisma-preview = { path = "../prisma-preview" }
+# The MIDI transport (M9). Without the `hardware` feature: the engine owns the
+# runtime (profile, binding, Learn); the app opens the midir port and feeds it.
+prisma-midi = { path = "../prisma-midi" }
 # IdleContent writes zeros into the render target (the "no show loaded" state);
 # it touches the wgpu queue/texture and the canonical f16 buffer staging.
 wgpu = { version = "30", default-features = false, features = ["wgsl", "vulkan"] }

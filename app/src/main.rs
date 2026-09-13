@@ -10,7 +10,8 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use glam::Vec3;
 use prisma_editor::{
@@ -18,9 +19,12 @@ use prisma_editor::{
     FixtureLibrary, FixtureType, PatchDraft, PlacementSpec, PreviewRun, SelectionAggregate,
 };
 use prisma_engine::{
-    load_show, save_show, Cell, Engine, EngineConfig, EngineHandle, Layer, ParamSet, Show, Source,
-    ZoneLiveReadout, ZoneShow,
+    load_mappings, load_show, save_mappings, save_show, Cell, ControllerMappings, Engine,
+    EngineConfig, EngineHandle, Layer, MapTarget, MidiMapping, MidiNotice, MidiRuntime, ParamSet,
+    Show, Source, ZoneLiveReadout, ZoneShow,
 };
+use prisma_midi::io::{input_port_names, MidiInputLink, MidiIoError};
+use prisma_midi::APC40_KEYWORDS;
 use prisma_patch::{load_patch, save_patch, BlendMode, Diagnostic, Patch, Zone};
 use prisma_preview::sink::WebSocketSink;
 use prisma_render::{AdapterPreference, ColorChannel, ParamRole};
@@ -273,6 +277,22 @@ struct AppState {
     /// File holding the path of the last opened/saved show, so the next launch reopens it.
     /// Empty/missing ⇒ boot empty. Cleared by "Nueva configuración".
     last_show_file: PathBuf,
+    /// MIDI (M9): a clone of the engine's runtime. It outlives every recompile (the engine
+    /// carries it across), so the open input link below keeps feeding the live tree.
+    midi: MidiRuntime,
+    /// The open hardware input, if any. Dropping it closes the port.
+    midi_link: Mutex<Option<MidiInputLink>>,
+    /// Which input to open (persisted) and why the last open failed (transient).
+    midi_config: Mutex<MidiConfig>,
+    midi_config_path: PathBuf,
+    midi_error: Mutex<Option<String>>,
+}
+
+/// Which MIDI input the app opens. `None` = auto-detect the reference controller (APC40)
+/// by port-name keyword, so plugging it in just works on any OS.
+#[derive(Serialize, Deserialize, Clone, Default)]
+struct MidiConfig {
+    input_port: Option<String>,
 }
 
 /// Network output configuration — the device manager. It decides WHERE
@@ -1090,6 +1110,186 @@ fn main_network_set(app: AppHandle, config: NetworkConfig) -> Result<(), String>
     }
 }
 
+// --- MIDI (M9 Slice 1): input device + MIDI Learn ---
+
+/// Write a JSON-able config next to the others, creating the config directory if needed.
+fn persist_text(path: &Path, text: &str) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(path, text).map_err(|e| e.to_string())
+}
+
+/// (Re)open the configured MIDI input, closing the previous link first. A missing device
+/// is not an error worth shouting about in auto mode; it is recorded for the device
+/// manager to show.
+fn connect_midi(state: &AppState) {
+    let mut link = state.midi_link.lock().unwrap();
+    *link = None;
+    let port = state.midi_config.lock().unwrap().input_port.clone();
+    let opened = match &port {
+        Some(name) => MidiInputLink::open(state.midi.clone(), name),
+        None => MidiInputLink::open_by_keywords(state.midi.clone(), APC40_KEYWORDS),
+    };
+    *state.midi_error.lock().unwrap() = match opened {
+        Ok(l) => {
+            *link = Some(l);
+            None
+        }
+        Err(MidiIoError::NotFound) if port.is_none() => None,
+        Err(e) => Some(e.to_string()),
+    };
+}
+
+/// Forward runtime notices to the UI. Learn persists the profile and emits `midi-learned`
+/// at once. `Applied` (a mapped control moved) arrives at controller rate, so it only
+/// marks a flag; a notifier thread emits `midi-applied` at most every 50 ms and always
+/// once more after the last move, so the UI's faders land on the final value.
+///
+/// A control that drives a zone also emits `midi-focus` (the zone slot) so the main
+/// window can follow the operator's hands when "follow MIDI focus" is on. It fires on the
+/// first message of a gesture — a different zone than last time, or the same zone after a
+/// pause — not at controller rate: re-selecting the zone on every CC would fight a click
+/// the operator makes on another zone mid-gesture.
+fn install_midi_listener(app: &AppHandle, midi: &MidiRuntime, mappings_path: PathBuf) {
+    let dirty = Arc::new(AtomicBool::new(false));
+    let notifier = {
+        let app = app.clone();
+        let dirty = Arc::clone(&dirty);
+        std::thread::Builder::new()
+            .name("prisma-midi-ui".into())
+            .spawn(move || loop {
+                std::thread::park();
+                while dirty.swap(false, Ordering::Relaxed) {
+                    let _ = app.emit("midi-applied", ());
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            })
+            .expect("spawn MIDI UI notifier")
+    };
+    let app = app.clone();
+    let last_focus: Mutex<Option<(u16, std::time::Instant)>> = Mutex::new(None);
+    midi.set_listener(Some(Arc::new(move |notice| match notice {
+        MidiNotice::Learned { mapping, profile } => {
+            match save_mappings(&profile) {
+                Ok(json) => {
+                    if let Err(e) = persist_text(&mappings_path, &json) {
+                        eprintln!("prisma: could not save controller mappings: {e}");
+                    }
+                }
+                Err(e) => eprintln!("prisma: could not serialize controller mappings: {e}"),
+            }
+            let _ = app.emit("midi-learned", mapping);
+        }
+        MidiNotice::Applied { zone, .. } => {
+            if !dirty.swap(true, Ordering::Relaxed) {
+                notifier.thread().unpark();
+            }
+            if let Some(slot) = zone {
+                let now = std::time::Instant::now();
+                let mut last = last_focus.lock().unwrap();
+                let new_gesture = match *last {
+                    Some((prev, at)) => prev != slot || now.duration_since(at) > FOCUS_GESTURE_GAP,
+                    None => true,
+                };
+                if new_gesture {
+                    let _ = app.emit("midi-focus", slot);
+                }
+                *last = Some((slot, now));
+            }
+        }
+    })));
+}
+
+/// A pause longer than this between messages for the same zone starts a new gesture,
+/// which re-focuses that zone (e.g. after the operator clicked elsewhere).
+const FOCUS_GESTURE_GAP: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// Everything the MIDI tab and the Learn overlay need.
+#[derive(Serialize)]
+struct MidiStatus {
+    /// Present input ports (empty if the MIDI system is unavailable).
+    ports: Vec<String>,
+    /// The configured port; `None` = auto-detect (APC40).
+    selected: Option<String>,
+    /// The port actually open right now.
+    connected: Option<String>,
+    error: Option<String>,
+    /// The target waiting for a control, if Learn is armed.
+    learning: Option<MapTarget>,
+    mappings: Vec<MidiMapping>,
+}
+
+#[tauri::command]
+fn midi_status(state: State<AppState>) -> MidiStatus {
+    let (ports, list_error) = match input_port_names() {
+        Ok(p) => (p, None),
+        Err(e) => (Vec::new(), Some(e.to_string())),
+    };
+    MidiStatus {
+        ports,
+        selected: state.midi_config.lock().unwrap().input_port.clone(),
+        connected: state
+            .midi_link
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|l| l.port_name().to_string()),
+        error: state.midi_error.lock().unwrap().clone().or(list_error),
+        learning: state.midi.learning(),
+        mappings: state.midi.profile().mappings,
+    }
+}
+
+/// Choose the input (`None` = auto-detect), persist it, and reopen.
+#[tauri::command]
+fn midi_set_input(state: State<AppState>, port: Option<String>) -> Result<MidiStatus, String> {
+    let config = MidiConfig { input_port: port };
+    let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
+    persist_text(&state.midi_config_path, &json)?;
+    *state.midi_config.lock().unwrap() = config;
+    connect_midi(&state);
+    Ok(midi_status(state))
+}
+
+/// Re-scan and reopen the configured input (hot-plug: the device was connected late).
+#[tauri::command]
+fn midi_reconnect(state: State<AppState>) -> MidiStatus {
+    connect_midi(&state);
+    midi_status(state)
+}
+
+/// Arm MIDI Learn for a target: the next pad/fader touched on the hardware binds to it.
+#[tauri::command]
+fn midi_learn_arm(state: State<AppState>, target: MapTarget) {
+    state.midi.arm_learn(target);
+}
+
+#[tauri::command]
+fn midi_learn_cancel(state: State<AppState>) {
+    state.midi.cancel_learn();
+}
+
+/// Remove the mapping for a target and persist the profile.
+#[tauri::command]
+fn midi_unmap(app: AppHandle, target: MapTarget) -> Result<Vec<MidiMapping>, String> {
+    let state = app.state::<AppState>();
+    if let Some(profile) = state.midi.unmap(&target) {
+        let json = save_mappings(&profile).map_err(|e| e.to_string())?;
+        let path = app
+            .path()
+            .app_config_dir()
+            .map_err(|e| e.to_string())?
+            .join(MAPPINGS_FILE);
+        persist_text(&path, &json)?;
+    }
+    Ok(state.midi.profile().mappings)
+}
+
+/// The operator's controller profile, in the per-user app-config dir (CLAUDE.md §4.6 —
+/// separate from any Show).
+const MAPPINGS_FILE: &str = "controller-mappings.json";
+
 // --- Main operation window (M8 step 6): the global operation bar ---
 
 /// The global bar's current master state, so the bar reflects what the engine holds
@@ -1495,6 +1695,12 @@ fn main() {
             main_clear_cell,
             main_effect_panel,
             main_set_param,
+            midi_status,
+            midi_set_input,
+            midi_reconnect,
+            midi_learn_arm,
+            midi_learn_cancel,
+            midi_unmap,
             close_splash,
         ])
         .plugin(tauri_plugin_dialog::init())
@@ -1599,6 +1805,30 @@ fn main() {
                 }
             };
 
+            // MIDI (M9): the operator's controller profile + which input to open, both
+            // per-user. A present-but-invalid profile is left untouched on disk (so a
+            // hand-edit mistake is recoverable) and an empty one is used for the session.
+            let mappings_path = config_dir.join(MAPPINGS_FILE);
+            let profile = match std::fs::read_to_string(&mappings_path) {
+                Ok(json) => load_mappings(&json).unwrap_or_else(|e| {
+                    eprintln!(
+                        "prisma: controller mappings at {} are invalid ({e}); \
+                         using an empty profile in memory (file left untouched)",
+                        mappings_path.display()
+                    );
+                    ControllerMappings::new("default")
+                }),
+                Err(_) => ControllerMappings::new("default"),
+            };
+            let midi = engine.midi().clone();
+            midi.set_profile(profile);
+            install_midi_listener(app.handle(), &midi, mappings_path);
+            let midi_config_path = config_dir.join("midi.json");
+            let midi_config = std::fs::read_to_string(&midi_config_path)
+                .ok()
+                .and_then(|json| serde_json::from_str::<MidiConfig>(&json).ok())
+                .unwrap_or_default();
+
             app.manage(AppState {
                 engine: Mutex::new(Some(engine)),
                 show: Mutex::new(show_state),
@@ -1609,7 +1839,15 @@ fn main() {
                 network: Mutex::new(network),
                 network_path,
                 last_show_file,
+                midi,
+                midi_link: Mutex::new(None),
+                midi_config: Mutex::new(midi_config),
+                midi_config_path,
+                midi_error: Mutex::new(None),
             });
+            // Open the MIDI input off the boot path's critical section: a missing device
+            // just leaves the link empty (the device manager can reconnect later).
+            connect_midi(&app.state::<AppState>());
 
             // Boot splash safety net: the splash webview normally reveals the main window
             // (via `close_splash`) once the UI signals `prisma://ready`, and it has its own
@@ -1637,6 +1875,9 @@ fn main() {
         .run(|app_handle, event| {
             if let RunEvent::ExitRequested { .. } = event {
                 if let Some(state) = app_handle.try_state::<AppState>() {
+                    // Close the MIDI input before the engine, so no input thread is writing
+                    // while it tears down.
+                    state.midi_link.lock().unwrap().take();
                     if let Some(engine) = state.engine.lock().unwrap().take() {
                         let report = engine.shutdown();
                         eprintln!(

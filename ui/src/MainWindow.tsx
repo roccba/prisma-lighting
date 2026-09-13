@@ -11,6 +11,7 @@ import { LargePreview } from "./LargePreview";
 import { PreviewStreamProvider } from "./previewStream";
 import { SceneGrid } from "./SceneGrid";
 import { ZoneRow } from "./ZoneRow";
+import { MidiLearnProvider, useMidiLearn } from "./midiLearn";
 
 // The M8 main operation window (M8-SPEC §3). Step 3 builds the FIXED layout skeleton
 // and the populated zone row; the scene grid, large preview, parameter panel and
@@ -26,6 +27,15 @@ import { ZoneRow } from "./ZoneRow";
 const PRISMA_FILTERS = [{ name: "Prisma show", extensions: ["prisma"] }];
 
 export default function MainWindow() {
+  return (
+    <MidiLearnProvider>
+      <MainWindowBody />
+    </MidiLearnProvider>
+  );
+}
+
+function MainWindowBody() {
+  const learn = useMidiLearn();
   const [zones, setZones] = useState<ZoneInfo[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -73,6 +83,49 @@ export default function MainWindow() {
     const un = listen("layout-changed", () => {
       refreshZones();
       setGridRev((r) => r + 1);
+    });
+    return () => {
+      un.then((f) => f()).catch(() => {});
+    };
+  }, []);
+
+  // A mapped MIDI control moved a live value (M9): re-read the zone row so its faders follow
+  // the hardware. The backend already coalesces these to ≤ 20/s with a trailing emit.
+  useEffect(() => {
+    const un = listen("midi-applied", () => {
+      mainZones()
+        .then(setZones)
+        .catch(() => {});
+    });
+    return () => {
+      un.then((f) => f()).catch(() => {});
+    };
+  }, []);
+
+  // Follow MIDI focus (M9): when on, touching a hardware control that drives a zone selects
+  // that zone, so the screen follows the operator's hands. Selection only — never output
+  // (selected ≠ active). The backend emits `midi-focus` once per gesture, not per message.
+  const [followFocus, setFollowFocus] = useState(() => {
+    try {
+      return localStorage.getItem("prisma-midi-focus") === "on";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("prisma-midi-focus", followFocus ? "on" : "off");
+    } catch {
+      /* storage may be unavailable */
+    }
+  }, [followFocus]);
+  const focusRef = useRef({ followFocus, zones });
+  focusRef.current = { followFocus, zones };
+  useEffect(() => {
+    const un = listen<number>("midi-focus", (e) => {
+      const { followFocus: on, zones: zs } = focusRef.current;
+      const zone = on ? zs[e.payload] : undefined;
+      if (zone) setSelected(zone.id);
     });
     return () => {
       un.then((f) => f()).catch(() => {});
@@ -154,8 +207,9 @@ export default function MainWindow() {
 
   // Global keyboard shortcuts. A ref holds the latest action closures so the listener
   // subscribes once and never runs a stale one.
-  const actions = useRef({ doNewShow, doOpenShow, doSaveShow, toggleFullscreen, soon });
-  actions.current = { doNewShow, doOpenShow, doSaveShow, toggleFullscreen, soon };
+  const toggleLearn = () => learn.setActive(!learn.active);
+  const actions = useRef({ doNewShow, doOpenShow, doSaveShow, toggleFullscreen, soon, toggleLearn });
+  actions.current = { doNewShow, doOpenShow, doSaveShow, toggleFullscreen, soon, toggleLearn };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const k = e.key;
@@ -166,6 +220,9 @@ export default function MainWindow() {
       } else if (ctrlOnly && (k === "s" || k === "S")) {
         e.preventDefault();
         actions.current.doSaveShow();
+      } else if (ctrlOnly && (k === "m" || k === "M")) {
+        e.preventDefault();
+        actions.current.toggleLearn();
       } else if (ctrlOnly && (k === "n" || k === "N")) {
         e.preventDefault();
         actions.current.doNewShow();
@@ -235,6 +292,13 @@ export default function MainWindow() {
       children: [
         { kind: "action", label: "Editor de patch", shortcut: "F3", onSelect: () => openEditor().catch(() => {}) },
         { kind: "action", label: "Gestor de dispositivos", shortcut: "F4", onSelect: () => setDeviceMgrOpen(true) },
+        { kind: "action", label: "MIDI Learn", shortcut: "Ctrl+M", checked: learn.active, onSelect: toggleLearn },
+        {
+          kind: "action",
+          label: "Seguir foco MIDI",
+          checked: followFocus,
+          onSelect: () => setFollowFocus((v) => !v),
+        },
         { kind: "divider" },
         {
           kind: "submenu",
@@ -326,9 +390,19 @@ export default function MainWindow() {
           </div>
         </div>
 
+        {learn.active && (
+          <div className="pr-learn-bar">
+            <span className="pr-learn-bar-dot" />
+            MIDI Learn — hacé clic en un control y mové un fader o pad del hardware · clic derecho
+            quita la asignación
+            <button className="pr-btn" type="button" onClick={() => learn.setActive(false)}>
+              Salir (Esc)
+            </button>
+          </div>
+        )}
         {error && <div className="pr-mainwin-error">Error: {error}</div>}
         {notice && <div className="pr-toast">{notice}</div>}
-        {deviceMgrOpen && <DeviceManager onClose={() => setDeviceMgrOpen(false)} />}
+        {deviceMgrOpen && <DeviceManager onClose={() => setDeviceMgrOpen(false)} zones={zones} />}
       </div>
     </PreviewStreamProvider>
   );

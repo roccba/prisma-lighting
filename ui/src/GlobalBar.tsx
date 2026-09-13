@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { masterState, setMasterBlackout, setMasterDimmer, setMasterStrobe } from "./api";
 import { VFader } from "./VFader";
 import { Bolt } from "./icons";
 import { strobeHz } from "./strobe";
+import { LearnTarget } from "./midiLearn";
 
 // The master column (M8-SPEC §3.6): master dimmer + blackout and the GLOBAL strobe,
 // applied ABOVE all zones at the output stage. It lives on the RIGHT of the bottom work
@@ -29,6 +31,18 @@ export function GlobalBar() {
       .catch(() => {});
   }, []);
 
+  // A mapped MIDI control moved (M9): re-read the master so the fader follows the hardware.
+  useEffect(() => {
+    const un = listen("midi-applied", () => {
+      masterState()
+        .then((m) => setDimmer(m.dimmer))
+        .catch(() => {});
+    });
+    return () => {
+      un.then((f) => f()).catch(() => {});
+    };
+  }, []);
+
   useEffect(() => {
     setMasterStrobe(strobeOn ? strobeHz(strobeRate) : 0, 0.5).catch(() => {});
   }, [strobeOn, strobeRate]);
@@ -46,9 +60,9 @@ export function GlobalBar() {
   return (
     <div className="pr-master">
       <span className="pr-master-title">Master</span>
-      <div className="pr-master-fader">
+      <LearnTarget target={{ path: "/master/dimmer" }} name="Master dimmer" className="pr-master-fader">
         <VFader value={dimmer} onChange={changeDimmer} aria-label="Master dimmer" />
-      </div>
+      </LearnTarget>
       <span className="pr-value pr-master-value">{Math.round(dimmer * 100)}%</span>
       <div className="pr-master-actions">
         <button

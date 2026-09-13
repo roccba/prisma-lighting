@@ -5,4 +5,18 @@ version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# The real MIDI I/O adapter over midir. Off by default: midir links the platform
+# MIDI stack (ALSA on Linux — `alsa-lib-devel` / `libasound2-dev` to build), which
+# the headless workspace build and CI must not need. The desktop app enables it.
+hardware = ["dep:midir"]
+
 [dependencies]
+prisma-core = { path = "../prisma-core" }
+# Short runtime state lock on the MIDI input thread (never on render/output).
+parking_lot = "0.12"
+uuid = { version = "1" }
+midir = { version = "0.11", optional = true }
+
+[dev-dependencies]
+uuid = { version = "1", features = ["v4"] }

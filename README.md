@@ -43,7 +43,8 @@ rig at ~18,000 pixels. Latency from input to visible output stays under a 50 ms 
 ## Building and running
 
 Requires a recent Rust toolchain and Node.js. On Linux you also need the WebKitGTK
-development package (`webkit2gtk-4.1`).
+development packages for WebKitGTK (`webkit2gtk-4.1`) and ALSA (`alsa-lib-devel` /
+`libasound2-dev`, for MIDI).
 
 Run the app in development:
 

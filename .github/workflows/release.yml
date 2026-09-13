@@ -49,6 +49,7 @@ jobs:
             libsoup-3.0-dev \
             build-essential \
             libssl-dev \
+            libasound2-dev \
             patchelf
 
       - name: Set up Node

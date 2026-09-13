@@ -214,7 +214,9 @@ impl LiveParams {
                             Curve::Linear,
                             // Centre (norm 0.5) is 0 = static; unity forward is real 1.0.
                             0.55, // (1.0 - (-10)) / 20 = real 1.0 — unity speed
-                        ),
+                        )
+                        // Same ±0.4 dead band the UI's VEL fader snaps to 0 with.
+                        .with_centre_detent(0.4),
                     ),
                     solo: tree.register(
                         &format!("{base}/solo"),

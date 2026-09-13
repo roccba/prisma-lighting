@@ -23,7 +23,8 @@ System dependencies (verified on Fedora KDE, `fc44`):
 sudo dnf install webkit2gtk4.1-devel gtk3-devel librsvg2-devel openssl-devel \
                  libappindicator-gtk3-devel curl wget file \
                  dbus-devel pkgconf-pkg-config \
-                 glib2-devel cairo-devel pango-devel gdk-pixbuf2-devel atk-devel
+                 glib2-devel cairo-devel pango-devel gdk-pixbuf2-devel atk-devel \
+                 alsa-lib-devel   # MIDI input (midir → ALSA), M9
 sudo dnf group install "c-development"
 ```
 
@@ -32,7 +33,7 @@ replacement: `libayatana-appindicator-gtk3-devel`.
 
 Debian/Ubuntu equivalents: `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
 libglib2.0-dev libcairo2-dev libpango1.0-dev libgdk-pixbuf-2.0-dev libatk1.0-dev
-libdbus-1-dev pkg-config build-essential`.
+libdbus-1-dev libasound2-dev pkg-config build-essential`.
 
 Then, from the repo root:
 

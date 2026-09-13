@@ -77,6 +77,11 @@ pub struct ParamDescriptor {
     pub label_key: String,
     /// Optional unit i18n key (e.g. "unit.percent", "unit.hz").
     pub unit: Option<String>,
+    /// Half-width, in real units, of a snap-to-zero band around a bipolar parameter's
+    /// centre (e.g. zone speed: "fader in the middle" must mean exactly static, not a
+    /// residual crawl). Honoured by position-based transports (a MIDI fader has no
+    /// exact centre step); `None` for everything else.
+    pub centre_detent: Option<f32>,
 }
 
 impl ParamDescriptor {
@@ -94,6 +99,7 @@ impl ParamDescriptor {
             default_norm: default_norm.clamp(0.0, 1.0),
             label_key: label_key.into(),
             unit: None,
+            centre_detent: None,
         }
     }
 
@@ -116,6 +122,7 @@ impl ParamDescriptor {
             default_norm: if default_on { 1.0 } else { 0.0 },
             label_key: label_key.into(),
             unit: None,
+            centre_detent: None,
         }
     }
 
@@ -129,7 +136,15 @@ impl ParamDescriptor {
             default_norm: 0.0,
             label_key: label_key.into(),
             unit: None,
+            centre_detent: None,
         }
+    }
+
+    /// Snap real values within `±half_width` of zero to exactly zero (see
+    /// [`centre_detent`](Self::centre_detent)).
+    pub fn with_centre_detent(mut self, half_width: f32) -> Self {
+        self.centre_detent = Some(half_width.abs());
+        self
     }
 
     pub fn with_unit(mut self, unit_key: impl Into<String>) -> Self {

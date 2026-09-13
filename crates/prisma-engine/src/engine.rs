@@ -15,7 +15,9 @@ use prisma_core::source::{priority, SourceId};
 use prisma_core::time::SystemClock;
 use prisma_core::tree::ParameterTree;
 use prisma_core::zone::ZoneStates;
+use prisma_core::ControllerMappings;
 use prisma_core::MasterClock;
+use prisma_midi::MidiRuntime;
 
 use prisma_patch::{LayoutGeneration, Patch, PatchError};
 
@@ -141,7 +143,12 @@ struct Running {
 ///
 /// [`shutdown`]: EngineHandle::shutdown
 pub struct EngineHandle {
-    tree: ParameterTree,
+    /// Shared so the MIDI input thread can write it (M9). Rebuilt on every recompile.
+    tree: Arc<ParameterTree>,
+    /// The MIDI transport (M9): the operator's controller profile and MIDI Learn. It
+    /// outlives any one tree — a recompile unbinds it from the old tree and binds it
+    /// to the new one, so open hardware ports never notice.
+    midi: MidiRuntime,
     live: LiveParams,
     generation: LayoutGeneration,
     /// Kept so shutdown can release the GPU **last**, after the render thread that
@@ -185,6 +192,12 @@ fn ui_control_source() -> SourceId {
     SourceId::new(priority::UI, 1)
 }
 
+/// A fresh MIDI runtime with an empty profile. The host loads the operator's saved
+/// profile into it with [`MidiRuntime::set_profile`] after start.
+fn new_midi_runtime() -> MidiRuntime {
+    MidiRuntime::new(ControllerMappings::new("default"))
+}
+
 /// Namespace for engine bring-up.
 pub struct Engine;
 
@@ -199,7 +212,7 @@ impl Engine {
     pub fn start(patch: Patch, config: EngineConfig) -> Result<EngineHandle, EngineError> {
         // --- GPU: brought up once here (setup path, blocks), shared by reference. ---
         let gpu = Arc::new(Gpu::new(config.adapter)?);
-        Self::assemble(patch, config, gpu, ContentSource::Idle)
+        Self::assemble(patch, config, gpu, ContentSource::Idle, new_midi_runtime())
     }
 
     /// Like [`start`](Engine::start), but runs a loaded **Show**: the engine renders
@@ -210,7 +223,13 @@ impl Engine {
     pub fn start_show(show: Show, config: EngineConfig) -> Result<EngineHandle, EngineError> {
         let gpu = Arc::new(Gpu::new(config.adapter)?);
         let patch = show.patch.clone();
-        Self::assemble(patch, config, gpu, ContentSource::Show(Box::new(show)))
+        Self::assemble(
+            patch,
+            config,
+            gpu,
+            ContentSource::Show(Box::new(show)),
+            new_midi_runtime(),
+        )
     }
 
     /// Assemble the running engine on an **existing** GPU. Shared by [`start`] (which
@@ -224,6 +243,7 @@ impl Engine {
         config: EngineConfig,
         gpu: Arc<Gpu>,
         content: ContentSource,
+        midi: MidiRuntime,
     ) -> Result<EngineHandle, EngineError> {
         // --- Compile the patch: one layout generation shared by every consumer. ---
         let index = patch.compile()?;
@@ -249,7 +269,7 @@ impl Engine {
         }
 
         // --- Live state: one Parameter Tree binding feeds render, output AND preview. ---
-        let tree = ParameterTree::with_defaults();
+        let tree = Arc::new(ParameterTree::with_defaults());
         let live = LiveParams::register(&tree, &patch);
 
         // --- Content: black (no show) or the per-zone compositor built from the show.
@@ -434,8 +454,16 @@ impl Engine {
                 .expect("spawn render thread")
         };
 
+        // --- MIDI (M9): bind the transport to this tree, zones in slot order (the same
+        //     `Patch::zones` order `LiveParams` uses), once every parameter exists. ---
+        midi.bind(
+            Arc::clone(&tree),
+            patch.zones.iter().map(|z| z.id).collect(),
+        );
+
         Ok(EngineHandle {
             tree,
+            midi,
             live,
             generation,
             gpu,
@@ -467,6 +495,12 @@ impl EngineHandle {
     /// caller can write a fader without re-walking the tree.
     pub fn live(&self) -> &LiveParams {
         &self.live
+    }
+
+    /// The MIDI transport (M9): set the controller profile, arm MIDI Learn, and feed
+    /// it from a hardware input. Cloneable; stays valid across a recompile.
+    pub fn midi(&self) -> &MidiRuntime {
+        &self.midi
     }
 
     /// The layout generation the running loops were compiled against. A future
@@ -735,6 +769,8 @@ impl EngineHandle {
             .inner
             .take()
             .expect("recompile: engine already torn down");
+        // MIDI first: stop writing the tree that is about to go away.
+        self.midi.unbind();
         // Same teardown order as `shutdown`, minus the GPU release: joining render
         // drops its GPU clone, leaving this handle's Arc as the sole strong reference.
         running.render_stop.store(true, Ordering::Relaxed);
@@ -746,7 +782,7 @@ impl EngineHandle {
         // Keep the device alive for the fresh assembly; `self` (and its GPU Arc) drops
         // when this returns, but `gpu` carries the only remaining strong reference.
         let gpu = Arc::clone(&self.gpu);
-        Engine::assemble(patch, config, gpu, content)
+        Engine::assemble(patch, config, gpu, content, self.midi.clone())
     }
 
     /// Stop the engine cleanly, **in order**, and report the run.
@@ -774,6 +810,9 @@ impl EngineHandle {
             .inner
             .take()
             .expect("shutdown: engine already torn down");
+
+        // 0. MIDI input stops reaching the tree (and releases its reference to it).
+        self.midi.unbind();
 
         // 1. Render.
         running.render_stop.store(true, Ordering::Relaxed);
@@ -818,6 +857,7 @@ impl Drop for EngineHandle {
     /// `inner` is already `None` and this does nothing (no double join).
     fn drop(&mut self) {
         if let Some(running) = self.inner.take() {
+            self.midi.unbind();
             running.render_stop.store(true, Ordering::Relaxed);
             let _ = running.render.join();
             running.output_stop.store(true, Ordering::Relaxed);

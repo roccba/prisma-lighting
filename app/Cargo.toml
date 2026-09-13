@@ -24,6 +24,9 @@ prisma-render = { path = "../crates/prisma-render" }
 # The live preview streams from the engine to the in-webview React viewer over a
 # local WebSocket (M6's PreviewSink + wire format; S10 adds the React component).
 prisma-preview = { path = "../crates/prisma-preview" }
+# MIDI hardware I/O (M9): the midir adapter that feeds the engine's MidiRuntime.
+# Linux builds need the ALSA dev package (alsa-lib-devel / libasound2-dev).
+prisma-midi = { path = "../crates/prisma-midi", features = ["hardware"] }
 tauri = { version = "2", features = [] }
 # Native open/save file dialogs for .prismap (§9). The frontend picks the path;
 # the Rust command does the file I/O and (de)serialization.

@@ -128,10 +128,11 @@ export function ZoneRow({ zones, selected, onSelect }: ZoneRowProps) {
       {zones.length === 0 ? (
         <div className="pr-zonerow-empty">No zones in the show</div>
       ) : (
-        zones.map((z) => (
+        zones.map((z, slot) => (
           <ZoneCard
             key={z.id}
             zone={z}
+            slot={slot}
             selected={z.id === selected}
             onSelect={() => onSelect(z.id)}
             registerPreview={registerPreview}

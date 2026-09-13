@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { VFader } from "./VFader";
 import { Bolt } from "./icons";
 import {
@@ -10,6 +10,7 @@ import {
   type ZoneInfo,
 } from "./api";
 import { strobeHz } from "./strobe";
+import { LearnTarget } from "./midiLearn";
 
 // One zone's card in the zone row (M8-SPEC §3.1): name, a LIVE mini-preview of the zone's
 // own fixtures, flanked by two vertical faders — the dimmer on the left and the bipolar
@@ -26,6 +27,8 @@ import { strobeHz } from "./strobe";
 
 interface ZoneCardProps {
   zone: ZoneInfo;
+  /** Position in the show's zone order — the MIDI mapping address (zone slot, M9). */
+  slot: number;
   selected: boolean;
   onSelect: () => void;
   /** Register (or, with `null`, unregister) this card's preview slot with the zone row so
@@ -43,7 +46,7 @@ const fmtSpeed = (real: number) => {
   return r === 0 ? "0" : r.toFixed(1);
 };
 
-export function ZoneCard({ zone, selected, onSelect, registerPreview }: ZoneCardProps) {
+export function ZoneCard({ zone, slot, selected, onSelect, registerPreview }: ZoneCardProps) {
   // The card owns its control state after mount (seeded from the show's loaded values),
   // writing each change straight to the engine. Local state keeps the controls
   // responsive; the wire reflects it live.
@@ -51,6 +54,12 @@ export function ZoneCard({ zone, selected, onSelect, registerPreview }: ZoneCard
   const [speed, setSpeed] = useState(zone.speed);
   const [solo, setSolo] = useState(zone.solo);
   const [mute, setMute] = useState(zone.blackout);
+
+  // Follow values set by another transport (a MIDI fader, M9): the zone list is re-fetched
+  // on `midi-applied`, so a changed prop is the engine's current value. The UI's own writes
+  // never re-fetch the list, so this cannot fight a drag.
+  useEffect(() => setDimmer(zone.dimmer), [zone.dimmer]);
+  useEffect(() => setSpeed(zone.speed), [zone.speed]);
 
   // Per-zone strobe (§3.6). The bolt engages it: HOLD = momentary, DOUBLE-CLICK = latched.
   // `rate` (0..1) is a separate speed. Engaged ⇒ strobe at `strobeHz(rate)`; not engaged ⇒
@@ -96,8 +105,16 @@ export function ZoneCard({ zone, selected, onSelect, registerPreview }: ZoneCard
     setZoneBlackout(zone.id, on).catch(() => {});
   };
 
+  // A selection made from elsewhere (MIDI focus follow) may land on a card scrolled out of
+  // the row; bring it into view. `nearest` is a no-op for a card already visible (a click).
+  const cardRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (selected) cardRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [selected]);
+
   return (
     <div
+      ref={cardRef}
       className={`pr-zonecard${selected ? " is-selected" : ""}`}
       onPointerDown={onSelect}
       role="button"
@@ -113,24 +130,34 @@ export function ZoneCard({ zone, selected, onSelect, registerPreview }: ZoneCard
           from bubbling to card-select. The preview slot is an empty framed screen; the zone
           row's overlay canvas paints this zone's thumbnail into it. */}
       <div className="pr-zonecard-body">
-        <div className="pr-zonecard-fader" onPointerDown={(e) => e.stopPropagation()}>
-          <VFader value={dimmer} onChange={changeDimmer} aria-label={`${zone.name} dimmer`} />
-          <span className="pr-zonecard-faderval">{Math.round(dimmer * 100)}</span>
-          <span className="pr-zonecard-faderlbl">DIM</span>
-        </div>
+        <LearnTarget
+          target={{ zone_slot: { slot, sub: "dimmer" } }}
+          name={`Dimmer — ${zone.name}`}
+        >
+          <div className="pr-zonecard-fader" onPointerDown={(e) => e.stopPropagation()}>
+            <VFader value={dimmer} onChange={changeDimmer} aria-label={`${zone.name} dimmer`} />
+            <span className="pr-zonecard-faderval">{Math.round(dimmer * 100)}</span>
+            <span className="pr-zonecard-faderlbl">DIM</span>
+          </div>
+        </LearnTarget>
 
         <div className="pr-zonecard-preview" ref={previewRef} />
 
-        <div className="pr-zonecard-fader" onPointerDown={(e) => e.stopPropagation()}>
-          <VFader
-            value={speedToNorm(speed)}
-            onChange={changeSpeed}
-            bipolar
-            aria-label={`${zone.name} velocidad`}
-          />
-          <span className="pr-zonecard-faderval">{fmtSpeed(speed)}</span>
-          <span className="pr-zonecard-faderlbl">VEL</span>
-        </div>
+        <LearnTarget
+          target={{ zone_slot: { slot, sub: "speed" } }}
+          name={`Velocidad — ${zone.name}`}
+        >
+          <div className="pr-zonecard-fader" onPointerDown={(e) => e.stopPropagation()}>
+            <VFader
+              value={speedToNorm(speed)}
+              onChange={changeSpeed}
+              bipolar
+              aria-label={`${zone.name} velocidad`}
+            />
+            <span className="pr-zonecard-faderval">{fmtSpeed(speed)}</span>
+            <span className="pr-zonecard-faderlbl">VEL</span>
+          </div>
+        </LearnTarget>
       </div>
 
       {/* Footer: solo / mute · strobe trigger · strobe rate (coarse on-screen; meant for

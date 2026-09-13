@@ -45,6 +45,11 @@ pub use engine::{Engine, EngineError, EngineHandle, ShutdownReport, ZoneLiveRead
 pub use prisma_core::show::{
     load_show, save_show, Cell, Layer, MasterState, ParamSet, Show, Source, ZoneLive, ZoneShow,
 };
+// The MIDI transport (M9) and its document types, re-exported for the app shell.
+pub use prisma_core::mappings::{
+    load_mappings, save_mappings, ControllerMappings, MapTarget, MidiControl, MidiMapping, ZoneSub,
+};
+pub use prisma_midi::{MidiNotice, MidiRuntime};
 pub use zone_content::{
     build_zone_effects, seed_live_from_show, ZoneCommand, ZoneCommandSender, ZoneCompositor,
 };

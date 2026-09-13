@@ -390,3 +390,51 @@ export const effectPanel = (zone: string) =>
 /** Set one parameter of a zone's active effect (normalized 0..1). Drives it live. */
 export const setParam = (zone: string, name: string, value: number) =>
   invoke<void>("main_set_param", { zone, name, value });
+
+// --- MIDI (M9 Slice 1): input device + MIDI Learn ---
+
+/** The per-zone controls a mapping can address by position (zone slot). */
+export type ZoneSub = "dimmer" | "speed" | "solo" | "blackout";
+
+/** Where a MIDI mapping writes: a literal tree path (globals such as `/master/dimmer`) or
+ *  a zone control by slot (slot 0 = the first zone of whichever show is running). The
+ *  shape mirrors the Rust enum's serde form. */
+export type MapTarget = { path: string } | { zone_slot: { slot: number; sub: ZoneSub } };
+
+/** A physical control: 0-based channel + note or CC number. */
+export interface MidiControl {
+  channel: number;
+  kind: { note: number } | { cc: number };
+}
+
+export interface MidiMapping {
+  control: MidiControl;
+  target: MapTarget;
+  mode: string;
+  curve: unknown;
+}
+
+export interface MidiStatus {
+  ports: string[];
+  /** Configured input; null = auto-detect (APC40). */
+  selected: string | null;
+  /** The port open right now, if any. */
+  connected: string | null;
+  error: string | null;
+  learning: MapTarget | null;
+  mappings: MidiMapping[];
+}
+
+export const midiStatus = () => invoke<MidiStatus>("midi_status");
+export const midiSetInput = (port: string | null) => invoke<MidiStatus>("midi_set_input", { port });
+export const midiReconnect = () => invoke<MidiStatus>("midi_reconnect");
+export const midiLearnArm = (target: MapTarget) => invoke<void>("midi_learn_arm", { target });
+export const midiLearnCancel = () => invoke<void>("midi_learn_cancel");
+export const midiUnmap = (target: MapTarget) => invoke<MidiMapping[]>("midi_unmap", { target });
+
+/** Structural equality of two targets (they are small plain objects). */
+export const sameTarget = (a: MapTarget, b: MapTarget) => JSON.stringify(a) === JSON.stringify(b);
+
+/** Short human label for a control, e.g. "CC 7 · Ch 2" or "Nota 36 · Ch 1". */
+export const controlLabel = (c: MidiControl) =>
+  "cc" in c.kind ? `CC ${c.kind.cc} · Ch ${c.channel + 1}` : `Nota ${c.kind.note} · Ch ${c.channel + 1}`;
