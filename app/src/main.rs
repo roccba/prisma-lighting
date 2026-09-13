@@ -23,8 +23,8 @@ use prisma_engine::{
     EngineConfig, EngineHandle, Layer, MapTarget, MidiMapping, MidiNotice, MidiRuntime, ParamSet,
     Show, Source, ZoneLiveReadout, ZoneShow,
 };
-use prisma_midi::io::{input_port_names, MidiInputLink, MidiIoError};
-use prisma_midi::APC40_KEYWORDS;
+use prisma_midi::io::{input_port_names, MidiInputLink, MidiIoError, MidiOutputLink};
+use prisma_midi::{DeviceProfile, APC40_KEYWORDS};
 use prisma_patch::{load_patch, save_patch, BlendMode, Diagnostic, Patch, Zone};
 use prisma_preview::sink::WebSocketSink;
 use prisma_render::{AdapterPreference, ColorChannel, ParamRole};
@@ -282,6 +282,8 @@ struct AppState {
     midi: MidiRuntime,
     /// The open hardware input, if any. Dropping it closes the port.
     midi_link: Mutex<Option<MidiInputLink>>,
+    /// The same device's output (LED feedback, M9 Slice 2), if it has one.
+    midi_out_link: Mutex<Option<MidiOutputLink>>,
     /// Which input to open (persisted) and why the last open failed (transient).
     midi_config: Mutex<MidiConfig>,
     midi_config_path: PathBuf,
@@ -1110,7 +1112,7 @@ fn main_network_set(app: AppHandle, config: NetworkConfig) -> Result<(), String>
     }
 }
 
-// --- MIDI (M9 Slice 1): input device + MIDI Learn ---
+// --- MIDI (M9): device I/O, MIDI Learn, LED feedback ---
 
 /// Write a JSON-able config next to the others, creating the config directory if needed.
 fn persist_text(path: &Path, text: &str) -> Result<(), String> {
@@ -1123,9 +1125,17 @@ fn persist_text(path: &Path, text: &str) -> Result<(), String> {
 /// (Re)open the configured MIDI input, closing the previous link first. A missing device
 /// is not an error worth shouting about in auto mode; it is recorded for the device
 /// manager to show.
+///
+/// The output (LEDs) is the port with the input's name — how ALSA, CoreMUSIC and WinMM
+/// all name the two halves of one USB device — falling back to the keywords. A device
+/// without an output simply gets no feedback. Its device profile (LED semantics) is
+/// picked from the port name.
 fn connect_midi(state: &AppState) {
     let mut link = state.midi_link.lock().unwrap();
+    let mut out_link = state.midi_out_link.lock().unwrap();
+    state.midi.set_output(None);
     *link = None;
+    *out_link = None;
     let port = state.midi_config.lock().unwrap().input_port.clone();
     let opened = match &port {
         Some(name) => MidiInputLink::open(state.midi.clone(), name),
@@ -1133,7 +1143,15 @@ fn connect_midi(state: &AppState) {
     };
     *state.midi_error.lock().unwrap() = match opened {
         Ok(l) => {
+            let name = l.port_name().to_string();
             *link = Some(l);
+            state.midi.set_device(DeviceProfile::for_port(&name));
+            *out_link = MidiOutputLink::open(&name)
+                .or_else(|_| MidiOutputLink::open_by_keywords(APC40_KEYWORDS))
+                .ok();
+            if let Some(out) = out_link.as_ref() {
+                state.midi.set_output(Some(out.sink()));
+            }
             None
         }
         Err(MidiIoError::NotFound) if port.is_none() => None,
@@ -1214,6 +1232,10 @@ struct MidiStatus {
     selected: Option<String>,
     /// The port actually open right now.
     connected: Option<String>,
+    /// The output open for LED feedback, if the device has one.
+    output: Option<String>,
+    /// The connected device's profile name (e.g. "Akai APC40 mkII", "Generic MIDI").
+    device: String,
     error: Option<String>,
     /// The target waiting for a control, if Learn is armed.
     learning: Option<MapTarget>,
@@ -1235,6 +1257,13 @@ fn midi_status(state: State<AppState>) -> MidiStatus {
             .unwrap()
             .as_ref()
             .map(|l| l.port_name().to_string()),
+        output: state
+            .midi_out_link
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|l| l.port_name().to_string()),
+        device: state.midi.device().display_name,
         error: state.midi_error.lock().unwrap().clone().or(list_error),
         learning: state.midi.learning(),
         mappings: state.midi.profile().mappings,
@@ -1841,6 +1870,7 @@ fn main() {
                 last_show_file,
                 midi,
                 midi_link: Mutex::new(None),
+                midi_out_link: Mutex::new(None),
                 midi_config: Mutex::new(midi_config),
                 midi_config_path,
                 midi_error: Mutex::new(None),
@@ -1876,8 +1906,11 @@ fn main() {
             if let RunEvent::ExitRequested { .. } = event {
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     // Close the MIDI input before the engine, so no input thread is writing
-                    // while it tears down.
+                    // while it tears down; darken the LEDs, then close the output.
                     state.midi_link.lock().unwrap().take();
+                    state.midi.clear_leds();
+                    state.midi.set_output(None);
+                    state.midi_out_link.lock().unwrap().take();
                     if let Some(engine) = state.engine.lock().unwrap().take() {
                         let report = engine.shutdown();
                         eprintln!(

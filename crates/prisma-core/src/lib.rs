@@ -45,7 +45,7 @@ pub use mappings::{
     load_mappings, save_mappings, ControlKind, ControlMode, ControllerMappings, MapTarget,
     MappingsError, MidiControl, MidiMapping, ResponseCurve, ZoneSub,
 };
-pub use notify::{Filter, Subscription};
+pub use notify::{Filter, Subscription, SubscriptionCloser};
 pub use overlap::{OverlapSnapshot, NO_CELL, NO_ZONE};
 pub use show::{
     load_show, save_show, Cell, Layer, MasterState, ParamSet, Show, ShowError, Source, ZoneLive,

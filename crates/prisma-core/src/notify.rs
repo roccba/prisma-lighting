@@ -196,6 +196,24 @@ impl Subscription {
     pub fn try_recv(&self) -> Vec<ParamHandle> {
         self.mailbox.drain_now()
     }
+
+    /// A handle another thread can use to end this subscription's blocking
+    /// [`recv`](Self::recv) — the way a consumer thread parked in `recv` is told to
+    /// stop without waiting for a change or for the tree to shut down.
+    pub fn closer(&self) -> SubscriptionCloser {
+        SubscriptionCloser(self.mailbox.clone())
+    }
+}
+
+/// Closes a [`Subscription`] from another thread: a blocked `recv` returns empty now
+/// and every later `recv` returns empty at once, exactly as on tree shutdown.
+#[derive(Clone)]
+pub struct SubscriptionCloser(Arc<Mailbox>);
+
+impl SubscriptionCloser {
+    pub fn close(&self) {
+        self.0.close();
+    }
 }
 
 impl Drop for Subscription {

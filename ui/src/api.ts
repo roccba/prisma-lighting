@@ -420,6 +420,10 @@ export interface MidiStatus {
   selected: string | null;
   /** The port open right now, if any. */
   connected: string | null;
+  /** Output open for LED feedback, if the device has one. */
+  output: string | null;
+  /** Connected device profile, e.g. "Akai APC40 mkII" / "Generic MIDI". */
+  device: string;
   error: string | null;
   learning: MapTarget | null;
   mappings: MidiMapping[];

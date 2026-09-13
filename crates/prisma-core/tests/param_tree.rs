@@ -96,6 +96,37 @@ fn arbitration_resolves_competing_writers() {
 
 // ---- async fan-out, off the writing thread --------------------------------
 
+/// Takeover holds continuous levels only. A toggle (solo) or trigger pressed on MIDI
+/// must not swallow a UI click a moment later: discrete actions are last-write-wins.
+#[test]
+fn discrete_params_are_last_write_wins_across_priorities() {
+    let clock = Arc::new(ManualClock::new());
+    let tree = manual_tree(clock.clone(), 1_000);
+    let level = tree.register("/zone/a/dimmer", ParamDescriptor::unit_level("d", 0.0));
+    let toggle = tree.register("/zone/a/solo", ParamDescriptor::toggle("s", false));
+    let trigger = tree.register("/clock/tap", ParamDescriptor::trigger("t"));
+
+    tree.write(&level, 1.0, src(priority::MIDI, 1));
+    tree.write(&toggle, 1.0, src(priority::MIDI, 1));
+    tree.fire(&trigger, src(priority::MIDI, 1));
+    clock.advance(10);
+
+    assert!(matches!(
+        tree.write(&level, 0.0, src(priority::UI, 2)),
+        WriteOutcome::Rejected { .. }
+    ));
+    assert_eq!(
+        tree.write(&toggle, 0.0, src(priority::UI, 2)),
+        WriteOutcome::Accepted
+    );
+    assert_eq!(toggle.read_bool(), Some(false));
+    assert_eq!(
+        tree.fire(&trigger, src(priority::UI, 2)),
+        WriteOutcome::Accepted
+    );
+    assert_eq!(trigger.fire_count(), Some(2));
+}
+
 #[test]
 fn subscribers_receive_changes_off_the_writing_thread() {
     let tree = ParameterTree::with_defaults();
@@ -114,6 +145,21 @@ fn subscribers_receive_changes_off_the_writing_thread() {
     assert_eq!(changed.len(), 1);
     assert_eq!(changed[0].path().as_ref(), "/zone/a/dimmer");
     assert_eq!(changed[0].read_norm(), Some(0.42));
+}
+
+/// A consumer thread parked in `recv` (MIDI feedback) is stopped from outside by its
+/// closer, promptly and without any parameter changing.
+#[test]
+fn a_closer_unblocks_a_parked_subscriber() {
+    let tree = ParameterTree::with_defaults();
+    tree.register("/zone/a/dimmer", ParamDescriptor::unit_level("d", 0.0));
+    let sub = tree.subscribe(Filter::All);
+    let closer = sub.closer();
+
+    let consumer = std::thread::spawn(move || sub.recv());
+    std::thread::sleep(Duration::from_millis(20));
+    closer.close();
+    assert!(consumer.join().unwrap().is_empty());
 }
 
 #[test]

@@ -1315,6 +1315,8 @@ dependencies = [
  "midir",
  "parking_lot",
  "prisma-core",
+ "serde",
+ "serde_json",
  "uuid",
 ]
 

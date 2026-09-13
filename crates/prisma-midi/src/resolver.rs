@@ -95,6 +95,38 @@ impl Binding {
         self.table.get(&control).and_then(|r| r.zone)
     }
 
+    /// Flip the target between its range ends: a toggle by its bool, a level by which
+    /// half it sits in (so a pad can switch a dimmer full/off). Triggers fire.
+    fn toggle(&self, r: &Resolved, control: MidiControl) -> Option<WriteOutcome> {
+        let src = source_for(control);
+        let d = r.handle.descriptor();
+        let on = match r.handle.kind() {
+            ParamKind::Trigger => return Some(self.tree.fire(&r.handle, src)),
+            ParamKind::Toggle => r.handle.read_bool()?,
+            ParamKind::Level => r.handle.read_norm()? >= 0.5,
+        };
+        let real = if on { d.range.min } else { d.range.max };
+        Some(self.tree.write_real(&r.handle, real, src))
+    }
+
+    /// The mapped **note** controls with the handle each one shows, for LED feedback.
+    /// CC controls (faders, knobs) are left out: without motors they have nothing to
+    /// display. Triggers are left out too — a fire has no lasting state to light.
+    pub fn feedback_targets(&self) -> Vec<(MidiControl, ParamHandle)> {
+        self.table
+            .iter()
+            .filter(|(c, r)| {
+                matches!(c.kind, ControlKind::Note(_)) && r.handle.kind() != ParamKind::Trigger
+            })
+            .map(|(c, r)| (*c, r.handle.clone()))
+            .collect()
+    }
+
+    /// The handle a control drives, if mapped.
+    pub fn handle_of(&self, control: MidiControl) -> Option<&ParamHandle> {
+        self.table.get(&control).map(|r| &r.handle)
+    }
+
     /// How many mappings resolved against this tree.
     pub fn resolved_count(&self) -> usize {
         self.table.len()
@@ -111,6 +143,12 @@ impl Binding {
             (ControlMode::Absolute, EventKind::NoteOff { .. } | EventKind::PitchBend { .. }) => {
                 return None
             }
+            // A press flips; the release (note-off / CC back to 0) does nothing.
+            (ControlMode::Toggle, EventKind::NoteOn { .. }) => return self.toggle(r, control),
+            (ControlMode::Toggle, EventKind::Cc { value, .. }) if value > 0 => {
+                return self.toggle(r, control)
+            }
+            (ControlMode::Toggle, _) => return None,
         };
         let position = r.curve.apply(raw as f32 / 127.0);
         let src = source_for(control);

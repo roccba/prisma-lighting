@@ -12,6 +12,14 @@
 //! unbound (mid-recompile) input is dropped, never queued against a dead tree. Open
 //! ports therefore survive a recompile untouched.
 //!
+//! # Feedback (Slice 2)
+//!
+//! With an output ([`set_output`](MidiRuntime::set_output)) and a bound tree, every
+//! (re)build of the binding also restarts a [`Feedback`] thread for the mapped note
+//! controls, which paints their LEDs from live state. A control that stops being
+//! mapped is darkened. On a note-off the profile may ask for the LED to be re-sent
+//! ([`reaffirm_on_release`](crate::profile::LedSpec::reaffirm_on_release)).
+//!
 //! # Threading
 //!
 //! `feed` runs on the MIDI input thread (a transport thread, §3.3). It takes the
@@ -21,6 +29,7 @@
 //! persists a file or emits a UI event cannot stall the next message's resolution
 //! behind it.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -30,7 +39,9 @@ use prisma_core::{
 };
 use uuid::Uuid;
 
+use crate::feedback::{send_led, Feedback, MidiOut};
 use crate::message::{EventKind, MidiEvent};
+use crate::profile::DeviceProfile;
 use crate::resolver::Binding;
 
 /// Something the runtime reports to its host (the app), off the lock.
@@ -62,14 +73,51 @@ struct State {
     tree: Option<(Arc<ParameterTree>, Vec<Uuid>)>,
     binding: Option<Binding>,
     learn: Option<MapTarget>,
+    out: Option<MidiOut>,
+    device: Arc<DeviceProfile>,
+    feedback: Option<Feedback>,
+    /// Note controls the last feedback drove, kept across an unbind so a rebuild can
+    /// darken the ones no longer mapped.
+    lit: HashSet<MidiControl>,
 }
 
 impl State {
     fn rebuild(&mut self) {
+        self.feedback = None; // stop the old thread before its binding goes away
         self.binding = self
             .tree
             .as_ref()
             .map(|(tree, zones)| Binding::compile(Arc::clone(tree), zones, &self.profile));
+        self.restart_feedback();
+    }
+
+    /// Send the device's connect messages (a mode handshake), before any LED.
+    fn handshake(&self) {
+        if let Some(out) = &self.out {
+            for message in &self.device.on_connect {
+                out(message);
+            }
+        }
+    }
+
+    /// (Re)start feedback for the current binding and darken controls that lost
+    /// their mapping. A no-op without an output or a bound tree.
+    fn restart_feedback(&mut self) {
+        self.feedback = None;
+        let (Some(out), Some(binding), Some((tree, _))) =
+            (self.out.clone(), self.binding.as_ref(), self.tree.as_ref())
+        else {
+            return;
+        };
+        let targets = binding.feedback_targets();
+        let now: HashSet<MidiControl> = targets.iter().map(|(c, _)| *c).collect();
+        for gone in self.lit.difference(&now) {
+            if let Some(bytes) = self.device.led_bytes(*gone, false) {
+                out(&bytes);
+            }
+        }
+        self.lit = now;
+        self.feedback = Feedback::start(tree, targets, Arc::clone(&self.device), out);
     }
 }
 
@@ -88,6 +136,10 @@ impl MidiRuntime {
                 tree: None,
                 binding: None,
                 learn: None,
+                out: None,
+                device: Arc::new(DeviceProfile::generic()),
+                feedback: None,
+                lit: HashSet::new(),
             })),
             listener: Arc::new(Mutex::new(None)),
         }
@@ -111,8 +163,50 @@ impl MidiRuntime {
     /// an old tree (and its notifier thread) alive.
     pub fn unbind(&self) {
         let mut s = self.state.lock();
+        s.feedback = None;
         s.tree = None;
         s.binding = None;
+    }
+
+    /// Set (or remove) where feedback bytes go. Repaints every mapped LED.
+    /// A new output gets the device's connect handshake first.
+    pub fn set_output(&self, out: Option<MidiOut>) {
+        let mut s = self.state.lock();
+        s.feedback = None;
+        s.out = out;
+        if s.out.is_none() {
+            s.lit.clear(); // nothing to darken on a port that is gone
+        }
+        s.handshake();
+        s.restart_feedback();
+    }
+
+    /// Set the connected device's profile (LED semantics). Repaints every mapped LED.
+    pub fn set_device(&self, device: DeviceProfile) {
+        let mut s = self.state.lock();
+        s.feedback = None;
+        s.device = Arc::new(device);
+        s.handshake();
+        s.restart_feedback();
+    }
+
+    /// The connected device's profile.
+    pub fn device(&self) -> DeviceProfile {
+        (*self.state.lock().device).clone()
+    }
+
+    /// Darken every LED feedback lit and stop following state — for app exit, so the
+    /// controller is not left showing a show that is no longer running.
+    pub fn clear_leds(&self) {
+        let mut s = self.state.lock();
+        s.feedback = None;
+        if let Some(out) = s.out.clone() {
+            for control in std::mem::take(&mut s.lit) {
+                if let Some(bytes) = s.device.led_bytes(control, false) {
+                    out(&bytes);
+                }
+            }
+        }
     }
 
     pub fn is_bound(&self) -> bool {
@@ -173,6 +267,7 @@ impl MidiRuntime {
         };
         let notice = {
             let mut s = self.state.lock();
+            reaffirm_on_release(&s, &event);
             match learn_capture(&mut s, &event) {
                 Some(notice) => Some(notice),
                 None => s.binding.as_ref().and_then(|b| {
@@ -194,6 +289,34 @@ impl MidiRuntime {
     }
 }
 
+/// The mode a learned control gets: `Toggle` for a latching parameter (a pad on solo
+/// latches it; `Absolute` would switch it back off on the pad's next velocity-less
+/// event), `Absolute` for everything else.
+fn learn_mode(s: &State, target: &MapTarget) -> ControlMode {
+    let kind = s.tree.as_ref().and_then(|(tree, zones)| {
+        let path = target.resolve_path(zones)?;
+        tree.resolve(&path).map(|h| h.kind())
+    });
+    match kind {
+        Some(prisma_core::ParamKind::Toggle) => ControlMode::Toggle,
+        _ => ControlMode::Absolute,
+    }
+}
+
+/// The APC40 mkII reverts a pad's LED on the physical release, whatever the host
+/// last sent: on a note-off of a mapped control, re-send its LED from state.
+fn reaffirm_on_release(s: &State, event: &MidiEvent) {
+    if !matches!(event.kind, EventKind::NoteOff { .. }) || !s.device.leds.reaffirm_on_release {
+        return;
+    }
+    let (Some(out), Some(binding), Some(control)) = (&s.out, &s.binding, event.control()) else {
+        return;
+    };
+    if let Some(handle) = binding.handle_of(control) {
+        send_led(out, &s.device, control, handle);
+    }
+}
+
 /// If Learn is armed and `event` is a capturable gesture, bind it, rebuild, apply
 /// the event (so the fader that was just touched takes effect at once) and return
 /// the notice. Note-offs are never captured: releasing the pad that armed nothing
@@ -206,8 +329,8 @@ fn learn_capture(s: &mut State, event: &MidiEvent) -> Option<MidiNotice> {
     let target = s.learn.take()?;
     let mapping = MidiMapping {
         control: event.control()?,
+        mode: learn_mode(s, &target),
         target,
-        mode: ControlMode::Absolute,
         curve: ResponseCurve::Linear,
     };
     s.profile.bind(mapping.clone());

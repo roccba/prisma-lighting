@@ -724,6 +724,9 @@ input.pr-field-value:focus { outline: 1px solid var(--accent); outline-offset: -
   background: var(--learn); color: #111; font-family: var(--font-mono); font-size: var(--fs-tiny);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
 }
+/* Targets too small for a label (S / M buttons): the solid border says "mapped", the
+   tooltip names the control. */
+.pr-learn-compact .pr-learn-badge { display: none; }
 .pr-learn-bar {
   flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
   padding: 5px 10px; background: var(--bg-panel); border-top: 1px solid var(--learn);

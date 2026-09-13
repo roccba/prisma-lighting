@@ -231,8 +231,13 @@ impl ParameterTree {
         }
         let now = self.inner.clock.now();
 
-        // Arbitration: short per-slot mutex, only on the write path.
-        {
+        // Arbitration: short per-slot mutex, only on the write path. It exists so a
+        // UI drag and a physical fader do not fight over a *continuous* value frame by
+        // frame (§4.5). Toggles and triggers are discrete actions — a press, a click —
+        // with nothing to fight over between presses, so the last action wins: holding
+        // them for the takeover timeout would silently swallow a UI click made right
+        // after a hardware press (and leave the button showing a state that never took).
+        if slot.kind == ParamKind::Level {
             let mut arb = slot.arb.lock();
             if !arb.decide(src, now, self.inner.takeover_timeout) {
                 let owner = arb.owner().expect("rejection implies an owner");

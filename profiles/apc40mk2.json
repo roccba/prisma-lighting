@@ -1,0 +1,18 @@
+{
+  "format": "prisma.device-profile",
+  "schema_version": 1,
+  "name": "apc40mk2",
+  "display_name": "Akai APC40 mkII",
+  "match_keywords": ["apc", "akai"],
+  "on_connect": [[240, 71, 127, 41, 96, 0, 4, 65, 9, 7, 1, 247]],
+  "surface": {
+    "grid": { "channel": 0, "note_base": 0, "rows": 5, "cols": 8, "row0": "bottom" },
+    "bank": { "up_note": 94, "down_note": 95, "select_note": 52 }
+  },
+  "leds": {
+    "rgb": [{ "channel": 0, "first_note": 0, "last_note": 39 }],
+    "rgb_on_colour": 9,
+    "on_velocity": 1,
+    "reaffirm_on_release": true
+  }
+}

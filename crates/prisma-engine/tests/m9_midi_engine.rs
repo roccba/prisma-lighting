@@ -101,3 +101,57 @@ fn learned_fader_drives_live_dimmers_and_survives_a_recompile() {
     midi.feed(&[0xB1, 7, 0]);
     let _ = dev_sink.stop_and_collect();
 }
+
+/// Slice 2 through the engine: the UI's solo command (priority UI, the real write path)
+/// lights the learned pad's LED, and after a recompile the pad repaints from the new
+/// show's state. Bytes leave through an injected `MidiOut`, no hardware.
+#[test]
+fn ui_solo_lights_the_learned_pad_across_a_recompile() {
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    let dev_sink = sink::spawn(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).expect("sink");
+    let config = || EngineConfig::new(AdapterPreference::Software, dev_sink.local_addr());
+    let engine =
+        Engine::start_show(show(vec![zone(Uuid::new_v4(), "A")]), config()).expect("engine starts");
+    let midi = engine.midi().clone();
+
+    let wire: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
+    let log = wire.clone();
+    midi.set_device(prisma_midi::DeviceProfile::apc40_mk2());
+    midi.set_output(Some(Arc::new(move |b: &[u8]| {
+        log.lock().unwrap().push(b.to_vec())
+    })));
+    let wait_for = |bytes: [u8; 3]| {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !wire.lock().unwrap().iter().any(|b| b[..] == bytes) {
+            assert!(Instant::now() < deadline, "never sent {bytes:?}");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        wire.lock().unwrap().clear();
+    };
+
+    // Learn zone 1's solo on the track-1 solo button; the press latches it on.
+    midi.arm_learn(MapTarget::ZoneSlot {
+        slot: 0,
+        sub: ZoneSub::Solo,
+    });
+    midi.feed(&[0x90, 49, 127]);
+    wait_for([0x90, 49, 1]);
+    midi.feed(&[0x90, 49, 127]); // and off again from the hardware
+    wait_for([0x80, 49, 0]);
+
+    // The UI turns it on right away: a toggle is a discrete action, so the hardware
+    // press a moment ago does not hold it against the UI (no takeover wait).
+    engine.set_zone_solo(0, true);
+    wait_for([0x90, 49, 1]);
+
+    // Recompile onto a new show: its zone 1 is not soloed, so the pad goes dark.
+    let engine = engine
+        .recompile_show(show(vec![zone(Uuid::new_v4(), "B")]), config())
+        .expect("recompile");
+    wait_for([0x80, 49, 0]);
+
+    engine.shutdown();
+    let _ = dev_sink.stop_and_collect();
+}

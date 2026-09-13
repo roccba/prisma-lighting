@@ -97,6 +97,13 @@ function MidiTab({ zones }: { zones: ZoneInfo[] }) {
       <div className={`pr-devmgr-status${status.connected ? " is-ok" : ""}`}>
         {status.connected ? `Conectado: ${status.connected}` : "Sin dispositivo MIDI conectado"}
       </div>
+      {status.connected && (
+        <div className="pr-devmgr-status">
+          {status.output
+            ? `Perfil: ${status.device} · LEDs por ${status.output}`
+            : `Perfil: ${status.device} · sin salida (no hay feedback de LEDs)`}
+        </div>
+      )}
       {status.error && <div className="pr-devmgr-error">Error: {status.error}</div>}
 
       <div className="pr-devmgr-label">Asignaciones ({status.mappings.length})</div>

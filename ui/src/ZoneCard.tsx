@@ -60,6 +60,8 @@ export function ZoneCard({ zone, slot, selected, onSelect, registerPreview }: Zo
   // never re-fetch the list, so this cannot fight a drag.
   useEffect(() => setDimmer(zone.dimmer), [zone.dimmer]);
   useEffect(() => setSpeed(zone.speed), [zone.speed]);
+  useEffect(() => setSolo(zone.solo), [zone.solo]);
+  useEffect(() => setMute(zone.blackout), [zone.blackout]);
 
   // Per-zone strobe (§3.6). The bolt engages it: HOLD = momentary, DOUBLE-CLICK = latched.
   // `rate` (0..1) is a separate speed. Engaged ⇒ strobe at `strobeHz(rate)`; not engaged ⇒
@@ -164,20 +166,32 @@ export function ZoneCard({ zone, slot, selected, onSelect, registerPreview }: Zo
           MIDI, §3.6). The strobe trigger sits here rather than over the preview so the row's
           overlay canvas stays a clean picture. */}
       <div className="pr-zonecard-footer" onPointerDown={(e) => e.stopPropagation()}>
-        <button
-          className={`pr-btn pr-zonecard-sm${solo ? " is-active" : ""}`}
-          onClick={toggleSolo}
-          title="Solo"
+        <LearnTarget
+          target={{ zone_slot: { slot, sub: "solo" } }}
+          name={`Solo — ${zone.name}`}
+          className="pr-learn-compact"
         >
-          S
-        </button>
-        <button
-          className={`pr-btn pr-zonecard-sm${mute ? " is-active" : ""}`}
-          onClick={toggleMute}
-          title="Mute"
+          <button
+            className={`pr-btn pr-zonecard-sm${solo ? " is-active" : ""}`}
+            onClick={toggleSolo}
+            title="Solo"
+          >
+            S
+          </button>
+        </LearnTarget>
+        <LearnTarget
+          target={{ zone_slot: { slot, sub: "blackout" } }}
+          name={`Mute — ${zone.name}`}
+          className="pr-learn-compact"
         >
-          M
-        </button>
+          <button
+            className={`pr-btn pr-zonecard-sm${mute ? " is-active" : ""}`}
+            onClick={toggleMute}
+            title="Mute"
+          >
+            M
+          </button>
+        </LearnTarget>
         <button
           className={`pr-strobe-trigger pr-strobe-trigger-sm${strobeOn ? " is-on" : ""}${strobeLatched ? " is-latched" : ""}`}
           onPointerDown={(e) => {

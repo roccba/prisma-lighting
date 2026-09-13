@@ -23,9 +23,9 @@
 //!
 //! # What Slice 1 carries, and what is additive later
 //!
-//! [`ControlMode`] has only `Absolute`, and [`ZoneSub`] only the single-parameter
-//! zone controls. Relative/toggle/trigger/momentary modes, cell triggers, colour,
-//! effect-parameter slots and per-control feedback arrive in later slices as new
+//! [`ControlMode`] has `Absolute` and (Slice 2) `Toggle`, and [`ZoneSub`] only the
+//! single-parameter zone controls. Relative/trigger/momentary modes, cell triggers, colour,
+//! effect-parameter slots and per-control feedback overrides arrive in later slices as new
 //! enum variants / defaulted fields — each is a schema *addition*, readable by this
 //! loader's successors without a migration. Variants are not declared ahead of the
 //! code that honours them, so a profile never contains a mode nothing implements.
@@ -39,7 +39,10 @@ pub const MAPPINGS_FORMAT_ID: &str = "prisma.controller-mappings";
 /// The newest schema version this build writes and can read up to.
 ///
 /// - **v1** — M9 Slice 1: absolute mappings to literal paths and zone slots.
-pub const MAPPINGS_SCHEMA_VERSION: u32 = 1;
+/// - **v2** — M9 Slice 2: `toggle` mode. Purely additive (every v1 file is a valid v2
+///   file), so there is no migration; the bump only stops an older build from
+///   misreading a toggle mapping it cannot honour.
+pub const MAPPINGS_SCHEMA_VERSION: u32 = 2;
 
 /// A per-operator/machine controller profile (CLAUDE.md §4.6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -148,6 +151,10 @@ pub enum ControlMode {
     /// The control's position *is* the value: `0..=127` → `0.0..=1.0`.
     #[default]
     Absolute,
+    /// Each press (note-on, or a CC rising above 0) flips the target between off and
+    /// on; releases are ignored. The mode for a pad/button driving a latching
+    /// parameter (zone solo / mute), whose LED then shows the state (Slice 2).
+    Toggle,
 }
 
 /// Shaping of the incoming normalized value (`0..=1` → `0..=1`).
