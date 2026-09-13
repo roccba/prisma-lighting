@@ -28,7 +28,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use prisma_core::show::{ParamSet, Show};
-use prisma_core::source::SourceId;
+use prisma_core::source::{priority, SourceId};
 use prisma_core::tree::ParameterTree;
 use prisma_core::{
     Curve, DeckChange, Filter, ParamDescriptor, ParamHandle, ParamId, RealRange,
@@ -54,6 +54,11 @@ pub trait CellHost: Send + Sync {
     fn cell_effect(&self, zone: Uuid, cell: usize) -> Option<(String, ParamSet)>;
     /// `zone`'s running cell changed (a pad, a UI click, a release returning).
     fn active_changed(&self, zone: Uuid, active: Option<usize>);
+}
+
+/// A cell's stored effect parameters, written when it starts.
+fn stored_params_source() -> SourceId {
+    SourceId::new(priority::UI, 0)
 }
 
 /// The engine writes cell state as the highest tier: it is derived, nobody else's.
@@ -311,7 +316,11 @@ impl Controller {
                     zone,
                     &effect_id,
                     &params,
-                    engine_source(),
+                    // The cell's stored values are a load, not a performance: written at
+                    // UI tier so the panel (or a controller) takes them over at once. At
+                    // the engine's tier they would lock every control out for the
+                    // takeover timeout after each effect change.
+                    stored_params_source(),
                 );
             }
             None => {

@@ -49,13 +49,16 @@ use crate::render_loop::ZoneStateSource;
 /// where an operator does the delicate work.
 const DIMMER_GAMMA: f32 = 2.2;
 
-/// Handles for a strobe: a free-running (Hz) on/off gate. `rate == 0` means off
-/// (the gate is a constant 1.0). `duty` is the fraction of each cycle the gate is on.
+/// Handles for a strobe: a free-running on/off gate. `on` engages it (a pad or the ⚡
+/// button, M9), `rate` is its speed in Hz — kept set while off, so a knob can tune the
+/// speed before the strobe fires. Off, the gate is a constant 1.0. `duty` is the
+/// fraction of each cycle the gate is on.
 /// Applied at the output stage, so master strobe gates every pixel and a zone strobe
 /// gates that zone's non-overlapped pixels (§5.2 step 6). No BPM/beat sync in M8 — the
 /// phase is wall-clock, matching the "global effects apply from above" model.
 #[derive(Clone)]
 pub struct StrobeHandles {
+    pub on: ParamHandle,
     pub rate: ParamHandle,
     pub duty: ParamHandle,
 }
@@ -97,12 +100,12 @@ pub struct LiveParams {
     start: Instant,
 }
 
-/// Free-running strobe gate. `1.0` (full on) when `rate <= 0` (off); otherwise a hard
+/// Free-running strobe gate. `1.0` (full on) when not engaged; otherwise a hard
 /// on/off gate at `rate` Hz, on for the first `duty` fraction of each cycle. Depth is
 /// 100% in M8 (off = black). Phase is computed in `f64` so it stays exact over long
 /// runs (an `f32` product would quantise the phase after minutes).
-fn strobe_gate(elapsed_s: f64, rate: f32, duty: f32) -> f32 {
-    if rate <= 0.0 {
+fn strobe_gate(elapsed_s: f64, on: bool, rate: f32, duty: f32) -> f32 {
+    if !on || rate <= 0.0 {
         return 1.0;
     }
     let phase = (elapsed_s * rate as f64).fract();
@@ -113,16 +116,21 @@ fn strobe_gate(elapsed_s: f64, rate: f32, duty: f32) -> f32 {
     }
 }
 
-/// Descriptor for a strobe rate (0–30 Hz, linear, default 0 = off).
+/// Slowest / fastest strobe, Hz. The range stays away from 0 so an engaged strobe
+/// always visibly flashes: "off" is `on == false`, never a 0 rate (M8-SPEC §3.6).
+pub const STROBE_MIN_HZ: f32 = 1.0;
+pub const STROBE_MAX_HZ: f32 = 25.0;
+
+/// Descriptor for a strobe rate (1–25 Hz, linear). Default ≈ 10.6 Hz, the UI's 40%.
 fn strobe_rate_descriptor(label: &str) -> ParamDescriptor {
     ParamDescriptor::level(
         label,
         RealRange {
-            min: 0.0,
-            max: 30.0,
+            min: STROBE_MIN_HZ,
+            max: STROBE_MAX_HZ,
         },
         Curve::Linear,
-        0.0,
+        0.4,
     )
 }
 
@@ -164,6 +172,10 @@ impl LiveParams {
                 ParamDescriptor::toggle("master.blackout", false),
             ),
             strobe: StrobeHandles {
+                on: tree.register(
+                    "/master/strobe/on",
+                    ParamDescriptor::toggle("master.strobe.on", false),
+                ),
                 rate: tree.register(
                     "/master/strobe/rate",
                     strobe_rate_descriptor("master.strobe.rate"),
@@ -227,6 +239,10 @@ impl LiveParams {
                         ParamDescriptor::toggle("zone.blackout", false),
                     ),
                     strobe: StrobeHandles {
+                        on: tree.register(
+                            &format!("{base}/strobe/on"),
+                            ParamDescriptor::toggle("zone.strobe.on", false),
+                        ),
                         rate: tree.register(
                             &format!("{base}/strobe/rate"),
                             strobe_rate_descriptor("zone.strobe.rate"),
@@ -303,7 +319,7 @@ impl FlatParamSource for LiveParams {
         // shared hot path) is untouched. Master strobe/blackout gate every pixel; a
         // zone's strobe gates that zone's non-overlapped pixels (overlapped pixels are
         // dimmed in render, which does not yet apply a zone strobe — the documented
-        // follow-up). `rate == 0` ⇒ gate 1.0, so an idle strobe costs nothing.
+        // follow-up). Not engaged ⇒ gate 1.0, so an idle strobe costs nothing.
         let t = self.start.elapsed().as_secs_f64();
 
         let m = &self.master;
@@ -312,6 +328,7 @@ impl FlatParamSource for LiveParams {
         } else {
             let gate = strobe_gate(
                 t,
+                m.strobe.on.read_bool().unwrap_or(false),
                 m.strobe.rate.read_real().unwrap_or(0.0),
                 m.strobe.duty.read_real().unwrap_or(0.5),
             );
@@ -330,6 +347,7 @@ impl FlatParamSource for LiveParams {
             let z = &self.zones[slot];
             let gate = strobe_gate(
                 t,
+                z.strobe.on.read_bool().unwrap_or(false),
                 z.strobe.rate.read_real().unwrap_or(0.0),
                 z.strobe.duty.read_real().unwrap_or(0.5),
             );

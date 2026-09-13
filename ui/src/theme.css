@@ -576,6 +576,7 @@ input, textarea, [contenteditable="true"] {
 .pr-master-actions .pr-btn { min-width: 40px; }
 .pr-master-actions .pr-strobe-trigger { position: static; width: 40px; height: 28px; font-size: 14px; }
 .pr-master-strobe-rate { flex: 0 0 auto; width: 100%; height: 6px; }
+.pr-master-strobe-wrap { width: 100%; align-items: center; }
 
 .pr-mainwin-error { flex: 0 0 auto; color: var(--accent-text); background: var(--bg-panel); border-top: 1px solid var(--btn-border-dark); padding: 6px 10px; font-size: var(--fs-small); font-family: var(--font-mono); }
 

@@ -335,10 +335,19 @@ fn learn_mode(s: &State, target: &MapTarget) -> ControlMode {
     if target.is_cell() {
         return ControlMode::Latch;
     }
-    let kind = s.tree.as_ref().and_then(|(tree, zones)| {
-        let path = target.resolve_path(zones)?;
-        tree.resolve(&path).map(|h| h.kind())
-    });
+    let path = s
+        .tree
+        .as_ref()
+        .and_then(|(_, zones)| target.resolve_path(zones));
+    // A strobe engage defaults to a flash: strobing while held.
+    if path.as_deref().is_some_and(|p| p.ends_with("/strobe/on")) {
+        return ControlMode::Momentary;
+    }
+    let kind = s
+        .tree
+        .as_ref()
+        .zip(path)
+        .and_then(|((tree, _), path)| tree.resolve(&path).map(|h| h.kind()));
     match kind {
         Some(prisma_core::ParamKind::Toggle) => ControlMode::Toggle,
         _ => ControlMode::Absolute,

@@ -230,6 +230,8 @@ export interface ZoneInfo {
   speed: number; // real -10..10 (0 = static, negative = reverse)
   solo: boolean;
   blackout: boolean;
+  strobe_on: boolean;
+  strobe_rate: number; // 0..1 over 1–25 Hz
 }
 
 /** Every zone of the running show, in slot order, with live controls. */
@@ -252,9 +254,13 @@ export const setZoneSolo = (zone: string, on: boolean) =>
 export const setZoneBlackout = (zone: string, on: boolean) =>
   invoke<void>("main_set_zone_blackout", { zone, on });
 
-/** Set a zone's strobe: `rate` in Hz (0 = off), `duty` 0..1 (§3.6). */
-export const setZoneStrobe = (zone: string, rate: number, duty: number) =>
-  invoke<void>("main_set_zone_strobe", { zone, rate, duty });
+/** Engage / release a zone's strobe (§3.6). */
+export const setZoneStrobeOn = (zone: string, on: boolean) =>
+  invoke<void>("main_set_zone_strobe_on", { zone, on });
+
+/** Set a zone's strobe speed in Hz (1–25). */
+export const setZoneStrobeRate = (zone: string, rate: number) =>
+  invoke<void>("main_set_zone_strobe_rate", { zone, rate });
 
 // --- Global operation bar (M8 step 6) ---
 
@@ -262,8 +268,8 @@ export const setZoneStrobe = (zone: string, rate: number, duty: number) =>
 export interface MasterInfo {
   dimmer: number; // 0..1
   blackout: boolean;
-  strobe_rate: number; // Hz (0 = off)
-  strobe_duty: number; // 0..1
+  strobe_on: boolean;
+  strobe_rate: number; // 0..1 over 1–25 Hz
 }
 
 /** Read the master section (dimmer, blackout, global strobe). */
@@ -277,9 +283,12 @@ export const setMasterDimmer = (value: number) =>
 export const setMasterBlackout = (on: boolean) =>
   invoke<void>("main_set_master_blackout", { on });
 
-/** Set the global strobe: `rate` Hz (0 = off), `duty` 0..1. */
-export const setMasterStrobe = (rate: number, duty: number) =>
-  invoke<void>("main_set_master_strobe", { rate, duty });
+/** Engage / release the global strobe. */
+export const setMasterStrobeOn = (on: boolean) => invoke<void>("main_set_master_strobe_on", { on });
+
+/** Set the global strobe speed in Hz (1–25). */
+export const setMasterStrobeRate = (rate: number) =>
+  invoke<void>("main_set_master_strobe_rate", { rate });
 
 /** Open the patch editor as a secondary window (§6/§7). Freezes the show while open;
  *  applies the edits to the running show on close. */
@@ -395,7 +404,14 @@ export const setParam = (zone: string, name: string, value: number) =>
 
 /** The per-zone controls a mapping can address by position (zone slot); `{ cell: i }` is
  *  cell i of the zone's scene grid. */
-export type ZoneSub = "dimmer" | "speed" | "solo" | "blackout" | { cell: number };
+export type ZoneSub =
+  | "dimmer"
+  | "speed"
+  | "solo"
+  | "blackout"
+  | "strobe_on"
+  | "strobe_rate"
+  | { cell: number };
 
 /** How a control acts. Faders are `absolute`; buttons/pads use the other four. */
 export type ControlMode = "absolute" | "toggle" | "latch" | "trigger" | "momentary";

@@ -43,7 +43,8 @@ pub const MAPPINGS_FORMAT_ID: &str = "prisma.controller-mappings";
 ///   file), so there is no migration; the bump only stops an older build from
 ///   misreading a toggle mapping it cannot honour.
 /// - **v3** — M9 Slice 3: grid cells as targets (`ZoneSub::Cell`), `latch` /
-///   `trigger` / `momentary` modes, and a per-mapping LED style. Additive again.
+///   `trigger` / `momentary` modes, zone strobe targets, and a per-mapping LED style.
+///   Additive again.
 pub const MAPPINGS_SCHEMA_VERSION: u32 = 3;
 
 /// A per-operator/machine controller profile (CLAUDE.md §4.6).
@@ -164,6 +165,10 @@ pub enum ZoneSub {
     Speed,
     Solo,
     Blackout,
+    /// The zone strobe's engage toggle (`strobe/on`).
+    StrobeOn,
+    /// The zone strobe's speed (`strobe/rate`, 1–25 Hz).
+    StrobeRate,
     /// One cell of the zone's scene grid (M9 Slice 3). Which of the cell's
     /// parameters a control drives depends on its mode — see
     /// [`MapTarget::resolve_path_for`].
@@ -178,6 +183,8 @@ impl ZoneSub {
             ZoneSub::Speed => "speed".into(),
             ZoneSub::Solo => "solo".into(),
             ZoneSub::Blackout => "blackout".into(),
+            ZoneSub::StrobeOn => "strobe/on".into(),
+            ZoneSub::StrobeRate => "strobe/rate".into(),
             ZoneSub::Cell(i) => format!("cell/{i}/{}", cell_leaf(mode)),
         }
     }

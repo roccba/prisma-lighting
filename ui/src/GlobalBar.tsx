@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { masterState, setMasterBlackout, setMasterDimmer, setMasterStrobe } from "./api";
+import {
+  masterState,
+  setMasterBlackout,
+  setMasterDimmer,
+  setMasterStrobeOn,
+  setMasterStrobeRate,
+  type MasterInfo,
+} from "./api";
 import { VFader } from "./VFader";
 import { Bolt } from "./icons";
 import { strobeHz } from "./strobe";
@@ -20,32 +27,38 @@ export function GlobalBar() {
   const [strobeRate, setStrobeRate] = useState(0.4);
   const [strobeHeld, setStrobeHeld] = useState(false);
   const [strobeLatched, setStrobeLatched] = useState(false);
-  const strobeOn = strobeHeld || strobeLatched;
+  const [strobeRemote, setStrobeRemote] = useState(false);
+  const strobeOn = strobeHeld || strobeLatched || strobeRemote;
 
+  // Seeded from the engine, and re-read whenever a mapped MIDI control moved (M9), so the
+  // fader, blackout and strobe follow the hardware.
   useEffect(() => {
-    masterState()
-      .then((m) => {
-        setDimmer(m.dimmer);
-        setBlackout(m.blackout);
-      })
-      .catch(() => {});
-  }, []);
-
-  // A mapped MIDI control moved (M9): re-read the master so the fader follows the hardware.
-  useEffect(() => {
+    const apply = (m: MasterInfo) => {
+      setDimmer(m.dimmer);
+      setBlackout(m.blackout);
+      setStrobeRemote(m.strobe_on);
+      setStrobeRate(m.strobe_rate);
+    };
+    masterState().then(apply).catch(() => {});
     const un = listen("midi-applied", () => {
-      masterState()
-        .then((m) => setDimmer(m.dimmer))
-        .catch(() => {});
+      masterState().then(apply).catch(() => {});
     });
     return () => {
       un.then((f) => f()).catch(() => {});
     };
   }, []);
 
-  useEffect(() => {
-    setMasterStrobe(strobeOn ? strobeHz(strobeRate) : 0, 0.5).catch(() => {});
-  }, [strobeOn, strobeRate]);
+  // Strobe writes happen only on the operator's gestures, never on mount.
+  const engage = (held: boolean, latched: boolean) => {
+    setStrobeHeld(held);
+    setStrobeLatched(latched);
+    setStrobeRemote(held || latched);
+    setMasterStrobeOn(held || latched).catch(() => {});
+  };
+  const changeStrobeRate = (v: number) => {
+    setStrobeRate(v);
+    setMasterStrobeRate(strobeHz(v)).catch(() => {});
+  };
 
   const changeDimmer = (v: number) => {
     setDimmer(v);
@@ -65,36 +78,46 @@ export function GlobalBar() {
       </LearnTarget>
       <span className="pr-value pr-master-value">{Math.round(dimmer * 100)}%</span>
       <div className="pr-master-actions">
-        <button
-          className={`pr-btn${blackout ? " is-active" : ""}`}
-          onClick={toggleBlackout}
-          title="Blackout — apaga todo sin mover el fader"
-        >
-          BO
-        </button>
-        <button
-          className={`pr-strobe-trigger${strobeOn ? " is-on" : ""}${strobeLatched ? " is-latched" : ""}`}
-          onPointerDown={() => setStrobeHeld(true)}
-          onPointerUp={() => setStrobeHeld(false)}
-          onPointerLeave={() => setStrobeHeld(false)}
-          onDoubleClick={() => setStrobeLatched((l) => !l)}
-          title="Strobo global — mantené = momentáneo, doble clic = fijo"
-          aria-pressed={strobeOn}
-        >
-          <Bolt size={14} />
-        </button>
+        <LearnTarget target={{ path: "/master/blackout" }} name="Blackout master" className="pr-learn-compact">
+          <button
+            className={`pr-btn${blackout ? " is-active" : ""}`}
+            onClick={toggleBlackout}
+            title="Blackout — apaga todo sin mover el fader"
+          >
+            BO
+          </button>
+        </LearnTarget>
+        <LearnTarget target={{ path: "/master/strobe/on" }} name="Strobo global" className="pr-learn-compact">
+          <button
+            className={`pr-strobe-trigger${strobeOn ? " is-on" : ""}${strobeLatched ? " is-latched" : ""}`}
+            onPointerDown={() => engage(true, strobeLatched)}
+            onPointerUp={() => strobeHeld && engage(false, strobeLatched)}
+            onPointerLeave={() => strobeHeld && engage(false, strobeLatched)}
+            onDoubleClick={() => engage(false, !strobeLatched)}
+            title="Strobo global — mantené = momentáneo, doble clic = fijo"
+            aria-pressed={strobeOn}
+          >
+            <Bolt size={14} />
+          </button>
+        </LearnTarget>
       </div>
-      <input
-        type="range"
-        className="pr-strobe-rate pr-master-strobe-rate"
-        min={0}
-        max={1}
-        step={0.01}
-        value={strobeRate}
-        onChange={(e) => setStrobeRate(Number(e.target.value))}
-        aria-label="Global strobe rate"
-        title="Velocidad del strobo"
-      />
+      <LearnTarget
+        target={{ path: "/master/strobe/rate" }}
+        name="Velocidad strobo global"
+        className="pr-learn-compact pr-master-strobe-wrap"
+      >
+        <input
+          type="range"
+          className="pr-strobe-rate pr-master-strobe-rate"
+          min={0}
+          max={1}
+          step={0.01}
+          value={strobeRate}
+          onChange={(e) => changeStrobeRate(Number(e.target.value))}
+          aria-label="Global strobe rate"
+          title="Velocidad del strobo"
+        />
+      </LearnTarget>
     </div>
   );
 }

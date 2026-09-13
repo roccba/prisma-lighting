@@ -32,15 +32,24 @@ interface DeviceManagerProps {
 
 const AUTO = "__auto__";
 
+const GLOBAL_LABEL: Record<string, string> = {
+  "/master/dimmer": "Master dimmer",
+  "/master/blackout": "Blackout master",
+  "/master/strobe/on": "Strobo global",
+  "/master/strobe/rate": "Velocidad strobo global",
+};
+
 const SUB_LABEL: Record<string, string> = {
   dimmer: "Dimmer",
   speed: "Velocidad",
   solo: "Solo",
   blackout: "Mute",
+  strobe_on: "Strobo",
+  strobe_rate: "Velocidad strobo",
 };
 
 function targetLabel(t: MapTarget, zones: ZoneInfo[]): string {
-  if ("path" in t) return t.path === "/master/dimmer" ? "Master dimmer" : t.path;
+  if ("path" in t) return GLOBAL_LABEL[t.path] ?? t.path;
   const { slot, sub } = t.zone_slot;
   const zone = zones[slot]?.name ?? `Zona ${slot + 1} (no está en este show)`;
   const what = typeof sub === "object" ? `Celda ${sub.cell + 1}` : (SUB_LABEL[sub] ?? sub);

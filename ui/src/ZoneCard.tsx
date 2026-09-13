@@ -6,7 +6,8 @@ import {
   setZoneDimmer,
   setZoneSolo,
   setZoneSpeed,
-  setZoneStrobe,
+  setZoneStrobeOn,
+  setZoneStrobeRate,
   type ZoneInfo,
 } from "./api";
 import { strobeHz } from "./strobe";
@@ -63,17 +64,29 @@ export function ZoneCard({ zone, slot, selected, onSelect, registerPreview }: Zo
   useEffect(() => setSolo(zone.solo), [zone.solo]);
   useEffect(() => setMute(zone.blackout), [zone.blackout]);
 
-  // Per-zone strobe (§3.6). The bolt engages it: HOLD = momentary, DOUBLE-CLICK = latched.
-  // `rate` (0..1) is a separate speed. Engaged ⇒ strobe at `strobeHz(rate)`; not engaged ⇒
-  // rate 0 (off). Written live to the engine.
-  const [strobeRate, setStrobeRate] = useState(0.4);
+  // Per-zone strobe (§3.6). The bolt engages it: HOLD = momentary, DOUBLE-CLICK = latched;
+  // the slider is its speed (0..1 → 1–25 Hz). Both are tree parameters (M9), so a pad or a
+  // knob can drive them too: the card shows the engine's value, refreshed on `midi-applied`.
+  const [strobeRate, setStrobeRate] = useState(zone.strobe_rate);
   const [strobeHeld, setStrobeHeld] = useState(false);
   const [strobeLatched, setStrobeLatched] = useState(false);
-  const strobeOn = strobeHeld || strobeLatched;
+  const [strobeRemote, setStrobeRemote] = useState(zone.strobe_on);
+  useEffect(() => setStrobeRate(zone.strobe_rate), [zone.strobe_rate]);
+  useEffect(() => setStrobeRemote(zone.strobe_on), [zone.strobe_on]);
+  const strobeOn = strobeHeld || strobeLatched || strobeRemote;
 
-  useEffect(() => {
-    setZoneStrobe(zone.id, strobeOn ? strobeHz(strobeRate) : 0, 0.5).catch(() => {});
-  }, [zone.id, strobeOn, strobeRate]);
+  // Write only on the operator's own gestures (never on mount), so a strobe a pad engaged
+  // is not switched off by the card appearing.
+  const engage = (held: boolean, latched: boolean) => {
+    setStrobeHeld(held);
+    setStrobeLatched(latched);
+    setStrobeRemote(held || latched);
+    setZoneStrobeOn(zone.id, held || latched).catch(() => {});
+  };
+  const changeStrobeRate = (v: number) => {
+    setStrobeRate(v);
+    setZoneStrobeRate(zone.id, strobeHz(v)).catch(() => {});
+  };
 
   // Stable ref callback so React does not deregister/reregister the preview slot on every
   // re-render (a fresh inline arrow would). Keyed on the zone id + the stable registrar.
@@ -192,22 +205,32 @@ export function ZoneCard({ zone, slot, selected, onSelect, registerPreview }: Zo
             M
           </button>
         </LearnTarget>
-        <button
-          className={`pr-strobe-trigger pr-strobe-trigger-sm${strobeOn ? " is-on" : ""}${strobeLatched ? " is-latched" : ""}`}
-          onPointerDown={(e) => {
-            e.stopPropagation();
-            setStrobeHeld(true);
-          }}
-          onPointerUp={() => setStrobeHeld(false)}
-          onPointerLeave={() => setStrobeHeld(false)}
-          onDoubleClick={() => setStrobeLatched((l) => !l)}
-          title="Strobo — mantené = momentáneo, doble clic = fijo"
-          aria-label={`${zone.name} strobe`}
-          aria-pressed={strobeOn}
+        <LearnTarget
+          target={{ zone_slot: { slot, sub: "strobe_on" } }}
+          name={`Strobo — ${zone.name}`}
+          className="pr-learn-compact"
         >
-          <Bolt size={12} />
-        </button>
-        <label className="pr-zonecard-strobe" title="Velocidad del strobo">
+          <button
+            className={`pr-strobe-trigger pr-strobe-trigger-sm${strobeOn ? " is-on" : ""}${strobeLatched ? " is-latched" : ""}`}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              engage(true, strobeLatched);
+            }}
+            onPointerUp={() => strobeHeld && engage(false, strobeLatched)}
+            onPointerLeave={() => strobeHeld && engage(false, strobeLatched)}
+            onDoubleClick={() => engage(false, !strobeLatched)}
+            title="Strobo — mantené = momentáneo, doble clic = fijo"
+            aria-label={`${zone.name} strobe`}
+            aria-pressed={strobeOn}
+          >
+            <Bolt size={12} />
+          </button>
+        </LearnTarget>
+        <LearnTarget
+          target={{ zone_slot: { slot, sub: "strobe_rate" } }}
+          name={`Velocidad strobo — ${zone.name}`}
+          className="pr-learn-compact pr-zonecard-strobe"
+        >
           <input
             type="range"
             className="pr-strobe-rate"
@@ -215,10 +238,11 @@ export function ZoneCard({ zone, slot, selected, onSelect, registerPreview }: Zo
             max={1}
             step={0.01}
             value={strobeRate}
-            onChange={(e) => setStrobeRate(Number(e.target.value))}
+            onChange={(e) => changeStrobeRate(Number(e.target.value))}
             aria-label={`${zone.name} strobe rate`}
+            title="Velocidad del strobo"
           />
-        </label>
+        </LearnTarget>
       </div>
     </div>
   );

@@ -164,6 +164,16 @@ fn pads_play_cells_through_the_tree() {
     // Latch (the UI click path): white becomes the base and stays.
     assert!(engine.fire_cell(0, 1));
     wait_for("latched white", || wire(250, 255) && active() == Some(1));
+    // The started cell's stored params are a load, not a lock: the panel (UI tier) can
+    // move one right away instead of waiting out the takeover timeout.
+    let r = engine
+        .tree()
+        .resolve(&format!("/zone/{ZONE}/layer/0/param/r"))
+        .unwrap();
+    assert_eq!(
+        engine.tree().write(&r, 0.7, SourceId::new(priority::UI, 1)),
+        prisma_core::WriteOutcome::Accepted
+    );
 
     // A hold on top of the latch, cleared by a new latch: the hold param is reset so
     // a toggle pad's next tap presses again.

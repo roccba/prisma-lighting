@@ -224,10 +224,13 @@ const RATES: { value: LedRate; label: string }[] = [
 /** Which button styles make sense for a target: all four on a grid cell, on/off styles on
  *  a zone switch, none on a continuous control (fader). */
 function modesFor(target: MapTarget): ControlMode[] {
-  if ("path" in target) return [];
+  if ("path" in target) {
+    const switches = ["/master/blackout", "/master/strobe/on"];
+    return switches.includes(target.path) ? ["toggle", "momentary"] : [];
+  }
   const sub = target.zone_slot.sub;
   if (typeof sub === "object") return ["latch", "trigger", "toggle", "momentary"];
-  if (sub === "solo" || sub === "blackout") return ["toggle", "momentary"];
+  if (sub === "solo" || sub === "blackout" || sub === "strobe_on") return ["toggle", "momentary"];
   return [];
 }
 

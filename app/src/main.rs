@@ -46,6 +46,9 @@ struct ZoneInfo {
     speed: f32,
     solo: bool,
     blackout: bool,
+    strobe_on: bool,
+    /// Strobe speed, `0..=1` over 1–25 Hz.
+    strobe_rate: f32,
 }
 
 /// One scene-grid cell of the selected zone (M8 step 4): empty (assignable) or an
@@ -1041,6 +1044,8 @@ fn main_zones(state: State<AppState>) -> Vec<ZoneInfo> {
                     speed: 1.0,
                     solo: false,
                     blackout: false,
+                    strobe_on: false,
+                    strobe_rate: 0.4,
                 });
             ZoneInfo {
                 id,
@@ -1050,6 +1055,8 @@ fn main_zones(state: State<AppState>) -> Vec<ZoneInfo> {
                 speed: live.speed,
                 solo: live.solo,
                 blackout: live.blackout,
+                strobe_on: live.strobe_on,
+                strobe_rate: live.strobe_rate,
             }
         })
         .collect()
@@ -1101,15 +1108,26 @@ fn main_set_zone_blackout(state: State<AppState>, zone: Uuid, on: bool) {
     }
 }
 
-/// Set a zone's strobe: `rate` in Hz (0 = off), `duty` 0..1 (M8-SPEC §3.6). Gates the
-/// zone's non-overlapped pixels at the output stage.
+/// Engage/release a zone's strobe (M8-SPEC §3.6; a tree toggle since M9, so a pad can
+/// drive it too). Gates the zone's non-overlapped pixels at the output stage.
 #[tauri::command]
-fn main_set_zone_strobe(state: State<AppState>, zone: Uuid, rate: f32, duty: f32) {
+fn main_set_zone_strobe_on(state: State<AppState>, zone: Uuid, on: bool) {
     let Some(slot) = zone_slot(&state, zone) else {
         return;
     };
     if let Some(engine) = state.engine.lock().unwrap().as_ref() {
-        engine.set_zone_strobe(slot, rate, duty);
+        engine.set_zone_strobe_on(slot, on);
+    }
+}
+
+/// Set a zone's strobe speed in Hz (1–25), engaged or not.
+#[tauri::command]
+fn main_set_zone_strobe_rate(state: State<AppState>, zone: Uuid, rate: f32) {
+    let Some(slot) = zone_slot(&state, zone) else {
+        return;
+    };
+    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        engine.set_zone_strobe_rate(slot, rate);
     }
 }
 
@@ -1404,8 +1422,9 @@ const MAPPINGS_FILE: &str = "controller-mappings.json";
 struct MasterInfo {
     dimmer: f32,
     blackout: bool,
+    strobe_on: bool,
+    /// Strobe speed, `0..=1` over 1–25 Hz.
     strobe_rate: f32,
-    strobe_duty: f32,
 }
 
 /// Read the master section (dimmer, blackout, global strobe) for the global bar.
@@ -1416,16 +1435,16 @@ fn main_master(state: State<AppState>) -> MasterInfo {
         return MasterInfo {
             dimmer: 1.0,
             blackout: false,
-            strobe_rate: 0.0,
-            strobe_duty: 0.5,
+            strobe_on: false,
+            strobe_rate: 0.4,
         };
     };
     let m = engine.live().master();
     MasterInfo {
         dimmer: m.dimmer.read_real().unwrap_or(1.0),
         blackout: m.blackout.read_real().unwrap_or(0.0) > 0.5,
-        strobe_rate: m.strobe.rate.read_real().unwrap_or(0.0),
-        strobe_duty: m.strobe.duty.read_real().unwrap_or(0.5),
+        strobe_on: m.strobe.on.read_bool().unwrap_or(false),
+        strobe_rate: m.strobe.rate.read_norm().unwrap_or(0.4),
     }
 }
 
@@ -1445,11 +1464,19 @@ fn main_set_master_blackout(state: State<AppState>, on: bool) {
     }
 }
 
-/// Set the global strobe: `rate` Hz (0 = off), `duty` 0..1.
+/// Engage/release the global strobe.
 #[tauri::command]
-fn main_set_master_strobe(state: State<AppState>, rate: f32, duty: f32) {
+fn main_set_master_strobe_on(state: State<AppState>, on: bool) {
     if let Some(engine) = state.engine.lock().unwrap().as_ref() {
-        engine.set_master_strobe(rate, duty);
+        engine.set_master_strobe_on(on);
+    }
+}
+
+/// Set the global strobe speed in Hz (1–25), engaged or not.
+#[tauri::command]
+fn main_set_master_strobe_rate(state: State<AppState>, rate: f32) {
+    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        engine.set_master_strobe_rate(rate);
     }
 }
 
@@ -1775,11 +1802,13 @@ fn main() {
             main_network_set,
             main_set_zone_solo,
             main_set_zone_blackout,
-            main_set_zone_strobe,
+            main_set_zone_strobe_on,
+            main_set_zone_strobe_rate,
             main_master,
             main_set_master_dimmer,
             main_set_master_blackout,
-            main_set_master_strobe,
+            main_set_master_strobe_on,
+            main_set_master_strobe_rate,
             main_open_editor,
             main_save_show,
             main_new_show,

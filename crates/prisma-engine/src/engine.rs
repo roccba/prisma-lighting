@@ -192,6 +192,9 @@ pub struct ZoneLiveReadout {
     pub speed: f32,
     pub solo: bool,
     pub blackout: bool,
+    pub strobe_on: bool,
+    /// Strobe speed, normalized `0..=1` over its 1–25 Hz range (the UI slider's scale).
+    pub strobe_rate: f32,
 }
 
 /// The source the main window's live controls (faders, solo, mute) write as — UI
@@ -608,25 +611,42 @@ impl EngineHandle {
             .write_real(&self.live.master().blackout, v, ui_control_source());
     }
 
-    /// Set the global strobe: `rate` in Hz (`0` = off) and `duty` `0..=1` (the on
-    /// fraction of each cycle). Free-running (no BPM sync in M8); gates every pixel at
-    /// the output stage.
-    pub fn set_master_strobe(&self, rate_hz: f32, duty: f32) {
-        let s = ui_control_source();
-        let strobe = &self.live.master().strobe;
-        self.tree.write_real(&strobe.rate, rate_hz, s);
-        self.tree.write_real(&strobe.duty, duty, s);
+    /// Engage or release the global strobe (`/master/strobe/on`). Free-running (no BPM
+    /// sync yet); gates every pixel at the output stage.
+    pub fn set_master_strobe_on(&self, on: bool) {
+        let v = if on { 1.0 } else { 0.0 };
+        self.tree
+            .write_real(&self.live.master().strobe.on, v, ui_control_source());
     }
 
-    /// Set a zone's strobe (`rate` Hz, `duty` `0..=1`). Gates the zone's non-overlapped
-    /// pixels at the output stage (overlapped pixels are a follow-up, §5.2.1). Slot in
-    /// `Patch::zones` order; out-of-range slots are ignored.
-    pub fn set_zone_strobe(&self, slot: usize, rate_hz: f32, duty: f32) {
+    /// Set the global strobe's speed in Hz (clamped to its 1–25 Hz range), engaged or not.
+    pub fn set_master_strobe_rate(&self, rate_hz: f32) {
+        self.tree.write_real(
+            &self.live.master().strobe.rate,
+            rate_hz,
+            ui_control_source(),
+        );
+    }
+
+    /// Engage or release a zone's strobe. Gates the zone's non-overlapped pixels at the
+    /// output stage (overlapped pixels are a follow-up, §5.2.1). Slot in `Patch::zones`
+    /// order; out-of-range slots are ignored.
+    pub fn set_zone_strobe_on(&self, slot: usize, on: bool) {
         if slot < self.live.zone_count() {
-            let s = ui_control_source();
-            let strobe = &self.live.zone(slot).strobe;
-            self.tree.write_real(&strobe.rate, rate_hz, s);
-            self.tree.write_real(&strobe.duty, duty, s);
+            let v = if on { 1.0 } else { 0.0 };
+            self.tree
+                .write_real(&self.live.zone(slot).strobe.on, v, ui_control_source());
+        }
+    }
+
+    /// Set a zone's strobe speed in Hz, engaged or not.
+    pub fn set_zone_strobe_rate(&self, slot: usize, rate_hz: f32) {
+        if slot < self.live.zone_count() {
+            self.tree.write_real(
+                &self.live.zone(slot).strobe.rate,
+                rate_hz,
+                ui_control_source(),
+            );
         }
     }
 
@@ -639,6 +659,8 @@ impl EngineHandle {
                 speed: 1.0,
                 solo: false,
                 blackout: false,
+                strobe_on: false,
+                strobe_rate: 0.4,
             };
         }
         let z = self.live.zone(slot);
@@ -647,6 +669,8 @@ impl EngineHandle {
             speed: z.speed.read_real().unwrap_or(1.0),
             solo: z.solo.read_real().unwrap_or(0.0) > 0.5,
             blackout: z.blackout.read_real().unwrap_or(0.0) > 0.5,
+            strobe_on: z.strobe.on.read_bool().unwrap_or(false),
+            strobe_rate: z.strobe.rate.read_norm().unwrap_or(0.4),
         }
     }
 
