@@ -479,23 +479,24 @@ input, textarea, [contenteditable="true"] {
 /* --- Window shell + fixed layout --- */
 .pr-mainwin { height: 100vh; display: flex; flex-direction: column; background: var(--bg-app); color: var(--text); font-family: var(--font-ui); font-size: var(--fs-base); overflow: hidden; }
 .pr-mainwin-body { flex: 1 1 auto; display: flex; flex-direction: column; gap: 6px; padding: 6px; min-height: 0; overflow: hidden; }
-/* Work area: three columns — a left column stacking the scene grid over the parameters
-   panel, the tall preview in the middle, the master strip on the right. */
-.pr-mainwin-work { flex: 1 1 auto; display: flex; gap: 6px; min-height: 0; }
-.pr-work-left { flex: 0 0 664px; min-width: 0; display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.pr-mainwin-mid { flex: 1 1 auto; display: flex; gap: 6px; min-height: 0; }
 
 /* A region is a bordered surface with a title strip — the dock unit for the future
    dashboard (§7). Raised: light-ish grey face over the app black, 1px dark edge. */
 .pr-region { background: var(--bg-panel); border: 1px solid var(--btn-border-dark); border-radius: var(--r-md); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .pr-region-zonerow { flex: 0 0 auto; }
-/* Left column: the grid is only as tall as its (two) rows of cells need; the parameters
-   panel takes all the remaining height below it, so there is no dead space under the grid. */
-.pr-region-grid { flex: 0 0 auto; }
-.pr-region-params { flex: 1 1 auto; min-height: 0; }
-/* The preview is the star: it takes the whole middle column, full height. */
-.pr-region-preview { flex: 1 1 auto; min-width: 0; }
-/* The master strip runs full height on the right at a fixed width. */
-.pr-region-master { flex: 0 0 150px; }
+/* The preview is the star; give it more of the mid row than the (compact) grid, so the
+   grid stops stretching its cells to fill half the window. */
+.pr-region-grid { flex: 1 1 0; }
+.pr-region-preview { flex: 1.5 1 0; }
+/* Bottom work row: FIXED height, not resizable (MADRIX-style). The effect-parameters
+   panel (a swappable slot — groups will share it later) sits left at a fixed width where
+   every parameter fits without scrolling; the master strip sits right at a fixed width. */
+.pr-workrow { flex: 0 0 auto; height: 270px; display: flex; gap: 6px; }
+/* The params panel FILLS the row (minus the fixed master), so faders/controls use the
+   width instead of leaving a gap. Its content is sized so the densest effect still fits. */
+.pr-workrow-panel { flex: 1 1 auto; min-width: 0; }
+.pr-workrow-master { flex: 0 0 150px; }
 .pr-region-title { font-size: var(--fs-small); color: var(--text-label); padding: 5px 8px; border-bottom: 1px solid var(--divider); text-transform: uppercase; letter-spacing: .04em; flex: 0 0 auto; }
 
 /* Placeholder regions (filled in steps 4–6): centred dim caption, so the operator sees
@@ -562,11 +563,9 @@ input, textarea, [contenteditable="true"] {
 /* The master column: fixed-height row, so the FADER flexes to fill whatever vertical
    space the fixed elements (title, value, buttons, strobe rate) leave. This guarantees
    the whole stack always fits inside the row — nothing spills below the window. */
-.pr-master { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 10px 8px; }
+.pr-master { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 8px; }
 .pr-master-title { flex: 0 0 auto; font-size: var(--fs-base); color: var(--text-label); text-transform: uppercase; letter-spacing: .05em; }
-/* Grows with the column but caps so the master fader stays a fader, not a full-height bar;
-   the whole master block is centred vertically (justify-content on .pr-master). */
-.pr-master-fader { flex: 0 1 360px; min-height: 40px; display: flex; align-items: center; justify-content: center; }
+.pr-master-fader { flex: 1 1 auto; min-height: 40px; display: flex; align-items: center; justify-content: center; }
 .pr-master-fader .pr-fader { height: 100%; width: 48px; }
 .pr-master-value { flex: 0 0 auto; font-size: var(--fs-value); color: var(--accent-text); font-variant-numeric: tabular-nums; font-weight: 600; }
 .pr-master-actions { flex: 0 0 auto; display: flex; gap: 8px; }
