@@ -29,9 +29,11 @@ pub mod runtime;
 #[cfg(feature = "hardware")]
 pub mod io;
 
-pub use feedback::{led_on, MidiOut};
+pub use feedback::{led_level, MidiOut};
 pub use message::{EventKind, MidiEvent};
 pub use ports::{find_port_by_keywords, APC40_KEYWORDS};
-pub use profile::{load_device_profile, nearest_palette_index, DeviceProfile, APC40_MK2_PALETTE};
-pub use resolver::{source_for, Binding};
+pub use profile::{
+    load_device_profile, nearest_palette_index, DeviceProfile, LedLevel, APC40_MK2_PALETTE,
+};
+pub use resolver::{source_for, Binding, FeedbackTarget};
 pub use runtime::{MidiListener, MidiNotice, MidiRuntime};

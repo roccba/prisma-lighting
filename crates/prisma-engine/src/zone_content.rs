@@ -134,6 +134,9 @@ pub enum ZoneCommand {
         slot: usize,
         effect: Option<EffectInstance>,
     },
+    /// Rewind a zone's animation phase to its start, so its effect plays from the
+    /// beginning (a pad in trigger mode, M9).
+    Restart { slot: usize },
 }
 
 /// The producer end of the frame-boundary command queue. Cloneable and `Send`, so
@@ -151,6 +154,11 @@ impl ZoneCommandSender {
         self.tx
             .send(ZoneCommand::SetEffect { slot, effect })
             .is_ok()
+    }
+
+    /// Queue a phase rewind for `slot` (applied after any swap queued before it).
+    pub fn restart_zone(&self, slot: usize) -> bool {
+        self.tx.send(ZoneCommand::Restart { slot }).is_ok()
     }
 }
 
@@ -307,6 +315,11 @@ impl ZoneCompositor {
                 ZoneCommand::SetEffect { slot, effect } => {
                     if slot < self.slots.len() {
                         self.slots[slot].effect = effect;
+                    }
+                }
+                ZoneCommand::Restart { slot } => {
+                    if let Some(phase) = self.zone_phase_ns.get_mut(slot) {
+                        *phase = PHASE_BIAS_NS;
                     }
                 }
             }

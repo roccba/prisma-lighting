@@ -727,6 +727,30 @@ input.pr-field-value:focus { outline: 1px solid var(--accent); outline-offset: -
 /* Targets too small for a label (S / M buttons): the solid border says "mapped", the
    tooltip names the control. */
 .pr-learn-compact .pr-learn-badge { display: none; }
+/* A learnable grid cell: the wrapper is the grid item, the cell fills it. */
+.pr-learn-cell > .pr-cell { flex: 1 1 auto; }
+
+/* MIDI Learn right-click menu (M9 Slice 3): button style, LED colour + motion, unmap. */
+.pr-midimenu {
+  position: fixed; z-index: 90; width: 300px; padding: 8px;
+  background: var(--bg-panel-2); border: 1px solid var(--btn-border); border-radius: var(--r-md);
+  box-shadow: 0 6px 24px rgba(0,0,0,.45); color: var(--text); font-size: var(--fs-small);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.pr-midimenu-title { font-size: var(--fs-base); display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.pr-midimenu-sub { color: var(--text-dim); font-family: var(--font-mono); font-size: var(--fs-tiny); }
+.pr-midimenu-section { display: flex; flex-direction: column; gap: 5px; border-top: 1px solid var(--btn-border-dark); padding-top: 7px; }
+.pr-midimenu-label { color: var(--text-dim); font-size: var(--fs-tiny); text-transform: uppercase; letter-spacing: .04em; }
+.pr-midimenu-seg { display: flex; flex-wrap: wrap; gap: 3px; }
+.pr-midimenu-seg .pr-btn { flex: 1 1 auto; padding: 2px 6px; font-size: var(--fs-small); }
+.pr-midimenu-hint { color: var(--text-dim); font-size: var(--fs-tiny); line-height: 1.35; }
+.pr-midimenu-actions { display: flex; justify-content: space-between; gap: 6px; border-top: 1px solid var(--btn-border-dark); padding-top: 7px; }
+.pr-swatches { display: grid; grid-template-columns: repeat(16, 1fr); gap: 2px; }
+.pr-swatch { aspect-ratio: 1; min-width: 0; padding: 0; border: 1px solid var(--btn-border-dark); border-radius: 2px; cursor: pointer; }
+.pr-swatch:hover { outline: 1px solid var(--text); }
+.pr-swatch.is-selected { outline: 2px solid var(--learn); outline-offset: 0; z-index: 1; }
+.pr-swatch-auto { background: var(--bg-input); color: var(--text-dim); font-size: 8px; line-height: 1; }
+
 .pr-learn-bar {
   flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
   padding: 5px 10px; background: var(--bg-panel); border-top: 1px solid var(--learn);

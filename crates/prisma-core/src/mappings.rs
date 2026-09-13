@@ -23,9 +23,9 @@
 //!
 //! # What Slice 1 carries, and what is additive later
 //!
-//! [`ControlMode`] has `Absolute` and (Slice 2) `Toggle`, and [`ZoneSub`] only the
-//! single-parameter zone controls. Relative/trigger/momentary modes, cell triggers, colour,
-//! effect-parameter slots and per-control feedback overrides arrive in later slices as new
+//! [`ControlMode`] has `Absolute`, `Toggle` (Slice 2) and `Latch`/`Trigger`/`Momentary`
+//! (Slice 3); [`ZoneSub`] covers the zone controls and grid cells, and a mapping may
+//! carry an [`LedStyle`]. Relative mode, colour and effect-parameter slots arrive in later slices as new
 //! enum variants / defaulted fields — each is a schema *addition*, readable by this
 //! loader's successors without a migration. Variants are not declared ahead of the
 //! code that honours them, so a profile never contains a mode nothing implements.
@@ -42,7 +42,9 @@ pub const MAPPINGS_FORMAT_ID: &str = "prisma.controller-mappings";
 /// - **v2** — M9 Slice 2: `toggle` mode. Purely additive (every v1 file is a valid v2
 ///   file), so there is no migration; the bump only stops an older build from
 ///   misreading a toggle mapping it cannot honour.
-pub const MAPPINGS_SCHEMA_VERSION: u32 = 2;
+/// - **v3** — M9 Slice 3: grid cells as targets (`ZoneSub::Cell`), `latch` /
+///   `trigger` / `momentary` modes, and a per-mapping LED style. Additive again.
+pub const MAPPINGS_SCHEMA_VERSION: u32 = 3;
 
 /// A per-operator/machine controller profile (CLAUDE.md §4.6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -74,6 +76,52 @@ pub struct MidiMapping {
     /// it is not fed through the descriptor's curve a second time.
     #[serde(default)]
     pub curve: ResponseCurve,
+    /// How this control's LED shows its target, chosen by the operator. `None` =
+    /// the device profile's defaults (a cell lights in its zone's colour).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub led: Option<LedStyle>,
+}
+
+/// An operator-chosen LED look for one control (M9 Slice 3). Colours are indices
+/// into the device's palette (the APC40 mkII's 128 RGB colours); a device without
+/// one ignores them and just lights or darkens.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct LedStyle {
+    /// Colour while the target is on / the cell is running. `None` = default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<u8>,
+    /// Colour while a cell holds an effect but is not running. `None` = default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle: Option<u8>,
+    /// How the "on" colour moves.
+    #[serde(default)]
+    pub animation: LedAnimation,
+}
+
+/// LED motion for the "on" state. The rate is a note value of the device's tempo.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LedAnimation {
+    #[default]
+    Solid,
+    Pulse(LedRate),
+    Blink(LedRate),
+}
+
+/// Animation rate as a note value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LedRate {
+    /// 1/24 note
+    N24,
+    /// 1/16 note
+    N16,
+    /// 1/8 note
+    N8,
+    /// 1/4 note
+    N4,
+    /// 1/2 note
+    N2,
 }
 
 /// A physical MIDI control: channel (0-based, `0..=15`) + what it sends.
@@ -116,17 +164,41 @@ pub enum ZoneSub {
     Speed,
     Solo,
     Blackout,
+    /// One cell of the zone's scene grid (M9 Slice 3). Which of the cell's
+    /// parameters a control drives depends on its mode — see
+    /// [`MapTarget::resolve_path_for`].
+    Cell(u16),
 }
 
 impl ZoneSub {
-    /// The leaf under `/zone/{uuid}/` this control writes.
-    pub fn leaf(self) -> &'static str {
+    /// The leaf under `/zone/{uuid}/` this control writes, for a control in `mode`.
+    pub fn leaf(self, mode: ControlMode) -> String {
         match self {
-            ZoneSub::Dimmer => "dimmer",
-            ZoneSub::Speed => "speed",
-            ZoneSub::Solo => "solo",
-            ZoneSub::Blackout => "blackout",
+            ZoneSub::Dimmer => "dimmer".into(),
+            ZoneSub::Speed => "speed".into(),
+            ZoneSub::Solo => "solo".into(),
+            ZoneSub::Blackout => "blackout".into(),
+            ZoneSub::Cell(i) => format!("cell/{i}/{}", cell_leaf(mode)),
         }
+    }
+
+    /// A cell's feedback parameter (`cell/{i}/state`), which is what its LED shows
+    /// whatever the mode. `None` for other controls: they show what they write.
+    pub fn feedback_leaf(self) -> Option<String> {
+        match self {
+            ZoneSub::Cell(i) => Some(format!("cell/{i}/state")),
+            _ => None,
+        }
+    }
+}
+
+/// The cell parameter a pad in `mode` drives: latch/absolute → `launch`, trigger →
+/// `trigger` (restarts), toggle/momentary → `hold` (returns to what ran before).
+fn cell_leaf(mode: ControlMode) -> &'static str {
+    match mode {
+        ControlMode::Latch | ControlMode::Absolute => "launch",
+        ControlMode::Trigger => "trigger",
+        ControlMode::Toggle | ControlMode::Momentary => "hold",
     }
 }
 
@@ -135,12 +207,43 @@ impl MapTarget {
     /// ids in slot order. `None` when a slot is past the end (a mapping for zone 8 on
     /// a 4-zone Show simply does nothing).
     pub fn resolve_path(&self, zone_ids: &[Uuid]) -> Option<String> {
+        self.resolve_path_for(zone_ids, ControlMode::Absolute)
+    }
+
+    /// Like [`resolve_path`](Self::resolve_path), for a control in `mode` (a grid
+    /// cell's parameter depends on it).
+    pub fn resolve_path_for(&self, zone_ids: &[Uuid], mode: ControlMode) -> Option<String> {
         match self {
             MapTarget::Path(p) => Some(p.clone()),
             MapTarget::ZoneSlot { slot, sub } => zone_ids
                 .get(*slot as usize)
-                .map(|id| format!("/zone/{id}/{}", sub.leaf())),
+                .map(|id| format!("/zone/{id}/{}", sub.leaf(mode))),
         }
+    }
+
+    /// The path this target's LED shows, if it differs from what it writes (a grid
+    /// cell shows its `state`).
+    pub fn feedback_path(&self, zone_ids: &[Uuid]) -> Option<String> {
+        match self {
+            MapTarget::Path(_) => None,
+            MapTarget::ZoneSlot { slot, sub } => {
+                let leaf = sub.feedback_leaf()?;
+                zone_ids
+                    .get(*slot as usize)
+                    .map(|id| format!("/zone/{id}/{leaf}"))
+            }
+        }
+    }
+
+    /// Whether this is a scene-grid cell.
+    pub fn is_cell(&self) -> bool {
+        matches!(
+            self,
+            MapTarget::ZoneSlot {
+                sub: ZoneSub::Cell(_),
+                ..
+            }
+        )
     }
 }
 
@@ -153,8 +256,18 @@ pub enum ControlMode {
     Absolute,
     /// Each press (note-on, or a CC rising above 0) flips the target between off and
     /// on; releases are ignored. The mode for a pad/button driving a latching
-    /// parameter (zone solo / mute), whose LED then shows the state (Slice 2).
+    /// parameter (zone solo / mute), whose LED then shows the state (Slice 2). On a
+    /// grid cell: one tap runs it, the next returns to what ran before.
     Toggle,
+    /// A press makes the target on and it stays: on a grid cell, the cell becomes the
+    /// zone's content, exactly like clicking it on screen (Slice 3).
+    Latch,
+    /// A press is one instantaneous event; how long it is held does not matter. On a
+    /// grid cell it runs the cell and restarts its effect from the beginning.
+    Trigger,
+    /// On while held, off on release. On a grid cell: runs while held, and the zone
+    /// returns to what ran before on release (a "flash").
+    Momentary,
 }
 
 /// Shaping of the incoming normalized value (`0..=1` → `0..=1`).
@@ -320,6 +433,7 @@ mod tests {
             target,
             mode: ControlMode::Absolute,
             curve: ResponseCurve::Linear,
+            led: None,
         }
     }
 
@@ -413,5 +527,55 @@ mod tests {
         }
         assert!(ResponseCurve::Exponential { gamma: 2.0 }.apply(0.5) < 0.5);
         assert!(ResponseCurve::Logarithmic { gamma: 2.0 }.apply(0.5) > 0.5);
+    }
+
+    #[test]
+    fn cells_resolve_by_mode_and_show_their_state() {
+        let ids = [Uuid::new_v4()];
+        let cell = MapTarget::ZoneSlot {
+            slot: 0,
+            sub: ZoneSub::Cell(4),
+        };
+        let at = |mode| cell.resolve_path_for(&ids, mode).unwrap();
+        let z = ids[0];
+        assert_eq!(at(ControlMode::Latch), format!("/zone/{z}/cell/4/launch"));
+        assert_eq!(
+            at(ControlMode::Trigger),
+            format!("/zone/{z}/cell/4/trigger")
+        );
+        assert_eq!(at(ControlMode::Toggle), format!("/zone/{z}/cell/4/hold"));
+        assert_eq!(at(ControlMode::Momentary), format!("/zone/{z}/cell/4/hold"));
+        assert_eq!(
+            cell.feedback_path(&ids).unwrap(),
+            format!("/zone/{z}/cell/4/state")
+        );
+        assert!(MapTarget::Path("/master/dimmer".into())
+            .feedback_path(&ids)
+            .is_none());
+    }
+
+    #[test]
+    fn led_style_and_cell_targets_roundtrip() {
+        let mut m = ControllerMappings::new("t");
+        m.bind(MidiMapping {
+            control: MidiControl {
+                channel: 0,
+                kind: ControlKind::Note(8),
+            },
+            target: MapTarget::ZoneSlot {
+                slot: 1,
+                sub: ZoneSub::Cell(2),
+            },
+            mode: ControlMode::Momentary,
+            curve: ResponseCurve::Linear,
+            led: Some(LedStyle {
+                on: Some(5),
+                idle: Some(7),
+                animation: LedAnimation::Blink(LedRate::N8),
+            }),
+        });
+        let json = save_mappings(&m).unwrap();
+        assert!(json.contains("\"blink\": \"n8\""), "{json}");
+        assert_eq!(load_mappings(&json).unwrap(), m);
     }
 }

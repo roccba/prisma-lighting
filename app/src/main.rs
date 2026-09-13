@@ -19,9 +19,9 @@ use prisma_editor::{
     FixtureLibrary, FixtureType, PatchDraft, PlacementSpec, PreviewRun, SelectionAggregate,
 };
 use prisma_engine::{
-    load_mappings, load_show, save_mappings, save_show, Cell, ControllerMappings, Engine,
-    EngineConfig, EngineHandle, Layer, MapTarget, MidiMapping, MidiNotice, MidiRuntime, ParamSet,
-    Show, Source, ZoneLiveReadout, ZoneShow,
+    load_mappings, load_show, save_mappings, save_show, Cell, CellHost, ControlMode,
+    ControllerMappings, Engine, EngineConfig, EngineHandle, Layer, LedStyle, MapTarget,
+    MidiMapping, MidiNotice, MidiRuntime, ParamSet, Show, Source, ZoneLiveReadout, ZoneShow,
 };
 use prisma_midi::io::{input_port_names, MidiInputLink, MidiIoError, MidiOutputLink};
 use prisma_midi::{DeviceProfile, APC40_KEYWORDS};
@@ -860,6 +860,9 @@ fn main_new_show(app: AppHandle) -> Result<(), String> {
             drop(guard);
             *state.draft.lock().unwrap() = PatchDraft::new(show.patch.clone());
             *state.show.lock().unwrap() = show;
+            if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+                refresh_all_cells(engine);
+            }
             write_last_show(&state.last_show_file, None);
             let _ = app.emit("layout-changed", ());
             Ok(())
@@ -900,6 +903,9 @@ fn main_open_show(app: AppHandle, path: String) -> Result<(), String> {
             // opened next, shows this rig), then tell the main window to re-fetch.
             *state.draft.lock().unwrap() = PatchDraft::new(show.patch.clone());
             *state.show.lock().unwrap() = show;
+            if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+                refresh_all_cells(engine);
+            }
             // Remember it so the next launch reopens this show.
             write_last_show(&state.last_show_file, Some(Path::new(&path)));
             let _ = app.emit("layout-changed", ());
@@ -955,6 +961,46 @@ fn editor_open_from(state: State<AppState>, path: String) -> Result<EditorState,
 /// the running show's embedded patch — the single source of truth for the zone set, so
 /// after a hot patch edit (add/remove zone) the slots the engine's `LiveParams` use and
 /// the app's addressing stay in lockstep with no separate list to keep in sync.
+/// The app's side of grid-cell playback (M9 Slice 3): the engine's cell controller plays
+/// cells from the Parameter Tree (pads, clicks — every transport the same way) and asks
+/// here what a cell holds; it reports back which cell each zone is running, which this
+/// folds into the show and announces to the UI (`cells-changed`, the zone id).
+///
+/// Lock discipline: it only ever takes the `show` lock, never `engine`, so an engine
+/// recompile (which holds `engine` while it stops the controller) cannot deadlock on it.
+struct AppCellHost {
+    app: AppHandle,
+}
+
+impl CellHost for AppCellHost {
+    fn cell_effect(&self, zone: Uuid, cell: usize) -> Option<(String, ParamSet)> {
+        let state = self.app.try_state::<AppState>()?;
+        let show = state.show.lock().unwrap();
+        let layer = show.zone(zone)?.grid.get(cell)?.layers.first()?;
+        match &layer.source {
+            Source::Shader { effect_id, params } => Some((effect_id.clone(), params.clone())),
+        }
+    }
+
+    fn active_changed(&self, zone: Uuid, active: Option<usize>) {
+        if let Some(state) = self.app.try_state::<AppState>() {
+            let mut show = state.show.lock().unwrap();
+            if let Some(zs) = show.zones.iter_mut().find(|z| z.zone_id == zone) {
+                zs.active = active;
+            }
+        }
+        let _ = self.app.emit("cells-changed", zone);
+    }
+}
+
+/// Re-publish every zone's cell states — after the show document was swapped under a
+/// running engine (open / new), whose controller started against the previous one.
+fn refresh_all_cells(engine: &EngineHandle) {
+    for slot in 0..engine.zone_count() {
+        engine.refresh_cells(slot);
+    }
+}
+
 fn zone_slot(state: &AppState, id: Uuid) -> Option<usize> {
     state
         .show
@@ -1240,6 +1286,9 @@ struct MidiStatus {
     /// The target waiting for a control, if Learn is armed.
     learning: Option<MapTarget>,
     mappings: Vec<MidiMapping>,
+    /// The connected device's LED palette as `#rrggbb`, index = colour value; empty
+    /// when the device has none (colour choices are then hidden).
+    palette: Vec<String>,
 }
 
 #[tauri::command]
@@ -1267,6 +1316,12 @@ fn midi_status(state: State<AppState>) -> MidiStatus {
         error: state.midi_error.lock().unwrap().clone().or(list_error),
         learning: state.midi.learning(),
         mappings: state.midi.profile().mappings,
+        palette: state
+            .midi
+            .device()
+            .palette()
+            .map(|p| p.iter().map(|c| format!("#{c:06x}")).collect())
+            .unwrap_or_default(),
     }
 }
 
@@ -1304,15 +1359,37 @@ fn midi_learn_cancel(state: State<AppState>) {
 fn midi_unmap(app: AppHandle, target: MapTarget) -> Result<Vec<MidiMapping>, String> {
     let state = app.state::<AppState>();
     if let Some(profile) = state.midi.unmap(&target) {
-        let json = save_mappings(&profile).map_err(|e| e.to_string())?;
-        let path = app
-            .path()
-            .app_config_dir()
-            .map_err(|e| e.to_string())?
-            .join(MAPPINGS_FILE);
-        persist_text(&path, &json)?;
+        persist_mappings(&app, &profile)?;
     }
     Ok(state.midi.profile().mappings)
+}
+
+/// Change a mapped control's pad style and LED look (the Learn right-click menu, M9
+/// Slice 3), persist the profile, and return the mappings.
+#[tauri::command]
+fn midi_configure(
+    app: AppHandle,
+    target: MapTarget,
+    mode: ControlMode,
+    led: Option<LedStyle>,
+) -> Result<Vec<MidiMapping>, String> {
+    let state = app.state::<AppState>();
+    let profile = state
+        .midi
+        .configure(&target, mode, led)
+        .ok_or("that control is not mapped")?;
+    persist_mappings(&app, &profile)?;
+    Ok(profile.mappings)
+}
+
+fn persist_mappings(app: &AppHandle, profile: &ControllerMappings) -> Result<(), String> {
+    let json = save_mappings(profile).map_err(|e| e.to_string())?;
+    let path = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?
+        .join(MAPPINGS_FILE);
+    persist_text(&path, &json)
 }
 
 /// The operator's controller profile, in the per-user app-config dir (CLAUDE.md §4.6 —
@@ -1505,11 +1582,13 @@ fn main_assign_cell(
             return grid_dto(zs);
         }
         zs.grid[index] = Cell::single(Layer::shader(effect_id.clone(), params.clone()));
-        zs.active = Some(index);
         grid_dto(zs)
     };
+    // Play it through the cell's `trigger` target (restart: the cell may already be the
+    // running one, now with a different effect). The controller reads the new content
+    // from the show, runs it and reports the running cell back (`cells-changed`).
     if let Some(engine) = state.engine.lock().unwrap().as_ref() {
-        engine.trigger_zone_effect(slot, zone, &effect_id, &params);
+        engine.trigger_cell(slot, index);
     }
     dto
 }
@@ -1521,29 +1600,17 @@ fn main_trigger_cell(state: State<AppState>, zone: Uuid, index: usize) -> Vec<Ce
     let Some(slot) = zone_slot(&state, zone) else {
         return Vec::new();
     };
-    let (dto, effect) = {
-        let mut show = state.show.lock().unwrap();
-        let Some(zs) = show.zones.iter_mut().find(|z| z.zone_id == zone) else {
+    let dto = {
+        let show = state.show.lock().unwrap();
+        let Some(zs) = show.zone(zone) else {
             return Vec::new();
         };
-        if index >= zs.grid.len() {
-            return grid_dto(zs);
-        }
-        zs.active = Some(index);
-        let effect = zs.grid[index].layers.first().map(|l| match &l.source {
-            Source::Shader { effect_id, params } => (effect_id.clone(), params.clone()),
-        });
-        (grid_dto(zs), effect)
+        grid_dto(zs)
     };
+    // The same tree target a pad in latch mode fires (M9): one way to play a cell. The
+    // running cell updates asynchronously and arrives as `cells-changed`.
     if let Some(engine) = state.engine.lock().unwrap().as_ref() {
-        match effect {
-            Some((id, params)) => {
-                engine.trigger_zone_effect(slot, zone, &id, &params);
-            }
-            None => {
-                engine.clear_zone_effect(slot);
-            }
-        }
+        engine.fire_cell(slot, index);
     }
     dto
 }
@@ -1564,14 +1631,14 @@ fn main_clear_cell(state: State<AppState>, zone: Uuid, index: usize) -> Vec<Cell
         }
         zs.grid[index] = Cell::empty();
         let was_active = zs.active == Some(index);
-        if was_active {
-            zs.active = None;
-        }
         (grid_dto(zs), was_active)
     };
-    if was_active {
-        if let Some(engine) = state.engine.lock().unwrap().as_ref() {
-            engine.clear_zone_effect(slot);
+    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        if was_active {
+            // Re-run the now-empty running cell: the zone stops, and its state follows.
+            engine.trigger_cell(slot, index);
+        } else {
+            engine.refresh_cells(slot); // its pad goes dark
         }
     }
     dto
@@ -1730,6 +1797,7 @@ fn main() {
             midi_learn_arm,
             midi_learn_cancel,
             midi_unmap,
+            midi_configure,
             close_splash,
         ])
         .plugin(tauri_plugin_dialog::init())
@@ -1875,6 +1943,13 @@ fn main() {
                 midi_config_path,
                 midi_error: Mutex::new(None),
             });
+            // Grid cells play from the Parameter Tree (M9 Slice 3); the engine keeps this
+            // host across every recompile. Set after `manage` — the host reads the state.
+            if let Some(engine) = app.state::<AppState>().engine.lock().unwrap().as_ref() {
+                engine.set_cell_host(Arc::new(AppCellHost {
+                    app: app.handle().clone(),
+                }));
+            }
             // Open the MIDI input off the boot path's critical section: a missing device
             // just leaves the link empty (the device manager can reconnect later).
             connect_midi(&app.state::<AppState>());

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { assignCell, clearCell, triggerCell, zoneGrid, type CellInfo } from "./api";
 import { EffectPicker } from "./EffectPicker";
+import { LearnTarget } from "./midiLearn";
 
 // The scene grid of the SELECTED zone (M8-SPEC §3.3): a grid of assignable cells (the
 // zone's "scenes"). Empty cells open the effect picker; assigned cells trigger — which
@@ -11,12 +13,14 @@ import { EffectPicker } from "./EffectPicker";
 
 interface SceneGridProps {
   zoneId: string;
+  /** The zone's position in the show — what a MIDI pad maps to (`zone_slot`). */
+  slot: number;
   /** Called after the zone's active cell changes (fire / assign / clear), so the
    *  effect parameter panel can re-fetch the now-active effect. */
   onActiveChange?: () => void;
 }
 
-export function SceneGrid({ zoneId, onActiveChange }: SceneGridProps) {
+export function SceneGrid({ zoneId, slot, onActiveChange }: SceneGridProps) {
   const [cells, setCells] = useState<CellInfo[]>([]);
   const [pickerFor, setPickerFor] = useState<number | null>(null);
 
@@ -26,6 +30,21 @@ export function SceneGrid({ zoneId, onActiveChange }: SceneGridProps) {
       .catch(() => setCells([]));
     setPickerFor(null);
   }, [zoneId]);
+
+  // The running cell changes asynchronously (M9): a click, a pad, or a flash releasing all
+  // go through the engine's cell controller, which reports back per zone. Re-read then.
+  useEffect(() => {
+    const un = listen<string>("cells-changed", (e) => {
+      if (e.payload !== zoneId) return;
+      zoneGrid(zoneId)
+        .then(setCells)
+        .catch(() => {});
+      onActiveChange?.();
+    });
+    return () => {
+      un.then((f) => f()).catch(() => {});
+    };
+  }, [zoneId, onActiveChange]);
 
   const onCellClick = (cell: CellInfo) => {
     if (cell.effect_id) {
@@ -66,8 +85,13 @@ export function SceneGrid({ zoneId, onActiveChange }: SceneGridProps) {
     <div className="pr-grid-wrap">
       <div className="pr-grid">
         {cells.map((cell) => (
-          <div
+          <LearnTarget
             key={cell.index}
+            target={{ zone_slot: { slot, sub: { cell: cell.index } } }}
+            name={`Celda ${cell.index + 1}`}
+            className="pr-learn-cell"
+          >
+          <div
             className={`pr-cell ${cell.effect_id ? "is-assigned" : "is-empty"}${cell.active ? " is-active" : ""}`}
             onPointerDown={() => onCellClick(cell)}
             role="button"
@@ -90,6 +114,7 @@ export function SceneGrid({ zoneId, onActiveChange }: SceneGridProps) {
               </button>
             )}
           </div>
+          </LearnTarget>
         ))}
       </div>
       {pickerFor !== null && <EffectPicker onPick={onPick} onClose={() => setPickerFor(null)} />}

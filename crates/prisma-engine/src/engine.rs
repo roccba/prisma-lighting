@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use half::f16;
@@ -13,7 +13,7 @@ use uuid::Uuid;
 use prisma_core::show::Show;
 use prisma_core::source::{priority, SourceId};
 use prisma_core::time::SystemClock;
-use prisma_core::tree::ParameterTree;
+use prisma_core::tree::{ParameterTree, WriteOutcome};
 use prisma_core::zone::ZoneStates;
 use prisma_core::ControllerMappings;
 use prisma_core::MasterClock;
@@ -38,14 +38,13 @@ use prisma_preview::{preview_handoff, PreviewDescriptor, PreviewPlan};
 
 use prisma_core::show::ParamSet;
 
-use prisma_render::effect::EffectInstance;
 use prisma_render::live_params::LiveParams;
-use prisma_render::manifest_by_id;
 use prisma_render::overlap::OverlapCounter;
 use prisma_render::render_loop::{run_render_loop, RenderLoop, RenderLoopConfig, RenderStats};
 use prisma_render::sample::{SamplePlan, Sampler};
 use prisma_render::{Gpu, GpuError};
 
+use crate::cells::{register_cells, CellController, CellHost, ZoneCells};
 use crate::config::EngineConfig;
 use crate::content::IdleContent;
 use crate::zone_content::{
@@ -149,6 +148,15 @@ pub struct EngineHandle {
     /// outlives any one tree — a recompile unbinds it from the old tree and binds it
     /// to the new one, so open hardware ports never notice.
     midi: MidiRuntime,
+    /// Each zone's grid cells as tree targets (M9 Slice 3), by slot. Empty under
+    /// `IdleContent`.
+    cells: Vec<ZoneCells>,
+    /// The show's running cell per zone at assembly — where the cell controller starts.
+    cell_active: Vec<Option<usize>>,
+    /// The Show's owner, carried across recompiles like `midi`.
+    cell_host: Mutex<Option<Arc<dyn CellHost>>>,
+    /// Plays cells from their tree parameters; running once a host is set.
+    cell_controller: Mutex<Option<CellController>>,
     live: LiveParams,
     generation: LayoutGeneration,
     /// Kept so shutdown can release the GPU **last**, after the render thread that
@@ -212,7 +220,14 @@ impl Engine {
     pub fn start(patch: Patch, config: EngineConfig) -> Result<EngineHandle, EngineError> {
         // --- GPU: brought up once here (setup path, blocks), shared by reference. ---
         let gpu = Arc::new(Gpu::new(config.adapter)?);
-        Self::assemble(patch, config, gpu, ContentSource::Idle, new_midi_runtime())
+        Self::assemble(
+            patch,
+            config,
+            gpu,
+            ContentSource::Idle,
+            new_midi_runtime(),
+            None,
+        )
     }
 
     /// Like [`start`](Engine::start), but runs a loaded **Show**: the engine renders
@@ -229,6 +244,7 @@ impl Engine {
             gpu,
             ContentSource::Show(Box::new(show)),
             new_midi_runtime(),
+            None,
         )
     }
 
@@ -244,6 +260,7 @@ impl Engine {
         gpu: Arc<Gpu>,
         content: ContentSource,
         midi: MidiRuntime,
+        cell_host: Option<Arc<dyn CellHost>>,
     ) -> Result<EngineHandle, EngineError> {
         // --- Compile the patch: one layout generation shared by every consumer. ---
         let index = patch.compile()?;
@@ -277,11 +294,20 @@ impl Engine {
         //     compile ONCE at load, never per frame — then moved into the render
         //     thread. A show also seeds the tree with its saved live state so it
         //     lights up instead of sitting at engine-default dimmers (dark). ---
+        //     A show also exposes its grid cells as tree targets (M9 Slice 3). ---
+        let mut cells: Vec<ZoneCells> = Vec::new();
+        let mut cell_active: Vec<Option<usize>> = Vec::new();
         let (zone_content, zone_commands): (Option<ZoneCompositor>, Option<ZoneCommandSender>) =
             match content {
                 ContentSource::Idle => (None, None),
                 ContentSource::Show(show) => {
                     seed_live_from_show(&tree, &live, &patch, &show);
+                    cells = register_cells(&tree, &patch, &show);
+                    cell_active = patch
+                        .zones
+                        .iter()
+                        .map(|z| show.zone(z.id).and_then(|zs| zs.active))
+                        .collect();
                     let effects = build_zone_effects(&gpu, &tree, &patch, &index, &show);
                     let compositor = ZoneCompositor::new(&gpu, &patch, &index, effects);
                     let sender = compositor.command_sender();
@@ -456,14 +482,19 @@ impl Engine {
 
         // --- MIDI (M9): bind the transport to this tree, zones in slot order (the same
         //     `Patch::zones` order `LiveParams` uses), once every parameter exists. ---
+        midi.set_zone_colours(patch.zones.iter().map(|z| z.display_color).collect());
         midi.bind(
             Arc::clone(&tree),
             patch.zones.iter().map(|z| z.id).collect(),
         );
 
-        Ok(EngineHandle {
+        let handle = EngineHandle {
             tree,
             midi,
+            cells,
+            cell_active,
+            cell_host: Mutex::new(None),
+            cell_controller: Mutex::new(None),
             live,
             generation,
             gpu,
@@ -480,7 +511,11 @@ impl Engine {
                 output_stop,
                 preview_stop,
             }),
-        })
+        };
+        if let Some(host) = cell_host {
+            handle.set_cell_host(host);
+        }
+        Ok(handle)
     }
 }
 
@@ -624,7 +659,7 @@ impl EngineHandle {
     }
 
     /// Trigger an effect on a zone (M8 step 4 — firing a scene cell). Builds the
-    /// [`EffectInstance`] **here**, on the caller's thread (a pipeline compile, done
+    /// `EffectInstance` **here**, on the caller's thread (a pipeline compile, done
     /// off the render thread by design), then enqueues the swap through the
     /// frame-boundary command queue (M8-PARTA §3) so it applies whole at the next
     /// frame — the mini-preview and the wire follow. Registers the effect's params
@@ -645,22 +680,72 @@ impl EngineHandle {
         if slot >= self.live.zone_count() {
             return false;
         }
-        let Some(manifest) = manifest_by_id(effect_id) else {
-            return false;
-        };
-        let prefix = format!("/zone/{zone_id}/layer/0");
-        let effect = EffectInstance::new(&self.gpu, &self.tree, &prefix, &manifest);
-        let src = ui_control_source();
-        for (name, value) in params.iter() {
-            self.tree
-                .write_path(&format!("{prefix}/param/{name}"), value, src);
+        crate::cells::fire_zone_effect(
+            &self.gpu,
+            &self.tree,
+            sender,
+            slot,
+            zone_id,
+            effect_id,
+            params,
+            ui_control_source(),
+        )
+    }
+
+    /// Hand the engine the Show's owner and start playing grid cells from the tree:
+    /// `/zone/{id}/cell/{i}/launch|trigger|hold` (M9 Slice 3). Replaces any previous
+    /// host; kept across recompiles. A no-op for content without a grid (idle).
+    pub fn set_cell_host(&self, host: Arc<dyn CellHost>) {
+        let mut controller = self.cell_controller.lock().unwrap();
+        *controller = None; // stop the old one before a new one reads the same tree
+        *self.cell_host.lock().unwrap() = Some(Arc::clone(&host));
+        if let Some(sender) = self.zone_commands.clone() {
+            *controller = Some(CellController::start(
+                Arc::clone(&self.tree),
+                Arc::clone(&self.gpu),
+                sender,
+                self.cells.clone(),
+                self.cell_active.clone(),
+                host,
+            ));
         }
-        sender.set_zone_effect(slot, Some(effect))
+    }
+
+    /// Latch a zone's cell (a UI click): the same tree target a pad in latch mode
+    /// fires, so every transport plays cells one way. `false` if no such cell.
+    pub fn fire_cell(&self, slot: usize, cell: usize) -> bool {
+        match self.cells.get(slot).and_then(|z| z.launch.get(cell)) {
+            Some(h) => self.tree.fire(h, ui_control_source()) == WriteOutcome::Accepted,
+            None => false,
+        }
+    }
+
+    /// Run a zone's cell from its start (the cell's `trigger` target): used when a cell's
+    /// content was just replaced, so the new effect plays even if that cell was already
+    /// the running one. `false` if no such cell.
+    pub fn trigger_cell(&self, slot: usize, cell: usize) -> bool {
+        match self.cells.get(slot).and_then(|z| z.trigger.get(cell)) {
+            Some(h) => self.tree.fire(h, ui_control_source()) == WriteOutcome::Accepted,
+            None => false,
+        }
+    }
+
+    /// Ask the cell controller to re-read which of a zone's cells hold an effect
+    /// (after the grid was edited), so pad LEDs follow.
+    pub fn refresh_cells(&self, slot: usize) {
+        if let Some(z) = self.cells.get(slot) {
+            self.tree.fire(&z.refresh, ui_control_source());
+        }
+    }
+
+    /// Stop the cell controller (before the tree or GPU it uses goes away).
+    fn stop_cells(&self) {
+        *self.cell_controller.lock().unwrap() = None;
     }
 
     /// Write one live parameter of a zone's active effect (M8 step 5 — the parameter
     /// panel). Targets `/zone/{zone_id}/layer/0/param/{name}` with a **normalized**
-    /// `0..=1` value, so the running [`EffectInstance`] picks it up on its next
+    /// `0..=1` value, so the running `EffectInstance` picks it up on its next
     /// wait-free read (§4.5) — the preview and the wire follow immediately, no
     /// re-trigger. A no-op if that path is not registered (the zone has no active
     /// effect, so nothing to drive). This is the `active` side of `selected ≠ active`,
@@ -769,8 +854,10 @@ impl EngineHandle {
             .inner
             .take()
             .expect("recompile: engine already torn down");
-        // MIDI first: stop writing the tree that is about to go away.
+        // MIDI and cells first: stop writing the tree that is about to go away.
         self.midi.unbind();
+        self.stop_cells();
+        let cell_host = self.cell_host.lock().unwrap().take();
         // Same teardown order as `shutdown`, minus the GPU release: joining render
         // drops its GPU clone, leaving this handle's Arc as the sole strong reference.
         running.render_stop.store(true, Ordering::Relaxed);
@@ -782,7 +869,7 @@ impl EngineHandle {
         // Keep the device alive for the fresh assembly; `self` (and its GPU Arc) drops
         // when this returns, but `gpu` carries the only remaining strong reference.
         let gpu = Arc::clone(&self.gpu);
-        Engine::assemble(patch, config, gpu, content, self.midi.clone())
+        Engine::assemble(patch, config, gpu, content, self.midi.clone(), cell_host)
     }
 
     /// Stop the engine cleanly, **in order**, and report the run.
@@ -811,8 +898,10 @@ impl EngineHandle {
             .take()
             .expect("shutdown: engine already torn down");
 
-        // 0. MIDI input stops reaching the tree (and releases its reference to it).
+        // 0. MIDI input and the cell controller stop reaching the tree (the controller
+        //    also holds a GPU reference, released here before the count below).
         self.midi.unbind();
+        self.stop_cells();
 
         // 1. Render.
         running.render_stop.store(true, Ordering::Relaxed);
@@ -858,6 +947,7 @@ impl Drop for EngineHandle {
     fn drop(&mut self) {
         if let Some(running) = self.inner.take() {
             self.midi.unbind();
+            self.stop_cells();
             running.render_stop.store(true, Ordering::Relaxed);
             let _ = running.render.join();
             running.output_stop.store(true, Ordering::Relaxed);

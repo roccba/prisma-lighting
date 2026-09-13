@@ -13,6 +13,9 @@
     "rgb": [{ "channel": 0, "first_note": 0, "last_note": 39 }],
     "rgb_on_colour": 9,
     "on_velocity": 1,
+    "palette": "apc40mk2-128",
+    "pulse_channels": [6, 7, 8, 9, 10],
+    "blink_channels": [11, 12, 13, 14, 15],
     "reaffirm_on_release": true
   }
 }

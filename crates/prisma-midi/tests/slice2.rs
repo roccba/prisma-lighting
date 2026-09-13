@@ -155,6 +155,7 @@ fn rgb_grid_pads_light_in_the_profile_colour() {
     let wire = Wire::default();
     let mut profile = ControllerMappings::new("t");
     profile.bind(MidiMapping {
+        led: None,
         control: note(0, 3),
         target: solo(0),
         mode: ControlMode::Toggle,
@@ -272,6 +273,7 @@ fn the_mode_handshake_goes_out_before_any_led() {
     let wire = Wire::default();
     let mut profile = ControllerMappings::new("t");
     profile.bind(MidiMapping {
+        led: None,
         control: note(0, 49),
         target: solo(0),
         mode: ControlMode::Toggle,

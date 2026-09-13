@@ -126,12 +126,14 @@ fn learn_binds_the_next_fader_and_it_drives_the_dimmer() {
 fn a_persisted_profile_follows_zone_slots_into_another_show() {
     let mut profile = ControllerMappings::new("portable");
     profile.bind(MidiMapping {
+        led: None,
         control: cc(0, 7),
         target: zone_dimmer(0),
         mode: Default::default(),
         curve: ResponseCurve::Linear,
     });
     profile.bind(MidiMapping {
+        led: None,
         control: cc(0, 14),
         target: MapTarget::Path("/master/dimmer".into()),
         mode: Default::default(),
@@ -206,6 +208,7 @@ fn absolute_semantics_curves_toggles_and_triggers() {
     let solo = format!("/zone/{}/solo", zones[0]);
     let mut profile = ControllerMappings::new("t");
     profile.bind(MidiMapping {
+        led: None,
         control: cc(0, 14),
         target: MapTarget::Path("/master/dimmer".into()),
         mode: Default::default(),
@@ -216,6 +219,7 @@ fn absolute_semantics_curves_toggles_and_triggers() {
         kind: ControlKind::Note(note),
     };
     profile.bind(MidiMapping {
+        led: None,
         control: pad(50),
         target: MapTarget::ZoneSlot {
             slot: 0,
@@ -225,6 +229,7 @@ fn absolute_semantics_curves_toggles_and_triggers() {
         curve: ResponseCurve::Linear,
     });
     profile.bind(MidiMapping {
+        led: None,
         control: pad(99),
         target: MapTarget::Path("/clock/tap".into()),
         mode: Default::default(),
@@ -365,6 +370,7 @@ fn applied_notice_names_the_zone_the_control_drives() {
         (cc(0, 14), MapTarget::Path("/master/dimmer".into())),
     ] {
         profile.bind(MidiMapping {
+            led: None,
             control,
             target,
             mode: Default::default(),

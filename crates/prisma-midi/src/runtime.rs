@@ -41,7 +41,7 @@ use uuid::Uuid;
 
 use crate::feedback::{send_led, Feedback, MidiOut};
 use crate::message::{EventKind, MidiEvent};
-use crate::profile::DeviceProfile;
+use crate::profile::{DeviceProfile, LedLevel};
 use crate::resolver::Binding;
 
 /// Something the runtime reports to its host (the app), off the lock.
@@ -76,6 +76,8 @@ struct State {
     out: Option<MidiOut>,
     device: Arc<DeviceProfile>,
     feedback: Option<Feedback>,
+    /// The running show's zone display colours by slot (a cell's default LED colour).
+    zone_colours: Arc<Vec<[u8; 3]>>,
     /// Note controls the last feedback drove, kept across an unbind so a rebuild can
     /// darken the ones no longer mapped.
     lit: HashSet<MidiControl>,
@@ -110,14 +112,20 @@ impl State {
             return;
         };
         let targets = binding.feedback_targets();
-        let now: HashSet<MidiControl> = targets.iter().map(|(c, _)| *c).collect();
+        let now: HashSet<MidiControl> = targets.iter().map(|t| t.control).collect();
         for gone in self.lit.difference(&now) {
-            if let Some(bytes) = self.device.led_bytes(*gone, false) {
+            if let Some(bytes) = self.device.led_bytes(*gone, LedLevel::Off, None, None) {
                 out(&bytes);
             }
         }
         self.lit = now;
-        self.feedback = Feedback::start(tree, targets, Arc::clone(&self.device), out);
+        self.feedback = Feedback::start(
+            tree,
+            targets,
+            Arc::clone(&self.device),
+            Arc::clone(&self.zone_colours),
+            out,
+        );
     }
 }
 
@@ -139,6 +147,7 @@ impl MidiRuntime {
                 out: None,
                 device: Arc::new(DeviceProfile::generic()),
                 feedback: None,
+                zone_colours: Arc::new(Vec::new()),
                 lit: HashSet::new(),
             })),
             listener: Arc::new(Mutex::new(None)),
@@ -190,6 +199,35 @@ impl MidiRuntime {
         s.restart_feedback();
     }
 
+    /// The running show's zone display colours, by slot: a grid cell's LED defaults
+    /// to its zone's colour. Set before [`bind`](Self::bind) to avoid a double repaint.
+    pub fn set_zone_colours(&self, colours: Vec<[u8; 3]>) {
+        let mut s = self.state.lock();
+        s.feedback = None;
+        s.zone_colours = Arc::new(colours);
+        s.restart_feedback();
+    }
+
+    /// Change how a mapped control behaves and lights (the Learn right-click menu).
+    /// Returns the updated profile to persist, or `None` if `target` is not mapped.
+    pub fn configure(
+        &self,
+        target: &MapTarget,
+        mode: ControlMode,
+        led: Option<prisma_core::LedStyle>,
+    ) -> Option<ControllerMappings> {
+        let mut s = self.state.lock();
+        let mapping = s
+            .profile
+            .mappings
+            .iter_mut()
+            .find(|m| &m.target == target)?;
+        mapping.mode = mode;
+        mapping.led = led;
+        s.rebuild();
+        Some(s.profile.clone())
+    }
+
     /// The connected device's profile.
     pub fn device(&self) -> DeviceProfile {
         (*self.state.lock().device).clone()
@@ -202,7 +240,7 @@ impl MidiRuntime {
         s.feedback = None;
         if let Some(out) = s.out.clone() {
             for control in std::mem::take(&mut s.lit) {
-                if let Some(bytes) = s.device.led_bytes(control, false) {
+                if let Some(bytes) = s.device.led_bytes(control, LedLevel::Off, None, None) {
                     out(&bytes);
                 }
             }
@@ -293,6 +331,10 @@ impl MidiRuntime {
 /// latches it; `Absolute` would switch it back off on the pad's next velocity-less
 /// event), `Absolute` for everything else.
 fn learn_mode(s: &State, target: &MapTarget) -> ControlMode {
+    // A grid pad starts as a latch: a tap runs the cell, like clicking it on screen.
+    if target.is_cell() {
+        return ControlMode::Latch;
+    }
     let kind = s.tree.as_ref().and_then(|(tree, zones)| {
         let path = target.resolve_path(zones)?;
         tree.resolve(&path).map(|h| h.kind())
@@ -312,8 +354,8 @@ fn reaffirm_on_release(s: &State, event: &MidiEvent) {
     let (Some(out), Some(binding), Some(control)) = (&s.out, &s.binding, event.control()) else {
         return;
     };
-    if let Some(handle) = binding.handle_of(control) {
-        send_led(out, &s.device, control, handle);
+    if let Some(target) = binding.feedback_of(control) {
+        send_led(out, &s.device, &target, &s.zone_colours);
     }
 }
 
@@ -328,6 +370,7 @@ fn learn_capture(s: &mut State, event: &MidiEvent) -> Option<MidiNotice> {
     }
     let target = s.learn.take()?;
     let mapping = MidiMapping {
+        led: None,
         control: event.control()?,
         mode: learn_mode(s, &target),
         target,

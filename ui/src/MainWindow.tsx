@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -56,6 +56,8 @@ function MainWindowBody() {
   // the effect parameter panel re-fetches the now-active effect and its values. The
   // large preview follows the stream on its own and needs no signal.
   const [gridRev, setGridRev] = useState(0);
+  // Stable, so SceneGrid's `cells-changed` subscription is not torn down every render.
+  const bumpGrid = useCallback(() => setGridRev((r) => r + 1), []);
 
   const refreshZones = () =>
     mainZones()
@@ -352,7 +354,8 @@ function MainWindowBody() {
               {selectedZone ? (
                 <SceneGrid
                   zoneId={selectedZone.id}
-                  onActiveChange={() => setGridRev((r) => r + 1)}
+                  slot={zones.findIndex((z) => z.id === selectedZone.id)}
+                  onActiveChange={bumpGrid}
                 />
               ) : (
                 <div className="pr-placeholder-body">Seleccioná una zona</div>

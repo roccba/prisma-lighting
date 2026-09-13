@@ -393,8 +393,22 @@ export const setParam = (zone: string, name: string, value: number) =>
 
 // --- MIDI (M9 Slice 1): input device + MIDI Learn ---
 
-/** The per-zone controls a mapping can address by position (zone slot). */
-export type ZoneSub = "dimmer" | "speed" | "solo" | "blackout";
+/** The per-zone controls a mapping can address by position (zone slot); `{ cell: i }` is
+ *  cell i of the zone's scene grid. */
+export type ZoneSub = "dimmer" | "speed" | "solo" | "blackout" | { cell: number };
+
+/** How a control acts. Faders are `absolute`; buttons/pads use the other four. */
+export type ControlMode = "absolute" | "toggle" | "latch" | "trigger" | "momentary";
+
+export type LedRate = "n24" | "n16" | "n8" | "n4" | "n2";
+export type LedAnimation = "solid" | { pulse: LedRate } | { blink: LedRate };
+
+/** The operator's LED look for one control: palette colour indices + motion. */
+export interface LedStyle {
+  on?: number;
+  idle?: number;
+  animation?: LedAnimation;
+}
 
 /** Where a MIDI mapping writes: a literal tree path (globals such as `/master/dimmer`) or
  *  a zone control by slot (slot 0 = the first zone of whichever show is running). The
@@ -410,8 +424,9 @@ export interface MidiControl {
 export interface MidiMapping {
   control: MidiControl;
   target: MapTarget;
-  mode: string;
+  mode: ControlMode;
   curve: unknown;
+  led?: LedStyle | null;
 }
 
 export interface MidiStatus {
@@ -427,6 +442,8 @@ export interface MidiStatus {
   error: string | null;
   learning: MapTarget | null;
   mappings: MidiMapping[];
+  /** Device LED palette as `#rrggbb` (index = colour value); empty if none. */
+  palette: string[];
 }
 
 export const midiStatus = () => invoke<MidiStatus>("midi_status");
@@ -435,6 +452,8 @@ export const midiReconnect = () => invoke<MidiStatus>("midi_reconnect");
 export const midiLearnArm = (target: MapTarget) => invoke<void>("midi_learn_arm", { target });
 export const midiLearnCancel = () => invoke<void>("midi_learn_cancel");
 export const midiUnmap = (target: MapTarget) => invoke<MidiMapping[]>("midi_unmap", { target });
+export const midiConfigure = (target: MapTarget, mode: ControlMode, led: LedStyle | null) =>
+  invoke<MidiMapping[]>("midi_configure", { target, mode, led });
 
 /** Structural equality of two targets (they are small plain objects). */
 export const sameTarget = (a: MapTarget, b: MapTarget) => JSON.stringify(a) === JSON.stringify(b);

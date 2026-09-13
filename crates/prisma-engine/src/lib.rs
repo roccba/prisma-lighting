@@ -31,11 +31,13 @@
 //!   is M7/S7; the seam is the Parameter Tree and the output stage, both already
 //!   owned here.
 
+pub mod cells;
 pub mod config;
 pub mod content;
 pub mod engine;
 pub mod zone_content;
 
+pub use cells::{CellHost, CELL_ASSIGNED, CELL_EMPTY, CELL_RUNNING};
 pub use config::EngineConfig;
 pub use content::IdleContent;
 pub use engine::{Engine, EngineError, EngineHandle, ShutdownReport, ZoneLiveReadout};
@@ -47,7 +49,8 @@ pub use prisma_core::show::{
 };
 // The MIDI transport (M9) and its document types, re-exported for the app shell.
 pub use prisma_core::mappings::{
-    load_mappings, save_mappings, ControllerMappings, MapTarget, MidiControl, MidiMapping, ZoneSub,
+    load_mappings, save_mappings, ControlMode, ControllerMappings, LedAnimation, LedRate, LedStyle,
+    MapTarget, MidiControl, MidiMapping, ZoneSub,
 };
 pub use prisma_midi::{MidiNotice, MidiRuntime};
 pub use zone_content::{

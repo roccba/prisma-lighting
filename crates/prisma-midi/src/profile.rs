@@ -13,7 +13,7 @@
 
 use serde::Deserialize;
 
-use prisma_core::{ControlKind, MidiControl};
+use prisma_core::{ControlKind, LedAnimation, LedRate, LedStyle, MidiControl};
 
 use crate::message::{note_off_bytes, note_on_bytes};
 
@@ -86,6 +86,16 @@ pub struct LedSpec {
     pub rgb_on_colour: u8,
     /// Velocity that lights a single-colour LED.
     pub on_velocity: u8,
+    /// The RGB palette velocities index, if the device has one (`"apc40mk2-128"`).
+    #[serde(default)]
+    pub palette: Option<String>,
+    /// MIDI channel of a pulsing / blinking RGB LED message, one per [`LedRate`] from
+    /// 1/24 to 1/2 (APC40 mkII: channels 6–10 pulse, 11–15 blink; 0 is static). Empty
+    /// = the device cannot animate, the LED is static.
+    #[serde(default)]
+    pub pulse_channels: Vec<u8>,
+    #[serde(default)]
+    pub blink_channels: Vec<u8>,
     /// Re-send a control's LED on every note-off: the APC40 mkII reverts a pad's LED
     /// on the physical release, whatever the host last sent (makai `middleware.js`).
     #[serde(default)]
@@ -171,6 +181,9 @@ impl DeviceProfile {
                 rgb: Vec::new(),
                 rgb_on_colour: 0,
                 on_velocity: 127,
+                palette: None,
+                pulse_channels: Vec::new(),
+                blink_channels: Vec::new(),
                 reaffirm_on_release: false,
             },
         }
@@ -189,25 +202,93 @@ impl DeviceProfile {
             .unwrap_or_else(DeviceProfile::generic)
     }
 
-    /// The bytes that show `on` on `control`'s LED. `None` for controls without an
-    /// LED to drive (CCs). Dark is always a real note-off: the APC40 protocol notes a
-    /// velocity-0 note-on does not reliably turn a LED off (makai).
-    pub fn led_bytes(&self, control: MidiControl, on: bool) -> Option<[u8; 3]> {
+    /// The palette this device's RGB LEDs index, if any.
+    pub fn palette(&self) -> Option<&'static [u32]> {
+        match self.leds.palette.as_deref() {
+            Some("apc40mk2-128") => Some(&APC40_MK2_PALETTE),
+            _ => None,
+        }
+    }
+
+    /// The bytes that show `level` on `control`'s LED. `None` for controls without an
+    /// LED to drive (CCs).
+    ///
+    /// On an RGB pad, `On` uses the style's colour, else the zone's colour matched to
+    /// the palette, else the profile default, moving as the style says; `Idle` (a cell
+    /// with an effect, not running) uses the style's idle colour, else a dim zone
+    /// colour. A single-colour LED is lit for `On` and dark otherwise. Dark is always
+    /// a real note-off: the APC40 protocol notes a velocity-0 note-on does not
+    /// reliably turn a LED off (makai).
+    pub fn led_bytes(
+        &self,
+        control: MidiControl,
+        level: LedLevel,
+        style: Option<&LedStyle>,
+        zone_colour: Option<[u8; 3]>,
+    ) -> Option<[u8; 3]> {
         let ControlKind::Note(note) = control.kind else {
             return None;
         };
         let channel = control.channel;
-        if !on {
-            return Some(note_off_bytes(channel, note));
+        let dark = Some(note_off_bytes(channel, note));
+        let rgb =
+            self.palette().is_some() && self.leds.rgb.iter().any(|r| r.contains(channel, note));
+        if !rgb {
+            return match level {
+                LedLevel::On => Some(note_on_bytes(channel, note, self.leds.on_velocity)),
+                LedLevel::Idle | LedLevel::Off => dark,
+            };
         }
-        let rgb = self.leds.rgb.iter().any(|r| r.contains(channel, note));
-        let velocity = if rgb {
-            self.leds.rgb_on_colour
-        } else {
-            self.leds.on_velocity
+        let colour = match level {
+            LedLevel::Off => return dark,
+            LedLevel::Idle => style
+                .and_then(|s| s.idle)
+                .or_else(|| zone_colour.map(|c| nearest_palette_index(dim(c)))),
+            LedLevel::On => style
+                .and_then(|s| s.on)
+                .or_else(|| zone_colour.map(nearest_palette_index))
+                .or(Some(self.leds.rgb_on_colour)),
         };
-        Some(note_on_bytes(channel, note, velocity))
+        let Some(colour) = colour.filter(|&c| c > 0) else {
+            return dark;
+        };
+        let animation = match level {
+            LedLevel::On => style.map(|s| s.animation).unwrap_or_default(),
+            _ => LedAnimation::Solid,
+        };
+        let pick = |channels: &[u8], rate: LedRate| channels.get(rate_index(rate)).copied();
+        let out_channel = match animation {
+            LedAnimation::Solid => None,
+            LedAnimation::Pulse(r) => pick(&self.leds.pulse_channels, r),
+            LedAnimation::Blink(r) => pick(&self.leds.blink_channels, r),
+        }
+        .unwrap_or(channel);
+        Some(note_on_bytes(out_channel, note, colour))
     }
+}
+
+/// What an LED should show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LedLevel {
+    Off,
+    /// A cell that holds an effect but is not running.
+    Idle,
+    On,
+}
+
+fn rate_index(rate: LedRate) -> usize {
+    match rate {
+        LedRate::N24 => 0,
+        LedRate::N16 => 1,
+        LedRate::N8 => 2,
+        LedRate::N4 => 3,
+        LedRate::N2 => 4,
+    }
+}
+
+/// A zone colour dimmed for an idle cell, before matching it to the palette.
+fn dim(c: [u8; 3]) -> [u8; 3] {
+    c.map(|v| (v as u16 * 3 / 10) as u8)
 }
 
 /// The APC40 mkII's 128-colour RGB pad palette, `0xRRGGBB`; the index is the velocity
@@ -288,17 +369,21 @@ mod tests {
     fn rgb_pads_get_a_colour_single_leds_get_on_velocity_off_is_note_off() {
         let p = DeviceProfile::apc40_mk2();
         // Grid pad 12 (ch 0): palette colour.
-        assert_eq!(p.led_bytes(note(0, 12), true), Some([0x90, 12, 9]));
+        let on = |c| p.led_bytes(c, LedLevel::On, None, None);
+        assert_eq!(on(note(0, 12)), Some([0x90, 12, 9]));
         // Track-3 solo button (note 49, ch 2): single-colour, velocity 1.
-        assert_eq!(p.led_bytes(note(2, 49), true), Some([0x92, 49, 1]));
+        assert_eq!(on(note(2, 49)), Some([0x92, 49, 1]));
         // A note in the grid range on another channel is not a grid pad.
-        assert_eq!(p.led_bytes(note(1, 12), true), Some([0x91, 12, 1]));
-        assert_eq!(p.led_bytes(note(2, 49), false), Some([0x82, 49, 0]));
+        assert_eq!(on(note(1, 12)), Some([0x91, 12, 1]));
+        assert_eq!(
+            p.led_bytes(note(2, 49), LedLevel::Off, None, None),
+            Some([0x82, 49, 0])
+        );
         let fader = MidiControl {
             channel: 0,
             kind: ControlKind::Cc(7),
         };
-        assert_eq!(p.led_bytes(fader, true), None);
+        assert_eq!(on(fader), None);
     }
 
     #[test]
@@ -309,7 +394,7 @@ mod tests {
         );
         assert_eq!(DeviceProfile::for_port("nanoPAD2").name, "generic");
         assert_eq!(
-            DeviceProfile::generic().led_bytes(note(0, 36), true),
+            DeviceProfile::generic().led_bytes(note(0, 36), LedLevel::On, None, None),
             Some([0x90, 36, 127])
         );
     }
@@ -324,6 +409,56 @@ mod tests {
             load_device_profile(r#"{"format":"prisma.device-profile","schema_version":99}"#),
             Err(DeviceProfileError::NewerThanReader { .. })
         ));
+    }
+
+    #[test]
+    fn cells_light_in_zone_colour_or_the_operators_style() {
+        let p = DeviceProfile::apc40_mk2();
+        let pad = note(0, 3);
+        let red = Some([255, 0, 0]);
+        // Default: the zone colour, bright when running, dim when idle.
+        assert_eq!(
+            p.led_bytes(pad, LedLevel::On, None, red),
+            Some([0x90, 3, 5])
+        );
+        let [_, _, idle] = p.led_bytes(pad, LedLevel::Idle, None, red).unwrap();
+        assert!(idle != 5 && idle != 0, "a dimmer red, got {idle}");
+        assert_eq!(
+            p.led_bytes(pad, LedLevel::Off, None, red),
+            Some([0x80, 3, 0])
+        );
+        // The operator's style wins, and the animation picks the message channel.
+        let style = LedStyle {
+            on: Some(21),
+            idle: Some(23),
+            animation: LedAnimation::Blink(LedRate::N8),
+        };
+        assert_eq!(
+            p.led_bytes(pad, LedLevel::On, Some(&style), red),
+            Some([0x9D, 3, 21])
+        );
+        assert_eq!(
+            p.led_bytes(pad, LedLevel::Idle, Some(&style), red),
+            Some([0x90, 3, 23])
+        );
+        let pulse = LedStyle {
+            animation: LedAnimation::Pulse(LedRate::N24),
+            ..style
+        };
+        assert_eq!(
+            p.led_bytes(pad, LedLevel::On, Some(&pulse), red),
+            Some([0x96, 3, 21])
+        );
+        // A device without a palette ignores colours: idle is dark, on is plain lit.
+        let g = DeviceProfile::generic();
+        assert_eq!(
+            g.led_bytes(pad, LedLevel::Idle, Some(&style), red),
+            Some([0x80, 3, 0])
+        );
+        assert_eq!(
+            g.led_bytes(pad, LedLevel::On, Some(&style), red),
+            Some([0x90, 3, 127])
+        );
     }
 
     #[test]

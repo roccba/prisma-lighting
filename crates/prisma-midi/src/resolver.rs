@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use prisma_core::{
-    priority, ControlKind, ControlMode, ControllerMappings, MapTarget, MidiControl, ParamHandle,
-    ParamKind, ParameterTree, ResponseCurve, SourceId, WriteOutcome,
+    priority, ControlKind, ControlMode, ControllerMappings, LedStyle, MapTarget, MidiControl,
+    ParamHandle, ParamKind, ParameterTree, ResponseCurve, SourceId, WriteOutcome,
 };
 use uuid::Uuid;
 
@@ -19,11 +19,29 @@ use crate::message::{EventKind, MidiEvent};
 /// One mapping with its target already resolved.
 struct Resolved {
     handle: ParamHandle,
+    /// What the control's LED shows: a grid cell's `state`, otherwise `handle` itself.
+    feedback: ParamHandle,
+    /// Whether `feedback` is a cell state (empty / assigned / running).
+    cell: bool,
+    led: Option<LedStyle>,
     mode: ControlMode,
     curve: ResponseCurve,
     /// The zone slot this target belongs to, if any — resolved once here so the host
     /// can follow a control to its zone (UI focus) without re-parsing per message.
     zone: Option<u16>,
+}
+
+/// One note control's LED, as the feedback engine needs it.
+#[derive(Clone)]
+pub struct FeedbackTarget {
+    pub control: MidiControl,
+    /// The parameter whose value the LED shows.
+    pub handle: ParamHandle,
+    /// `handle` is a grid cell's state (three levels), not an on/off value.
+    pub cell: bool,
+    pub led: Option<LedStyle>,
+    /// The zone slot the control drives, for a default colour.
+    pub zone: Option<u16>,
 }
 
 /// A profile compiled against a specific tree and zone order.
@@ -71,15 +89,22 @@ impl Binding {
     ) -> Binding {
         let mut table = HashMap::with_capacity(mappings.mappings.len());
         for m in &mappings.mappings {
-            let Some(path) = m.target.resolve_path(zone_ids) else {
+            let Some(path) = m.target.resolve_path_for(zone_ids, m.mode) else {
                 continue;
             };
             let Some(handle) = tree.resolve(&path) else {
                 continue;
             };
+            let state = m
+                .target
+                .feedback_path(zone_ids)
+                .and_then(|p| tree.resolve(&p));
             table.insert(
                 m.control,
                 Resolved {
+                    cell: state.is_some(),
+                    feedback: state.unwrap_or_else(|| handle.clone()),
+                    led: m.led,
                     handle,
                     mode: m.mode,
                     curve: m.curve,
@@ -93,6 +118,39 @@ impl Binding {
     /// The zone slot `control` drives, if it is mapped to a zone's parameter.
     pub fn zone_of(&self, control: MidiControl) -> Option<u16> {
         self.table.get(&control).and_then(|r| r.zone)
+    }
+
+    /// A button press/release in `mode`. Every mode fires a trigger target on press;
+    /// they differ on held values:
+    /// - toggle: press flips; release nothing.
+    /// - latch: press sets on; release nothing.
+    /// - trigger: press is one event — flips a toggle, sets a level to max.
+    /// - momentary: press sets on, release sets off.
+    fn button(
+        &self,
+        r: &Resolved,
+        control: MidiControl,
+        mode: ControlMode,
+        pressed: bool,
+    ) -> Option<WriteOutcome> {
+        let src = source_for(control);
+        let range = r.handle.descriptor().range;
+        if r.handle.kind() == ParamKind::Trigger {
+            return pressed.then(|| self.tree.fire(&r.handle, src));
+        }
+        match (mode, pressed) {
+            (ControlMode::Toggle, true) => self.toggle(r, control),
+            (ControlMode::Trigger, true) if r.handle.kind() == ParamKind::Toggle => {
+                self.toggle(r, control)
+            }
+            (ControlMode::Latch | ControlMode::Trigger | ControlMode::Momentary, true) => {
+                Some(self.tree.write_real(&r.handle, range.max, src))
+            }
+            (ControlMode::Momentary, false) => {
+                Some(self.tree.write_real(&r.handle, range.min, src))
+            }
+            _ => None,
+        }
     }
 
     /// Flip the target between its range ends: a toggle by its bool, a level by which
@@ -112,19 +170,25 @@ impl Binding {
     /// The mapped **note** controls with the handle each one shows, for LED feedback.
     /// CC controls (faders, knobs) are left out: without motors they have nothing to
     /// display. Triggers are left out too — a fire has no lasting state to light.
-    pub fn feedback_targets(&self) -> Vec<(MidiControl, ParamHandle)> {
+    pub fn feedback_targets(&self) -> Vec<FeedbackTarget> {
         self.table
-            .iter()
-            .filter(|(c, r)| {
-                matches!(c.kind, ControlKind::Note(_)) && r.handle.kind() != ParamKind::Trigger
-            })
-            .map(|(c, r)| (*c, r.handle.clone()))
+            .keys()
+            .filter_map(|c| self.feedback_of(*c))
             .collect()
     }
 
-    /// The handle a control drives, if mapped.
-    pub fn handle_of(&self, control: MidiControl) -> Option<&ParamHandle> {
-        self.table.get(&control).map(|r| &r.handle)
+    /// A control's LED target, if it has one (see [`feedback_targets`](Self::feedback_targets)).
+    pub fn feedback_of(&self, control: MidiControl) -> Option<FeedbackTarget> {
+        let r = self.table.get(&control)?;
+        let shows =
+            matches!(control.kind, ControlKind::Note(_)) && r.feedback.kind() != ParamKind::Trigger;
+        shows.then(|| FeedbackTarget {
+            control,
+            handle: r.feedback.clone(),
+            cell: r.cell,
+            led: r.led,
+            zone: r.zone,
+        })
     }
 
     /// How many mappings resolved against this tree.
@@ -143,12 +207,17 @@ impl Binding {
             (ControlMode::Absolute, EventKind::NoteOff { .. } | EventKind::PitchBend { .. }) => {
                 return None
             }
-            // A press flips; the release (note-off / CC back to 0) does nothing.
-            (ControlMode::Toggle, EventKind::NoteOn { .. }) => return self.toggle(r, control),
-            (ControlMode::Toggle, EventKind::Cc { value, .. }) if value > 0 => {
-                return self.toggle(r, control)
+            // The button modes act on press and (momentary only) release. A CC button
+            // presses above 0 and releases at 0.
+            (mode, kind) => {
+                let pressed = match kind {
+                    EventKind::NoteOn { .. } => true,
+                    EventKind::Cc { value, .. } => value > 0,
+                    EventKind::NoteOff { .. } => false,
+                    EventKind::PitchBend { .. } => return None,
+                };
+                return self.button(r, control, mode, pressed);
             }
-            (ControlMode::Toggle, _) => return None,
         };
         let position = r.curve.apply(raw as f32 / 127.0);
         let src = source_for(control);

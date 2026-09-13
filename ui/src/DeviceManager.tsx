@@ -43,7 +43,8 @@ function targetLabel(t: MapTarget, zones: ZoneInfo[]): string {
   if ("path" in t) return t.path === "/master/dimmer" ? "Master dimmer" : t.path;
   const { slot, sub } = t.zone_slot;
   const zone = zones[slot]?.name ?? `Zona ${slot + 1} (no está en este show)`;
-  return `${SUB_LABEL[sub] ?? sub} — ${zone}`;
+  const what = typeof sub === "object" ? `Celda ${sub.cell + 1}` : (SUB_LABEL[sub] ?? sub);
+  return `${what} — ${zone}`;
 }
 
 function MidiTab({ zones }: { zones: ZoneInfo[] }) {
