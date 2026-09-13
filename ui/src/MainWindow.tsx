@@ -276,41 +276,24 @@ export default function MainWindow() {
             <ZoneRow zones={zones} selected={selected} onSelect={setSelected} />
           </section>
 
-          {/* Work area: a left column stacks the (compact) scene grid over the parameters
-              panel, so the grid takes only the height it needs and the parameters fill the
-              rest — no dead space under a two-row grid. The preview is the tall star in the
-              middle; the master strip runs full height on the right. */}
-          <div className="pr-mainwin-work">
-            <div className="pr-work-left">
-              <section className="pr-region pr-region-grid">
-                <div className="pr-region-title">
-                  Grilla{selectedZone ? ` — ${selectedZone.name}` : ""}
-                </div>
-                {/* No `key={zone.id}` — keying would REMOUNT the grid on every zone switch
-                    (unmount → blank → re-fetch), which is why the grid "disappeared" and felt
-                    slow. SceneGrid re-fetches in place on a zoneId change (its `useEffect`),
-                    so it stays mounted and just swaps its cells. */}
-                {selectedZone ? (
-                  <SceneGrid
-                    zoneId={selectedZone.id}
-                    onActiveChange={() => setGridRev((r) => r + 1)}
-                  />
-                ) : (
-                  <div className="pr-placeholder-body">Seleccioná una zona</div>
-                )}
-              </section>
-              <section className="pr-region pr-region-params">
-                <div className="pr-region-title">
-                  Parámetros{selectedZone ? ` — ${selectedZone.name}` : ""}
-                </div>
-                {selectedZone ? (
-                  <EffectParams zoneId={selectedZone.id} rev={gridRev} />
-                ) : (
-                  <div className="pr-placeholder-body">Seleccioná una zona</div>
-                )}
-              </section>
-            </div>
-
+          <div className="pr-mainwin-mid">
+            <section className="pr-region pr-region-grid">
+              <div className="pr-region-title">
+                Grilla{selectedZone ? ` — ${selectedZone.name}` : ""}
+              </div>
+              {/* No `key={zone.id}` — keying would REMOUNT the grid on every zone switch
+                  (unmount → blank → re-fetch), which is why the grid "disappeared" and felt
+                  slow. SceneGrid re-fetches in place on a zoneId change (its `useEffect`),
+                  so it stays mounted and just swaps its cells. */}
+              {selectedZone ? (
+                <SceneGrid
+                  zoneId={selectedZone.id}
+                  onActiveChange={() => setGridRev((r) => r + 1)}
+                />
+              ) : (
+                <div className="pr-placeholder-body">Seleccioná una zona</div>
+              )}
+            </section>
             <section className="pr-region pr-region-preview">
               <div className="pr-region-title">
                 Preview{selectedZone ? ` — ${selectedZone.name}` : ""}
@@ -321,8 +304,23 @@ export default function MainWindow() {
                 <div className="pr-placeholder-body">Seleccioná una zona</div>
               )}
             </section>
+          </div>
 
-            <section className="pr-region pr-region-master">
+          {/* Bottom work row — FIXED size (no resize): the effect parameters on the left
+              (a swappable slot: groups will share it later) and the master on the right. */}
+          <div className="pr-workrow">
+            <section className="pr-region pr-workrow-panel">
+              <div className="pr-region-title">
+                Parámetros{selectedZone ? ` — ${selectedZone.name}` : ""}
+              </div>
+              {selectedZone ? (
+                <EffectParams zoneId={selectedZone.id} rev={gridRev} />
+              ) : (
+                <div className="pr-placeholder-body">Seleccioná una zona</div>
+              )}
+            </section>
+
+            <section className="pr-region pr-workrow-master">
               <GlobalBar />
             </section>
           </div>
