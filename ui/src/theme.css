@@ -597,9 +597,12 @@ input, textarea, [contenteditable="true"] {
 
 /* --- Scene grid + effect picker (M8 step 4, §3.3 / §4) --- */
 .pr-grid-wrap { flex: 1 1 auto; overflow: auto; padding: 8px; min-height: 0; }
-/* Fixed 76px cells, left-aligned (like a hardware storage grid) instead of stretching to
-   fill the panel — 16 stretched cells left a huge dead area below and oversized squares. */
-.pr-grid { display: grid; grid-template-columns: repeat(8, 76px); grid-auto-rows: 76px; gap: 5px; justify-content: start; align-content: start; }
+/* Always 8 square columns, left-aligned (like a hardware storage grid). Cells follow the
+   panel width but are CAPPED at 96px — unbounded stretching was tried and rejected (huge
+   dead area, oversized squares) — so a large UI scale or a narrow window shrinks them
+   instead of cutting column 8 off behind a scrollbar. */
+.pr-grid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); max-width: calc(8 * 96px + 7 * 5px); gap: 5px; align-content: start; }
+.pr-grid > * { aspect-ratio: 1; min-width: 0; }
 .pr-cell { position: relative; background: var(--bg-input); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; color: var(--text-dim); user-select: none; overflow: hidden; }
 .pr-cell:hover { border-color: var(--btn-border); }
 .pr-cell.is-assigned { background: var(--bg-panel-2); color: var(--text); border-color: var(--btn-border); }
