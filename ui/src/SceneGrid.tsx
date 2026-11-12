@@ -83,7 +83,8 @@ export function SceneGrid({ zoneId, slot, onActiveChange }: SceneGridProps) {
 
   return (
     <div className="pr-grid-wrap">
-      <div className="pr-grid">
+      {/* `--rows` lets the CSS size cells so every row fits the panel height too. */}
+      <div className="pr-grid" style={{ "--rows": Math.max(1, Math.ceil(cells.length / 8)) } as React.CSSProperties}>
         {cells.map((cell) => (
           <LearnTarget
             key={cell.index}

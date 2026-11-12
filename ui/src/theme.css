@@ -596,13 +596,15 @@ input, textarea, [contenteditable="true"] {
 }
 
 /* --- Scene grid + effect picker (M8 step 4, §3.3 / §4) --- */
-.pr-grid-wrap { flex: 1 1 auto; overflow: auto; padding: 8px; min-height: 0; }
-/* Always 8 square columns, left-aligned (like a hardware storage grid). Cells follow the
-   panel width but are CAPPED at 96px — unbounded stretching was tried and rejected (huge
-   dead area, oversized squares) — so a large UI scale or a narrow window shrinks them
-   instead of cutting column 8 off behind a scrollbar. */
-.pr-grid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); max-width: calc(8 * 96px + 7 * 5px); gap: 5px; align-content: start; }
-.pr-grid > * { aspect-ratio: 1; min-width: 0; }
+/* The wrap is a size container so cells can be sized from BOTH its width and height. */
+.pr-grid-wrap { flex: 1 1 auto; overflow: auto; padding: 8px; min-height: 0; container-type: size; }
+/* Always 8 square columns, left-aligned (like a hardware storage grid). A cell is the
+   largest square that lets all 8 columns fit the width AND all `--rows` rows fit the
+   height, CAPPED at 96px — unbounded stretching was tried and rejected (huge dead area,
+   oversized squares). So OS display scaling, a shorter monitor or a narrow window shrinks
+   the cells instead of cutting columns/rows off behind a scrollbar. */
+.pr-grid { --cell: min(calc((100cqw - 7 * 5px) / 8), calc((100cqh - (var(--rows) - 1) * 5px) / var(--rows)), 96px); display: grid; grid-template-columns: repeat(8, var(--cell)); grid-auto-rows: var(--cell); gap: 5px; align-content: start; }
+.pr-grid > * { min-width: 0; }
 .pr-cell { position: relative; background: var(--bg-input); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; color: var(--text-dim); user-select: none; overflow: hidden; }
 .pr-cell:hover { border-color: var(--btn-border); }
 .pr-cell.is-assigned { background: var(--bg-panel-2); color: var(--text); border-color: var(--btn-border); }

@@ -148,9 +148,10 @@ fn role_dto(role: &ParamRole) -> (&'static str, Option<String>, Option<&'static 
     }
 }
 
-/// How many assignable cells each zone's grid seeds with (8 columns × 2 rows). The
-/// first cell holds the zone's initial effect; the rest are empty and assignable.
-const GRID_CELLS: usize = 16;
+/// How many assignable cells each zone's grid has (8 columns × 5 rows — the common
+/// pad-controller layout). The first cell holds the zone's initial effect; the rest are
+/// empty and assignable. Older shows (16 cells) are padded up to this on load.
+const GRID_CELLS: usize = 40;
 
 /// The picker's display name for an `effect_id`, from the catalogue.
 fn effect_display_name(id: &str) -> Option<String> {
@@ -205,14 +206,14 @@ fn empty_patch() -> Patch {
     }
 }
 
-/// Give every zone that has no grid yet a full set of assignable (empty) cells. A zone
-/// with an empty grid renders no scene cells and looks broken — and `Show::new` leaves
-/// every `ZoneShow` with an empty grid, so the default boot zone (and any zone in an old
-/// save) needs this. Idempotent: only fills empty grids, so it never wipes real scenes.
-fn seed_missing_grids(show: &mut Show) {
+/// Pad every zone's grid up to `GRID_CELLS` with assignable (empty) cells. A zone with an
+/// empty grid renders no scene cells and looks broken — `Show::new` leaves every
+/// `ZoneShow` empty — and a save from before the 8×5 grid has only 16. Existing cells keep
+/// their index, and a grid is never truncated, so real scenes are never wiped. Idempotent.
+fn pad_grids(show: &mut Show) {
     for zs in &mut show.zones {
-        if zs.grid.is_empty() {
-            zs.grid = (0..GRID_CELLS).map(|_| Cell::empty()).collect();
+        if zs.grid.len() < GRID_CELLS {
+            zs.grid.resize_with(GRID_CELLS, Cell::empty);
         }
     }
 }
@@ -221,7 +222,7 @@ fn seed_missing_grids(show: &mut Show) {
 /// operator can map pixels and immediately assign effects (matching a freshly added zone).
 fn empty_show() -> Show {
     let mut show = Show::new("Sin título", empty_patch());
-    seed_missing_grids(&mut show);
+    pad_grids(&mut show);
     // The default zone starts at full dimmer (like the reconcile path's new-zone branch),
     // so its content is visible the moment an effect is assigned instead of a black zone.
     for zs in &mut show.zones {
@@ -889,6 +890,7 @@ fn main_open_show(app: AppHandle, path: String) -> Result<(), String> {
     show.patch.fill_zone_members_from_ownership();
     show.patch.fit_matrix_size();
     show.patch.compile().map_err(|e| e.to_string())?;
+    pad_grids(&mut show);
 
     let target = resolve_target(&state.network.lock().unwrap());
     let (config, port) = preview_config(AdapterPreference::Software, target);
@@ -1845,9 +1847,8 @@ fn main() {
                 .map(|mut s| {
                     s.patch.fill_zone_members_from_ownership();
                     s.patch.fit_matrix_size();
-                    // Safety net: an old save (or one made while a zone had an empty grid)
-                    // gets its missing grids seeded so every zone's scene cells work.
-                    seed_missing_grids(&mut s);
+                    // An old save (empty or 16-cell grids) is padded to the full grid.
+                    pad_grids(&mut s);
                     s
                 })
                 .filter(|s| s.patch.compile().is_ok())
@@ -2048,19 +2049,26 @@ mod tests {
     }
 
     #[test]
-    fn seed_missing_grids_only_fills_empty_ones() {
-        // Idempotent: it fills a zone with no grid but never touches a zone that already
-        // has scenes (so a loaded show's real cells are preserved).
+    fn pad_grids_fills_short_grids_and_keeps_authored_cells() {
+        // Idempotent: it fills a zone with no grid and pads a short (pre-8×5) one, keeping
+        // its authored cells at their index (so a loaded show's real scenes survive).
         let mut show = Show::new("t", empty_patch());
         assert!(show.zones[0].grid.is_empty());
-        // Pretend a second zone already has one authored cell.
+        // Pretend a second zone already has one authored cell (a distinctive fade time).
         let mut authored = ZoneShow::new(Uuid::new_v4());
         authored.grid = vec![Cell::empty()];
+        authored.grid[0].fade_time = std::time::Duration::from_millis(250);
         show.zones.push(authored);
 
-        seed_missing_grids(&mut show);
+        pad_grids(&mut show);
+        pad_grids(&mut show);
 
         assert_eq!(show.zones[0].grid.len(), GRID_CELLS, "empty grid seeded");
-        assert_eq!(show.zones[1].grid.len(), 1, "authored grid left untouched");
+        assert_eq!(show.zones[1].grid.len(), GRID_CELLS, "short grid padded");
+        assert_eq!(
+            show.zones[1].grid[0].fade_time,
+            std::time::Duration::from_millis(250),
+            "authored cell kept at its index"
+        );
     }
 }
