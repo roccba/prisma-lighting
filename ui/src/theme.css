@@ -509,7 +509,14 @@ input, textarea, [contenteditable="true"] {
 
 /* --- Zone row --- */
 /* `position: relative` anchors the single mini-preview overlay canvas (below). */
-.pr-zonerow { position: relative; display: flex; gap: 6px; padding: 8px; overflow-x: auto; align-items: stretch; }
+/* Cards are identical, so each keeps its OWN intrinsic height and the row wraps them
+   (`flex-start`, never `stretch`). Stretching made card height depend on row height and row
+   height on card height — a cycle WebKitGTK resolves differently on each relayout (e.g.
+   moving the window to another monitor), so cards grew past the Zonas region.
+   The strip scrolls HORIZONTALLY only (more zones than fit, or a large UI scale): an
+   `overflow-x: auto` alone makes `overflow-y` auto too, and the horizontal scrollbar would
+   then spawn a pointless vertical one. */
+.pr-zonerow { position: relative; display: flex; gap: 6px; padding: 8px; overflow-x: auto; overflow-y: hidden; align-items: flex-start; }
 .pr-zonerow-empty { color: var(--text-dim); font-size: var(--fs-small); padding: 12px; }
 /* ONE canvas for every card's mini-preview. It overlays the cards (drawn above them,
    click-through) and paints each zone's thumbnail into that card's preview slot. A single

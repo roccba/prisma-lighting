@@ -58,6 +58,12 @@ export function ZoneRow({ zones, selected, onSelect }: ZoneRowProps) {
     const canvas = canvasRef.current;
     if (!row || !canvas) return;
     const dpr = window.devicePixelRatio || 1;
+    // Collapse the canvas before measuring: it is a child of the scroll container, so its
+    // previous size counts toward `scrollWidth`. Without this the width only ever ratchets
+    // up — once the row was wider (a window move/resize), the stale canvas keeps it
+    // overflowing, a horizontal scrollbar appears and squeezes the cards' footers out.
+    canvas.style.width = "0px";
+    canvas.style.height = "0px";
     const cssW = row.scrollWidth;
     const cssH = row.clientHeight;
     canvas.style.width = `${cssW}px`;
