@@ -377,13 +377,17 @@ function MainWindowBody() {
               (a swappable slot: groups will share it later) and the master on the right. */}
           <div className="pr-workrow">
             <section className="pr-region pr-workrow-panel">
-              <div className="pr-region-title">
-                Parámetros{selectedZone ? ` — ${selectedZone.name}` : ""}
-              </div>
               {selectedZone ? (
-                <EffectParams zoneId={selectedZone.id} rev={gridRev} />
+                <EffectParams
+                  zoneId={selectedZone.id}
+                  rev={gridRev}
+                  title={`Parámetros — ${selectedZone.name}`}
+                />
               ) : (
-                <div className="pr-placeholder-body">Seleccioná una zona</div>
+                <>
+                  <div className="pr-region-title">Parámetros</div>
+                  <div className="pr-placeholder-body">Seleccioná una zona</div>
+                </>
               )}
             </section>
 

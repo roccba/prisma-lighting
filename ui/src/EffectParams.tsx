@@ -19,6 +19,9 @@ interface EffectParamsProps {
   zoneId: string;
   /** Bumped by the scene grid when the active cell changes, to re-fetch the panel. */
   rev: number;
+  /** The region title ("Parámetros — <zone>"). The panel renders it so it can append the
+   *  running effect's name to it instead of spending a whole row on a separate header. */
+  title: string;
 }
 
 // A panel item: the grouping of raw manifest params into rendered controls. Colour
@@ -128,7 +131,7 @@ function EnumRow({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
   );
 }
 
-export function EffectParams({ zoneId, rev }: EffectParamsProps) {
+export function EffectParams({ zoneId, rev, title }: EffectParamsProps) {
   const [panel, setPanel] = useState<EffectPanelInfo | null>(null);
 
   useEffect(() => {
@@ -143,7 +146,10 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
 
   if (!panel || !panel.effect_id) {
     return (
-      <div className="pr-placeholder-body">Celda vacía — asigná un efecto en la grilla</div>
+      <>
+        <div className="pr-region-title">{title}</div>
+        <div className="pr-placeholder-body">Celda vacía — asigná un efecto en la grilla</div>
+      </>
     );
   }
 
@@ -152,10 +158,12 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
   const controlItems = items.filter((i) => i.kind !== "scalar");
 
   return (
+    <>
+    <div className="pr-region-title">
+      {title}
+      <span className="pr-params-effect"> · {panel.effect_name}</span>
+    </div>
     <div className="pr-params">
-      <div className="pr-params-head">
-        <span className="pr-params-effect">{panel.effect_name}</span>
-      </div>
       {items.length === 0 ? (
         <div className="pr-params-none">Este efecto no tiene parámetros</div>
       ) : (
@@ -180,6 +188,7 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
         </div>
       )}
     </div>
+    </>
   );
 
   // One non-scalar control (colour picker, rose, or palette editor). Keys carry the
