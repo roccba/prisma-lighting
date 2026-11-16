@@ -84,7 +84,7 @@ export function GlobalBar() {
             onClick={toggleBlackout}
             title="Blackout — apaga todo sin mover el fader"
           >
-            BO
+            BLACKOUT
           </button>
         </LearnTarget>
         <LearnTarget target={{ path: "/master/strobe/on" }} name="Strobo global" className="pr-learn-compact">
@@ -101,6 +101,7 @@ export function GlobalBar() {
           </button>
         </LearnTarget>
       </div>
+      <div className="pr-master-strobe">
       <LearnTarget
         target={{ path: "/master/strobe/rate" }}
         name="Velocidad strobo global"
@@ -118,6 +119,10 @@ export function GlobalBar() {
           title="Velocidad del strobo"
         />
       </LearnTarget>
+      <span className="pr-strobe-hz" title="Velocidad del strobo (Hz)">
+        {Math.round(strobeHz(strobeRate))} Hz
+      </span>
+      </div>
     </div>
   );
 }

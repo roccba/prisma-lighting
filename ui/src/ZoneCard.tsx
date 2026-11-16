@@ -243,6 +243,9 @@ export function ZoneCard({ zone, slot, selected, onSelect, registerPreview }: Zo
             title="Velocidad del strobo"
           />
         </LearnTarget>
+        <span className="pr-strobe-hz" title="Velocidad del strobo (Hz)">
+          {Math.round(strobeHz(strobeRate))}
+        </span>
       </div>
     </div>
   );

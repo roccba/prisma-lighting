@@ -490,14 +490,13 @@ input, textarea, [contenteditable="true"] {
    dashboard (§7). Raised: light-ish grey face over the app black, 1px dark edge. */
 .pr-region { background: var(--bg-panel); border: 1px solid var(--btn-border-dark); border-radius: var(--r-md); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .pr-region-zonerow { flex: 0 0 auto; }
-/* The preview is the star; give it more of the mid row than the (compact) grid, so the
-   grid stops stretching its cells to fill half the window. */
 /* The grid column is as wide as 8 cells whose size lets all 5 rows (the 8x5 grid,
    GRID_CELLS in app/src/main.rs) fill the row's height: height minus border, title,
    wrap padding and 4 gaps, over 5 rows — clamped to the cell bounds the grid itself uses.
-   So the grid fills its panel vertically and the preview takes the rest of the width
-   (its square content only adds black bars when given extra width). */
-.pr-region-grid { --cell-h: clamp(48px, calc((100cqh - 2px - 26px - 16px - 4 * 5px) / 5), 120px); flex: 0 0 calc(8 * var(--cell-h) + 7 * 5px + 16px + 2px); }
+   So the grid fills its panel vertically up to the 100px cell cap (taller rows leave a
+   little room below rather than oversized squares) and the preview takes the rest of the
+   width (its square content only adds black bars when given extra width). */
+.pr-region-grid { --cell-h: clamp(48px, calc((100cqh - 2px - 26px - 16px - 4 * 5px) / 5), 100px); flex: 0 0 calc(8 * var(--cell-h) + 7 * 5px + 16px + 2px); }
 .pr-region-preview { flex: 1 1 0; }
 /* Bottom work row: FIXED height, not resizable (console-style). The effect-parameters
    panel (a swappable slot — groups will share it later) sits left at a fixed width where
@@ -506,7 +505,7 @@ input, textarea, [contenteditable="true"] {
 /* The params panel FILLS the row (minus the fixed master), so faders/controls use the
    width instead of leaving a gap. Its content is sized so the densest effect still fits. */
 .pr-workrow-panel { flex: 1 1 auto; min-width: 0; }
-.pr-workrow-master { flex: 0 0 200px; }
+.pr-workrow-master { flex: 0 0 220px; }
 /* Fixed 26px height so layouts can compute from it (`.pr-region-grid` does — keep in sync). */
 .pr-region-title { box-sizing: border-box; height: 26px; display: flex; align-items: center; white-space: pre; font-size: var(--fs-small); color: var(--text-label); padding: 0 8px; border-bottom: 1px solid var(--divider); text-transform: uppercase; letter-spacing: .04em; flex: 0 0 auto; }
 
@@ -574,6 +573,10 @@ input, textarea, [contenteditable="true"] {
 .pr-zonecard-strobe { display: flex; align-items: center; gap: 5px; flex: 1 1 auto; min-width: 0; }
 .pr-strobe-ico { flex: 0 0 auto; color: var(--text-dim); display: flex; align-items: center; }
 .pr-strobe-rate { flex: 1 1 auto; min-width: 0; height: 4px; -webkit-appearance: none; appearance: none; background: #050505; border: 1px solid var(--btn-border-dark); border-radius: var(--r-md); outline: none; cursor: pointer; }
+/* Live strobe rate readout. Fixed width + tabular digits: "1" vs "25" must not reflow the
+   card (the zone row's overlay canvas caches each card's preview rect). */
+.pr-strobe-hz { flex: 0 0 auto; min-width: 16px; text-align: right; font-size: var(--fs-tiny); color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pr-master-strobe .pr-strobe-hz { min-width: 36px; font-size: var(--fs-small); }
 .pr-strobe-rate::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 10px; height: 14px; background: linear-gradient(90deg,#575757,#2c2c2c); border: 1px solid #6e6e6e; border-radius: 2px; cursor: pointer; }
 
 /* --- Master strip (M8 §3.6): a vertical dimmer + blackout + global strobe, on the RIGHT
@@ -593,7 +596,9 @@ input, textarea, [contenteditable="true"] {
 .pr-master-actions .pr-btn { min-width: 40px; }
 .pr-master-actions .pr-strobe-trigger { position: static; width: 40px; height: 28px; font-size: 14px; }
 .pr-master-strobe-rate { flex: 0 0 auto; width: 100%; height: 6px; }
-.pr-master-strobe-wrap { grid-area: strobe; width: 100%; align-items: center; }
+/* Strobe-rate row: the slider plus its live value in Hz. */
+.pr-master-strobe { grid-area: strobe; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pr-master-strobe-wrap { flex: 1 1 auto; min-width: 0; align-items: center; }
 
 .pr-mainwin-error { flex: 0 0 auto; color: var(--accent-text); background: var(--bg-panel); border-top: 1px solid var(--btn-border-dark); padding: 6px 10px; font-size: var(--fs-small); font-family: var(--font-mono); }
 
@@ -610,10 +615,10 @@ input, textarea, [contenteditable="true"] {
 .pr-grid-wrap { flex: 1 1 auto; overflow: auto; padding: 8px; min-height: 0; container-type: size; }
 /* Always 8 square columns, left-aligned (like a hardware storage grid). A cell is the
    largest square that lets all 8 columns fit the width AND all `--rows` rows fit the
-   height, CAPPED at 120px — unbounded stretching was tried and rejected (huge dead area,
+   height, CAPPED at 100px — unbounded stretching was tried and rejected (huge dead area,
    oversized squares). So OS display scaling, a shorter monitor or a narrow window shrinks
    the cells instead of cutting columns/rows off behind a scrollbar. */
-.pr-grid { --cell: min(calc((100cqw - 7 * 5px) / 8), calc((100cqh - (var(--rows) - 1) * 5px) / var(--rows)), 120px); display: grid; grid-template-columns: repeat(8, var(--cell)); grid-auto-rows: var(--cell); gap: 5px; align-content: start; }
+.pr-grid { --cell: min(calc((100cqw - 7 * 5px) / 8), calc((100cqh - (var(--rows) - 1) * 5px) / var(--rows)), 100px); display: grid; grid-template-columns: repeat(8, var(--cell)); grid-auto-rows: var(--cell); gap: 5px; align-content: start; }
 .pr-grid > * { min-width: 0; }
 .pr-cell { position: relative; background: var(--bg-input); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; color: var(--text-dim); user-select: none; overflow: hidden; }
 .pr-cell:hover { border-color: var(--btn-border); }
