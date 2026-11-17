@@ -24,6 +24,7 @@ use prisma_core::{ClockSnapshot, MasterClock, OverlapSnapshot, ParameterTree};
 use prisma_output::frame::frame_handoff;
 use prisma_output::plan::OutputPlan;
 use prisma_output::rate::RatePlan;
+use prisma_output::route::DestinationTable;
 use prisma_output::router::OutputRouter;
 use prisma_output::scheduler::{run_output_loop, SchedulerConfig};
 use prisma_output::transport::UdpOutput;
@@ -174,15 +175,14 @@ fn main() {
     let router = OutputRouter::from_plan(plan);
     let (producer, consumer) = frame_handoff(index.master_buffer_len());
     let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6454);
-    let transports: Vec<UdpOutput> = (0..UNIVERSES)
-        .map(|_| UdpOutput::to_target(target))
-        .collect();
+    let destinations = DestinationTable::all_to(target, UNIVERSES as usize);
     let rate = RatePlan::compute(&vec![RATE_HZ; UNIVERSES as usize]);
     let output = std::thread::spawn(move || {
         run_output_loop(
             consumer,
             router,
-            transports,
+            UdpOutput::to_target(target),
+            destinations,
             rate,
             SchedulerConfig {
                 run_for: Some(Duration::from_secs(seconds)),

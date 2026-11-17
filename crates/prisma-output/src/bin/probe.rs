@@ -8,6 +8,8 @@
 //! Usage: `probe [seconds] [base_hz] [universes] [pin_core]`  (defaults: 20 44 4, no pin)
 //!   pin_core: pin the output thread to this core id (core reservation). Omit
 //!   to leave it floating.
+//!   `PRISMA_NODES=N`: spread the universes over N Art-Net nodes (loopback IPs
+//!   127.0.1.1…), to measure the per-node `send_to` routing (docs/DEVICES-SPEC.md §5).
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,8 +17,10 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use prisma_core::{ArtNetNode, NetworkConfig, NodeOrigin, UniverseRange};
 use prisma_output::frame::frame_handoff;
 use prisma_output::rate::RatePlan;
+use prisma_output::route::DestinationTable;
 use prisma_output::router::OutputRouter;
 use prisma_output::scheduler::{run_output_loop, SchedulerConfig};
 use prisma_output::transport::UdpOutput;
@@ -68,16 +72,47 @@ fn main() {
     // One universe per output, all to loopback Art-Net (nothing needs to listen
     // for a timing measurement; the kernel drops them).
     let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), ARTNET_PORT);
+    let nodes: usize = std::env::var("PRISMA_NODES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
     let mut maps = Vec::with_capacity(universes);
-    let mut transports = Vec::with_capacity(universes);
     for u in 0..universes {
         maps.push(Universe::new(
             (u + 1) as u16,
             u * CHANNELS_PER_UNIVERSE,
             CHANNELS_PER_UNIVERSE,
         ));
-        transports.push(UdpOutput::to_target(target));
     }
+    let port_addresses: Vec<u16> = maps.iter().map(|m| m.port_address).collect();
+    let destinations = if nodes == 0 {
+        DestinationTable::all_to(target, universes)
+    } else {
+        // Contiguous blocks of universes per node, like real boards.
+        let per = universes.div_ceil(nodes).max(1);
+        let net = NetworkConfig {
+            initialized: true,
+            artnet_enabled: true,
+            artsync: false,
+            interface: None,
+            nodes: (0..nodes)
+                .map(|k| ArtNetNode {
+                    id: uuid::Uuid::nil(),
+                    name: format!("node {k}"),
+                    ip: Ipv4Addr::new(127, 0, 1 + (k / 250) as u8, 1 + (k % 250) as u8),
+                    universes: vec![UniverseRange {
+                        first: (1 + k * per) as u16,
+                        last: (k * per + per) as u16,
+                    }],
+                    enabled: true,
+                    unicast: true,
+                    full_frames: false,
+                    origin: NodeOrigin::Manual,
+                })
+                .collect(),
+        };
+        DestinationTable::compile(&port_addresses, &net, None, target)
+    };
     let router = OutputRouter::new(maps);
     let rate = RatePlan::compute(&vec![base_hz; universes]);
 
@@ -91,11 +126,23 @@ fn main() {
     }
 
     println!(
-        "probe: {universes} universes @ {base_hz} Hz for {seconds}s → {target}\n\
-         (producer staging ~60 Hz; measuring output-thread cadence)\n"
+        "probe: {universes} universes @ {base_hz} Hz for {seconds}s → {}\n\
+         (producer staging ~60 Hz; measuring output-thread cadence)\n",
+        if nodes == 0 {
+            target.to_string()
+        } else {
+            format!("{nodes} nodes")
+        }
     );
 
-    let report = run_output_loop(consumer, router, transports, rate, config);
+    let report = run_output_loop(
+        consumer,
+        router,
+        UdpOutput::to_target(target),
+        destinations,
+        rate,
+        config,
+    );
 
     stop.store(true, Ordering::Relaxed);
     producer_thread.join().ok();

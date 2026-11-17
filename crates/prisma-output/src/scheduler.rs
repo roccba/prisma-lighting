@@ -18,7 +18,6 @@
 //! Slower outputs transmit on integer divisors of the base tick ([`RatePlan`]).
 //! A tick with no fresh frame resends the last one (timing over freshness).
 
-use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -29,6 +28,7 @@ use crate::highlight::{blink_on, HighlightFrame, HighlightState};
 use crate::plan::FlatParams;
 use crate::priority::elevate_current_thread;
 use crate::rate::RatePlan;
+use crate::route::DestinationTable;
 use crate::router::OutputRouter;
 use crate::timing::{ProbeReport, TimingProbe};
 use crate::transport::UdpOutput;
@@ -47,11 +47,11 @@ pub struct SchedulerConfig {
     /// cause of jitter (CPU oversubscription) and, unlike RT scheduling, needs
     /// no privileges on Linux or Windows.
     pub pin_to_core: Option<usize>,
-    /// If set, broadcast one `ArtSync` to this address after each frame's
-    /// `ArtDmx` packets, so sync-capable nodes latch every universe on the same
-    /// output frame (tear-free multi-node output, §5.1). `None` = no sync; nodes
-    /// latch each `ArtDmx` on receipt. Usually the Art-Net broadcast address.
-    pub artsync_target: Option<SocketAddr>,
+    /// Send one `ArtSync` after each frame's `ArtDmx` packets, to every
+    /// [`DestinationTable::sync_targets`] address, so sync-capable nodes latch every
+    /// universe on the same output frame (tear-free multi-node output, §5.1).
+    /// `false` = no sync; nodes latch each `ArtDmx` on receipt.
+    pub artsync: bool,
     /// Number of zones the flat-parameter buffer is sized for; must match the
     /// zone slots the frames' overlap snapshots reference.
     pub zone_count: usize,
@@ -74,7 +74,7 @@ impl Default for SchedulerConfig {
             highlight_consumer: None,
             stop: Arc::new(AtomicBool::new(false)),
             pin_to_core: None,
-            artsync_target: None,
+            artsync: false,
         }
     }
 }
@@ -111,17 +111,22 @@ pub trait FlatParamSource: Send {
     fn read_into(&self, into: &mut FlatParams);
 }
 
+///
+/// `output` is ONE socket for the whole rig; `destinations` says, per plan universe,
+/// which node address(es) each `ArtDmx` goes to (docs/DEVICES-SPEC.md §5). It is
+/// compiled off this thread, so per universe the loop only indexes it and `send_to`s.
 pub fn run_output_loop(
     mut consumer: FrameConsumer,
     mut router: OutputRouter,
-    mut transports: Vec<UdpOutput>,
+    mut output: UdpOutput,
+    destinations: DestinationTable,
     rate: RatePlan,
     config: SchedulerConfig,
 ) -> ProbeReport {
     assert_eq!(
-        transports.len(),
+        destinations.universe_count(),
         router.universe_count(),
-        "one transport per universe"
+        "one destination span per plan universe"
     );
 
     let period = rate.base_period();
@@ -138,13 +143,15 @@ pub fn run_output_loop(
         .unwrap_or(1 << 16);
     let mut probe = TimingProbe::with_capacity(period, config.late_threshold, expected_samples);
 
-    // Optional ArtSync: a dedicated, isolated sender (same link-state/rebind
-    // safety as a universe output) and a constant 14-byte packet built once.
-    let mut sync_output = config.artsync_target.map(UdpOutput::to_target);
+    // Optional ArtSync: a constant 14-byte packet built once, sent per node.
     let mut artsync_packet = Vec::new();
-    if sync_output.is_some() {
+    if config.artsync {
         crate::packet::artnet::write_artsync(&mut artsync_packet);
     }
+    // Scratch for nodes that need full 512-channel frames; sized once, reused.
+    let mut full_frame = Vec::with_capacity(
+        crate::packet::artnet::ARTDMX_HEADER_LEN + crate::packet::artnet::MAX_CHANNELS,
+    );
 
     let start = Instant::now();
     let mut tick: u64 = 0;
@@ -193,14 +200,25 @@ pub fn run_output_loop(
             highlight: highlight_frame.as_ref(),
         };
 
-        for (i, transport) in transports.iter_mut().enumerate() {
-            if rate.should_send(i, tick) {
+        for i in 0..router.universe_count() {
+            let targets = destinations.destinations(i);
+            // An uncovered universe (no node receives it) is not even encoded.
+            if !targets.is_empty() && rate.should_send(i, tick) {
                 // Encode borrows the router; use it immediately, then release so
-                // the next universe can encode. Sending is isolated per output.
+                // the next universe can encode. Encoded once, sent to each node.
                 match router.encode_universe_with(i, &output_frame) {
                     Ok(bytes) => {
-                        if !transport.send(bytes) {
-                            probe.record_drop();
+                        for dest in targets {
+                            let packet: &[u8] = if dest.full_frames
+                                && crate::packet::artnet::write_full_frame(bytes, &mut full_frame)
+                            {
+                                &full_frame
+                            } else {
+                                bytes
+                            };
+                            if !output.send_to(packet, dest.addr) {
+                                probe.record_drop();
+                            }
                         }
                     }
                     // Plan/layout generation disagree: emitting would paint wrong
@@ -218,9 +236,11 @@ pub fn run_output_loop(
         // Sync latch after this frame's ArtDmx packets, so nodes present every
         // universe on the same output frame. Isolated: a failed sync send never
         // stops the loop.
-        if let Some(sync) = sync_output.as_mut() {
-            if !sync.send(&artsync_packet) {
-                probe.record_drop();
+        if config.artsync {
+            for &target in destinations.sync_targets() {
+                if !output.send_to(&artsync_packet, target) {
+                    probe.record_drop();
+                }
             }
         }
 
@@ -237,7 +257,7 @@ pub fn run_output_loop(
         }
     }
 
-    let outputs = transports.iter().map(|t| t.status()).collect();
+    let outputs = vec![output.status()];
     probe.report(mode, pinned_core, outputs)
 }
 
@@ -258,7 +278,7 @@ mod tests {
         let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
         // A real receiver so sends succeed.
         let rx = std::net::UdpSocket::bind(target).unwrap();
-        let transports = vec![UdpOutput::to_target(rx.local_addr().unwrap())];
+        let target = rx.local_addr().unwrap();
 
         let rate = RatePlan::compute(&[100]); // 100 Hz keeps the test quick
         let config = SchedulerConfig {
@@ -266,7 +286,14 @@ mod tests {
             ..Default::default()
         };
 
-        let report = run_output_loop(consumer, router, transports, rate, config);
+        let report = run_output_loop(
+            consumer,
+            router,
+            UdpOutput::to_target(target),
+            DestinationTable::all_to(target, 1),
+            rate,
+            config,
+        );
         // ~20 ticks at 100 Hz over 200 ms; allow slack for scheduling.
         assert!(report.sample_count >= 10, "got {}", report.sample_count);
         assert_eq!(report.drops, 0);
@@ -278,15 +305,21 @@ mod tests {
         let (mut producer, consumer) = frame_handoff(2);
         producer.publish(|px| px.fill(half::f16::from_f32(0.5)));
         let router = OutputRouter::new(vec![Universe::new(1, 0, 2)]);
-        let transports = vec![UdpOutput::to_target(
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9), // nothing listening: sends may drop, timing still measured
-        )];
+        // Nothing listening: sends may drop, timing is still measured.
+        let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9);
         let rate = RatePlan::compute(&[200]);
         let config = SchedulerConfig {
             run_for: Some(Duration::from_millis(250)),
             ..Default::default()
         };
-        let report = run_output_loop(consumer, router, transports, rate, config);
+        let report = run_output_loop(
+            consumer,
+            router,
+            UdpOutput::to_target(target),
+            DestinationTable::all_to(target, 1),
+            rate,
+            config,
+        );
 
         // The mean interval should track the 5 ms target within a loose bound
         // (loose because CI machines are noisy; the probe binary reports the
@@ -310,15 +343,21 @@ mod tests {
         let (mut producer, consumer) = frame_handoff(6);
         producer.publish(|px| px.fill(half::f16::from_f32(0.5)));
         let router = OutputRouter::new(vec![Universe::new(1, 0, 6)]);
-        let transports = vec![UdpOutput::to_target(target)];
         let rate = RatePlan::compute(&[100]);
         let config = SchedulerConfig {
             run_for: Some(Duration::from_millis(200)),
-            artsync_target: Some(target),
+            artsync: true,
             ..Default::default()
         };
 
-        run_output_loop(consumer, router, transports, rate, config);
+        run_output_loop(
+            consumer,
+            router,
+            UdpOutput::to_target(target),
+            DestinationTable::all_to(target, 1),
+            rate,
+            config,
+        );
         std::thread::sleep(Duration::from_millis(30));
         let state = handle.stop_and_collect();
 
@@ -330,6 +369,75 @@ mod tests {
             "expected ~one ArtSync per frame: dmx={} sync={}",
             state.artdmx_packets,
             state.artsync_packets
+        );
+    }
+
+    #[test]
+    fn each_node_receives_only_its_universes_plus_artsync() {
+        // Two virtual sinks standing in for two boards, on distinct loopback IPs at the
+        // real Art-Net port. Node A takes universes 0–1, node B 1–2 (universe 1 is
+        // mirrored to both) and wants full 512-channel frames.
+        use prisma_core::{ArtNetNode, NetworkConfig, NodeOrigin, UniverseRange};
+        let a_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), 6454);
+        let b_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 3)), 6454);
+        let (Ok(a), Ok(b)) = (crate::sink::spawn(a_addr), crate::sink::spawn(b_addr)) else {
+            eprintln!("skipped: 127.0.0.2/3:6454 not bindable on this host");
+            return;
+        };
+        let node = |ip: Ipv4Addr, first, last, full_frames| ArtNetNode {
+            id: uuid::Uuid::new_v4(),
+            name: String::new(),
+            ip,
+            universes: vec![UniverseRange { first, last }],
+            enabled: true,
+            unicast: true,
+            full_frames,
+            origin: NodeOrigin::Manual,
+        };
+        let net = NetworkConfig {
+            initialized: true,
+            artnet_enabled: true,
+            artsync: true,
+            interface: None,
+            nodes: vec![
+                node(Ipv4Addr::new(127, 0, 0, 2), 0, 1, false),
+                node(Ipv4Addr::new(127, 0, 0, 3), 1, 2, true),
+            ],
+        };
+        let fallback = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9);
+        let table = DestinationTable::compile(&[0, 1, 2], &net, None, fallback);
+
+        let (mut producer, consumer) = frame_handoff(18);
+        producer.publish(|px| px.fill(half::f16::from_f32(0.5)));
+        let router = OutputRouter::new(vec![
+            Universe::new(0, 0, 6),
+            Universe::new(1, 6, 6),
+            Universe::new(2, 12, 6),
+        ]);
+        let any = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
+        run_output_loop(
+            consumer,
+            router,
+            UdpOutput::bound(any),
+            table,
+            RatePlan::compute(&[100, 100, 100]),
+            SchedulerConfig {
+                run_for: Some(Duration::from_millis(200)),
+                artsync: true,
+                ..Default::default()
+            },
+        );
+        std::thread::sleep(Duration::from_millis(30));
+        let a = a.stop_and_collect();
+        let b = b.stop_and_collect();
+
+        assert_eq!(a.universes.keys().copied().collect::<Vec<_>>(), [0, 1]);
+        assert_eq!(b.universes.keys().copied().collect::<Vec<_>>(), [1, 2]);
+        assert_eq!(a.universes[&0].data.len(), 6, "A gets the short frame");
+        assert_eq!(b.universes[&2].data.len(), 512, "B gets full frames");
+        assert!(
+            a.artsync_packets > 0 && b.artsync_packets > 0,
+            "ArtSync to each node"
         );
     }
 }

@@ -27,6 +27,7 @@ use prisma_core::{ClockSnapshot, MasterClock, OverlapSnapshot, ParameterTree};
 use prisma_output::frame::frame_handoff;
 use prisma_output::plan::OutputPlan;
 use prisma_output::rate::RatePlan;
+use prisma_output::route::DestinationTable;
 use prisma_output::router::OutputRouter;
 use prisma_output::scheduler::{run_output_loop, SchedulerConfig};
 use prisma_output::sink;
@@ -266,9 +267,7 @@ fn run_one(gpu: &Gpu, pixels: u32, seconds: u64) -> ScaleResult {
     let target = sink.local_addr();
     let router = OutputRouter::from_plan(plan);
     let (producer, consumer) = frame_handoff(index.master_buffer_len());
-    let transports: Vec<UdpOutput> = (0..universes)
-        .map(|_| UdpOutput::to_target(target))
-        .collect();
+    let destinations = DestinationTable::all_to(target, universes);
     let rate = RatePlan::compute(&vec![RATE_HZ; universes]);
     let output = std::thread::spawn(move || {
         let cpu0 = thread_cpu_seconds();
@@ -276,7 +275,8 @@ fn run_one(gpu: &Gpu, pixels: u32, seconds: u64) -> ScaleResult {
         let report = run_output_loop(
             consumer,
             router,
-            transports,
+            UdpOutput::to_target(target),
+            destinations,
             rate,
             SchedulerConfig {
                 run_for: Some(Duration::from_secs(seconds)),

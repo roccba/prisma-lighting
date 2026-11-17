@@ -16,6 +16,7 @@ half = "2"                # canonical master buffer is linear-light f16 (§5.2);
 socket2 = "0.5"           # fine socket control: bind-to-interface, multicast, non-blocking
 thread-priority = "1"     # cross-platform RT elevation with a measured fallback
 core_affinity = "0.8"     # cross-platform core pinning (Linux/Windows/macOS), no privileges
+uuid = { version = "1", features = ["v4"] }  # ArtNetNode ids (probe's synthetic nodes, test patches)
 
 [features]
 # Linux-only: request SCHED_FIFO through RtKit (no root). Off by default so the
@@ -28,7 +29,6 @@ zbus = { version = "4", optional = true, default-features = false, features = ["
 libc = { version = "0.2", optional = true }
 
 [dev-dependencies]
-uuid = { version = "1", features = ["v4"] }  # building test patches
 glam = "0.29"                                 # Vec3 for test pixel positions
 
 [[bin]]

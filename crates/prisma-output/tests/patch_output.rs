@@ -9,6 +9,7 @@ use std::time::Duration;
 use prisma_output::frame::frame_handoff;
 use prisma_output::plan::OutputPlan;
 use prisma_output::rate::RatePlan;
+use prisma_output::route::DestinationTable;
 use prisma_output::router::OutputRouter;
 use prisma_output::scheduler::{run_output_loop, SchedulerConfig};
 use prisma_output::sink;
@@ -82,13 +83,19 @@ fn canonical_buffer_reaches_sink_with_color_order_applied() {
     producer.set_layout_generation(index.generation());
     producer.publish(move |px| px.copy_from_slice(&master));
 
-    let transports = vec![UdpOutput::to_target(target)];
     let rate = RatePlan::compute(&[44]);
     let config = SchedulerConfig {
         run_for: Some(Duration::from_millis(300)),
         ..Default::default()
     };
-    let report = run_output_loop(consumer, router, transports, rate, config);
+    let report = run_output_loop(
+        consumer,
+        router,
+        UdpOutput::to_target(target),
+        DestinationTable::all_to(target, 1),
+        rate,
+        config,
+    );
     let state = sink.stop_and_collect();
 
     assert_eq!(report.generation_mismatches, 0, "no mismatch expected");
@@ -114,13 +121,19 @@ fn stale_generation_is_refused_and_nothing_is_emitted() {
     producer.set_layout_generation(LayoutGeneration::NONE);
     producer.publish(move |px| px.copy_from_slice(&master));
 
-    let transports = vec![UdpOutput::to_target(target)];
     let rate = RatePlan::compute(&[44]);
     let config = SchedulerConfig {
         run_for: Some(Duration::from_millis(300)),
         ..Default::default()
     };
-    let report = run_output_loop(consumer, router, transports, rate, config);
+    let report = run_output_loop(
+        consumer,
+        router,
+        UdpOutput::to_target(target),
+        DestinationTable::all_to(target, 1),
+        rate,
+        config,
+    );
     let state = sink.stop_and_collect();
 
     // The guard fired on every tick, and NOT ONE corrupt packet went out.

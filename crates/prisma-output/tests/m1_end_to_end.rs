@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use prisma_output::frame::frame_handoff;
 use prisma_output::rate::RatePlan;
+use prisma_output::route::DestinationTable;
 use prisma_output::router::OutputRouter;
 use prisma_output::scheduler::{run_output_loop, SchedulerConfig};
 use prisma_output::sink;
@@ -56,16 +57,20 @@ fn m1_rgb_array_reaches_sink_at_stable_rate_with_measured_timing() {
         .map(|u| Universe::new((u + 1) as u16, u * CHANNELS, CHANNELS))
         .collect();
     let router = OutputRouter::new(maps);
-    let transports: Vec<UdpOutput> = (0..UNIVERSES)
-        .map(|_| UdpOutput::to_target(target))
-        .collect();
     let rate = RatePlan::compute(&[44; UNIVERSES]);
     let config = SchedulerConfig {
         run_for: Some(Duration::from_millis(1500)),
         ..Default::default()
     };
 
-    let report = run_output_loop(consumer, router, transports, rate, config);
+    let report = run_output_loop(
+        consumer,
+        router,
+        UdpOutput::to_target(target),
+        DestinationTable::all_to(target, UNIVERSES),
+        rate,
+        config,
+    );
     let state = sink.stop_and_collect();
 
     // --- The "done when", asserted ---

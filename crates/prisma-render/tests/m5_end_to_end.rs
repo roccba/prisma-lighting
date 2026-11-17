@@ -36,6 +36,7 @@ use prisma_core::{ClockSnapshot, MasterClock, OverlapSnapshot, ParameterTree};
 use prisma_output::frame::frame_handoff;
 use prisma_output::plan::OutputPlan;
 use prisma_output::rate::RatePlan;
+use prisma_output::route::DestinationTable;
 use prisma_output::router::OutputRouter;
 use prisma_output::scheduler::{run_output_loop, SchedulerConfig};
 use prisma_output::sink;
@@ -248,7 +249,8 @@ fn m5_zones_run_independent_effects_with_live_dimmer_and_additive_overlap() {
             run_output_loop(
                 consumer,
                 router,
-                vec![UdpOutput::to_target(target)],
+                UdpOutput::to_target(target),
+                DestinationTable::all_to(target, 1),
                 RatePlan::compute(&[44]),
                 SchedulerConfig {
                     stop,

@@ -47,25 +47,20 @@ impl DestinationTable {
     /// `broadcast` is the chosen interface's directed broadcast, used by nodes with
     /// `unicast: false`; without a resolved interface they fall back to the limited
     /// broadcast `255.255.255.255`.
+    ///
+    /// `fallback` is where everything goes when the output is not routed (Art-Net
+    /// disabled, or no nodes): the virtual sink in the app, a test receiver in tests.
     pub fn compile(
         port_addresses: &[u16],
         net: &NetworkConfig,
         broadcast: Option<Ipv4Addr>,
+        fallback: SocketAddr,
     ) -> DestinationTable {
-        let mut table = DestinationTable::default();
         let routed = net.artnet_enabled && !net.nodes.is_empty();
         if !routed {
-            let sink = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), ARTNET_PORT);
-            for (i, _) in port_addresses.iter().enumerate() {
-                table.flat.push(Destination {
-                    addr: sink,
-                    full_frames: false,
-                });
-                table.spans.push((i as u32, 1));
-            }
-            table.sync_targets.push(sink);
-            return table;
+            return Self::all_to(fallback, port_addresses.len());
         }
+        let mut table = DestinationTable::default();
 
         let bcast = broadcast.unwrap_or(Ipv4Addr::BROADCAST);
         let addr_of = |ip: Ipv4Addr| SocketAddr::new(IpAddr::V4(ip), ARTNET_PORT);
@@ -103,6 +98,29 @@ impl DestinationTable {
             }
         }
         table
+    }
+
+    /// Every one of `universe_count` universes to the single `target` (and the ArtSync
+    /// there too) — the pre-device-manager behaviour, used for the virtual sink, the
+    /// probes and tests.
+    pub fn all_to(target: SocketAddr, universe_count: usize) -> DestinationTable {
+        DestinationTable {
+            flat: vec![
+                Destination {
+                    addr: target,
+                    full_frames: false,
+                };
+                universe_count
+            ],
+            spans: (0..universe_count as u32).map(|i| (i, 1)).collect(),
+            sync_targets: vec![target],
+            uncovered: Vec::new(),
+        }
+    }
+
+    /// How many plan universes the table covers (one span each, possibly empty).
+    pub fn universe_count(&self) -> usize {
+        self.spans.len()
     }
 
     /// The destinations of plan universe `index` (empty if uncovered or out of range).
@@ -144,6 +162,10 @@ mod tests {
         }
     }
 
+    fn sink() -> SocketAddr {
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), ARTNET_PORT)
+    }
+
     fn net(nodes: Vec<ArtNetNode>) -> NetworkConfig {
         NetworkConfig {
             initialized: true,
@@ -165,7 +187,7 @@ mod tests {
     #[test]
     fn each_universe_goes_to_its_node() {
         let n = net(vec![node([10, 0, 0, 1], 0, 5), node([10, 0, 0, 2], 6, 11)]);
-        let t = DestinationTable::compile(&[0, 5, 6, 11], &n, None);
+        let t = DestinationTable::compile(&[0, 5, 6, 11], &n, None, sink());
         assert_eq!(ip_of(t.destinations(0)), [Ipv4Addr::new(10, 0, 0, 1)]);
         assert_eq!(ip_of(t.destinations(1)), [Ipv4Addr::new(10, 0, 0, 1)]);
         assert_eq!(ip_of(t.destinations(2)), [Ipv4Addr::new(10, 0, 0, 2)]);
@@ -178,7 +200,7 @@ mod tests {
     #[test]
     fn overlapping_nodes_both_receive_and_uncovered_is_reported() {
         let n = net(vec![node([10, 0, 0, 1], 0, 3), node([10, 0, 0, 2], 2, 3)]);
-        let t = DestinationTable::compile(&[0, 2, 9], &n, None);
+        let t = DestinationTable::compile(&[0, 2, 9], &n, None, sink());
         assert_eq!(t.destinations(0).len(), 1);
         assert_eq!(
             t.destinations(1).len(),
@@ -194,7 +216,7 @@ mod tests {
         let mut off = node([10, 0, 0, 2], 0, 3);
         off.enabled = false;
         let n = net(vec![node([10, 0, 0, 1], 0, 1), off]);
-        let t = DestinationTable::compile(&[0, 2], &n, None);
+        let t = DestinationTable::compile(&[0, 2], &n, None, sink());
         assert_eq!(t.destinations(0).len(), 1);
         assert_eq!(t.uncovered(), [2]);
         assert_eq!(t.sync_targets().len(), 1, "no ArtSync to a disabled node");
@@ -208,7 +230,7 @@ mod tests {
         b.unicast = false;
         b.full_frames = true;
         let bc = Ipv4Addr::new(2, 255, 255, 255);
-        let t = DestinationTable::compile(&[1], &net(vec![a, b]), Some(bc));
+        let t = DestinationTable::compile(&[1], &net(vec![a, b]), Some(bc), sink());
         assert_eq!(
             ip_of(t.destinations(0)),
             [bc],
@@ -223,13 +245,13 @@ mod tests {
 
     #[test]
     fn disabled_output_or_no_nodes_goes_to_the_virtual_sink() {
-        let sink = Ipv4Addr::LOCALHOST;
+        let sink_ip = Ipv4Addr::LOCALHOST;
         let mut n = net(vec![node([10, 0, 0, 1], 0, 3)]);
         n.artnet_enabled = false;
-        let t = DestinationTable::compile(&[0, 1], &n, None);
-        assert_eq!(ip_of(t.destinations(1)), [sink]);
-        let t = DestinationTable::compile(&[0, 1], &net(vec![]), None);
-        assert_eq!(ip_of(t.destinations(0)), [sink]);
+        let t = DestinationTable::compile(&[0, 1], &n, None, sink());
+        assert_eq!(ip_of(t.destinations(1)), [sink_ip]);
+        let t = DestinationTable::compile(&[0, 1], &net(vec![]), None, sink());
+        assert_eq!(ip_of(t.destinations(0)), [sink_ip]);
         assert!(t.uncovered().is_empty());
     }
 }

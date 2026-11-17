@@ -33,6 +33,7 @@ use prisma_core::{ClockSnapshot, MasterClock, OverlapSnapshot, ParameterTree};
 use prisma_output::frame::frame_handoff;
 use prisma_output::plan::OutputPlan;
 use prisma_output::rate::RatePlan;
+use prisma_output::route::DestinationTable;
 use prisma_output::router::OutputRouter;
 use prisma_output::scheduler::{run_output_loop, SchedulerConfig};
 use prisma_output::sink;
@@ -246,7 +247,6 @@ fn m6_preview_matches_the_wire_tracks_faders_live_and_keeps_silenced_zones() {
     // output guard does not refuse the initial NONE-generation buffers.
     out_producer.set_layout_generation(index.generation());
     out_producer.publish(|px| px.fill(f16::ZERO));
-    let transports = vec![UdpOutput::to_target(target)];
     let rate = RatePlan::compute(&[44]);
     let out_stop = Arc::new(AtomicBool::new(false));
     let out_stop_thread = Arc::clone(&out_stop);
@@ -255,7 +255,8 @@ fn m6_preview_matches_the_wire_tracks_faders_live_and_keeps_silenced_zones() {
         run_output_loop(
             out_consumer,
             router,
-            transports,
+            UdpOutput::to_target(target),
+            DestinationTable::all_to(target, 1),
             rate,
             SchedulerConfig {
                 run_for: Some(Duration::from_secs(30)),

@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -26,6 +27,7 @@ use prisma_output::frame::{frame_handoff, Producer};
 use prisma_output::highlight::{highlight_handoff, HighlightState};
 use prisma_output::plan::{OutputPlan, PlanError};
 use prisma_output::rate::RatePlan;
+use prisma_output::route::DestinationTable;
 use prisma_output::router::OutputRouter;
 use prisma_output::scheduler::{run_output_loop, SchedulerConfig};
 use prisma_output::timing::ProbeReport;
@@ -300,6 +302,12 @@ impl Engine {
         //     A show also exposes its grid cells as tree targets (M9 Slice 3). ---
         let mut cells: Vec<ZoneCells> = Vec::new();
         let mut cell_active: Vec<Option<usize>> = Vec::new();
+        // The show's DMX network output (docs/DEVICES-SPEC.md); no show → the default
+        // (not routed), i.e. every universe to `config.output_target`.
+        let network = match &content {
+            ContentSource::Show(show) => show.network.clone(),
+            ContentSource::Idle => Default::default(),
+        };
         let (zone_content, zone_commands): (Option<ZoneCompositor>, Option<ZoneCommandSender>) =
             match content {
                 ContentSource::Idle => (None, None),
@@ -322,11 +330,24 @@ impl Engine {
         let plan = OutputPlan::compile(&patch, &index)?;
         let router = OutputRouter::from_plan(plan);
         let universe_count = router.universe_count();
-        // One socket per universe, all to the configured target (dev: the virtual
-        // sink; prod: a node or broadcast). Per-universe/NIC routing is deferred.
-        let transports: Vec<UdpOutput> = (0..universe_count)
-            .map(|_| UdpOutput::to_target(config.output_target))
-            .collect();
+        // Per-universe destinations from the show's nodes, compiled here (setup thread)
+        // so the output thread only indexes them. Not routed (Art-Net off / no nodes)
+        // → every universe to `config.output_target` (the virtual sink in the app).
+        let destinations = DestinationTable::compile(
+            &router.port_addresses(),
+            &network,
+            network.interface.as_ref().map(|i| i.broadcast()),
+            config.output_target,
+        );
+        // ONE socket for the whole rig, bound to the show's interface address when it
+        // has one (step 3 resolves it against the host's interfaces), else 0.0.0.0.
+        let bind_ip = network
+            .interface
+            .as_ref()
+            .map(|i| IpAddr::V4(i.address))
+            .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        let output_socket = UdpOutput::bound(SocketAddr::new(bind_ip, 0));
+        let artsync = network.artsync && network.artnet_enabled && !network.nodes.is_empty();
         // Render runs at the fastest active output (§1.4), computed from the RatePlan.
         let desired_hz = if universe_count == 0 {
             vec![config.output_rate_hz]
@@ -365,14 +386,14 @@ impl Engine {
             let stop = Arc::clone(&output_stop);
             let flat = live.clone();
             let pin = config.output_pin_core;
-            let artsync = config.artsync_target;
             std::thread::Builder::new()
                 .name("prisma-output".into())
                 .spawn(move || {
                     run_output_loop(
                         out_consumer,
                         router,
-                        transports,
+                        output_socket,
+                        destinations,
                         rate,
                         SchedulerConfig {
                             run_for: None,
@@ -381,7 +402,7 @@ impl Engine {
                             highlight_consumer: Some(highlight_consumer),
                             stop,
                             pin_to_core: pin,
-                            artsync_target: artsync,
+                            artsync,
                             ..Default::default()
                         },
                     )

@@ -26,6 +26,7 @@ use prisma_output::frame::frame_handoff;
 use prisma_output::packet::artnet::parse_artdmx;
 use prisma_output::plan::{FlatParams, OutputPlan};
 use prisma_output::rate::RatePlan;
+use prisma_output::route::DestinationTable;
 use prisma_output::router::{OutputFrame, OutputRouter};
 use prisma_output::scheduler::{run_output_loop, FlatParamSource, SchedulerConfig};
 use prisma_output::sink;
@@ -391,7 +392,8 @@ fn scaled_output_reaches_the_virtual_sink() {
     let report = run_output_loop(
         consumer,
         router,
-        vec![UdpOutput::to_target(target)],
+        UdpOutput::to_target(target),
+        DestinationTable::all_to(target, 1),
         RatePlan::compute(&[44]),
         config,
     );

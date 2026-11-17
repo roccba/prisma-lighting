@@ -12,11 +12,10 @@ pub struct EngineConfig {
     /// CI determinism; `HighPerformance` for the real product.
     pub adapter: AdapterPreference,
 
-    /// Where DMX goes. Every universe is sent here for now — dev points it at the
-    /// virtual sink; a real rig points it at a node or the Art-Net broadcast
-    /// address. Per-universe / per-NIC routing is deferred with the network-config
-    /// milestone (CLAUDE.md Deferred); the field is a `SocketAddr` today, not a
-    /// richer routing table, on purpose.
+    /// Where DMX goes when the output is **not routed** — no show, Art-Net disabled
+    /// in the show, or no nodes: every universe (and the ArtSync) to this address.
+    /// The app points it at the loopback virtual sink. A show with enabled Art-Net
+    /// nodes routes each universe to its node instead (docs/DEVICES-SPEC.md §5).
     pub output_target: SocketAddr,
 
     /// Desired refresh for every universe, in Hz. Art-Net's practical ceiling is
@@ -43,15 +42,11 @@ pub struct EngineConfig {
     /// Pin the output thread to this core. The output loop also RT-elevates itself
     /// (M1); this is the affinity half. `None` leaves it unpinned.
     pub output_pin_core: Option<usize>,
-
-    /// Broadcast an `ArtSync` after each output frame so multi-node rigs latch
-    /// tear-free (§5.1). `None` = no sync (each `ArtDmx` latches on receipt).
-    pub artsync_target: Option<SocketAddr>,
 }
 
 impl EngineConfig {
     /// A config with the common defaults: 44 Hz per universe, 30 Hz preview, no
-    /// preview sink, no pinning, no ArtSync. Set the remaining fields directly.
+    /// preview sink, no pinning. (ArtSync follows the show's network config.) Set the remaining fields directly.
     pub fn new(adapter: AdapterPreference, output_target: SocketAddr) -> Self {
         Self {
             adapter,
@@ -61,7 +56,6 @@ impl EngineConfig {
             preview_sink: None,
             render_pin_core: None,
             output_pin_core: None,
-            artsync_target: None,
         }
     }
 }

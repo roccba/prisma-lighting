@@ -328,14 +328,10 @@ impl Default for NetworkConfig {
     }
 }
 
-/// The DMX destination for a network config: the configured Art-Net target when enabled
-/// and its IP parses, otherwise the loopback virtual sink. Every universe is sent here.
-fn resolve_target(net: &NetworkConfig) -> SocketAddr {
-    if net.artnet_enabled {
-        if let Ok(ip) = net.artnet_ip.trim().parse::<IpAddr>() {
-            return SocketAddr::new(ip, net.artnet_port);
-        }
-    }
+/// The loopback virtual sink: where DMX goes when the show's output is not routed
+/// (Art-Net off or no nodes). Routed shows send each universe to its node instead —
+/// the engine compiles that from `Show::network` (docs/DEVICES-SPEC.md §5).
+fn virtual_sink() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6454)
 }
 
@@ -830,7 +826,7 @@ fn apply_editor_draft(app: &AppHandle, resume: bool) -> Result<(), String> {
     // A FRESH preview WebSocket on a new port: port 0 never collides with the still-
     // running old engine's sink, and recompile drops the old one on teardown. The
     // viewer reconnects to the new port (re-queried on reconnect).
-    let target = resolve_target(&state.network.lock().unwrap());
+    let target = virtual_sink();
     let (config, port) = preview_config(AdapterPreference::Software, target);
     let mut guard = state.engine.lock().unwrap();
     let engine = guard.take().ok_or("engine is not running")?;
@@ -880,7 +876,7 @@ fn main_save_show(state: State<AppState>, path: String) -> Result<(), String> {
 fn main_new_show(app: AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     let show = empty_show();
-    let target = resolve_target(&state.network.lock().unwrap());
+    let target = virtual_sink();
     let (config, port) = preview_config(AdapterPreference::Software, target);
     let mut guard = state.engine.lock().unwrap();
     let engine = guard.take().ok_or("engine is not running")?;
@@ -923,7 +919,7 @@ fn main_open_show(app: AppHandle, path: String) -> Result<(), String> {
     pad_grids(&mut show);
     migrate_network(&mut show.network, &state.network.lock().unwrap());
 
-    let target = resolve_target(&state.network.lock().unwrap());
+    let target = virtual_sink();
     let (config, port) = preview_config(AdapterPreference::Software, target);
     let mut guard = state.engine.lock().unwrap();
     let engine = guard.take().ok_or("engine is not running")?;
@@ -1166,10 +1162,44 @@ fn main_set_zone_strobe_rate(state: State<AppState>, zone: Uuid, rate: f32) {
 
 // --- Device manager (network output) ---
 
-/// The current network output config, for the device manager UI.
+/// The current network output config, for the (single-target) device manager UI.
+///
+/// INTERIM bridge until the node-based Device Manager (docs/DEVICES-SPEC.md step 6):
+/// the output now follows the **show's** `network` (nodes), so the old one-IP modal
+/// reads and writes that, presented as its single "Destino Art-Net" node.
 #[tauri::command]
 fn main_network_get(state: State<AppState>) -> NetworkConfig {
-    state.network.lock().unwrap().clone()
+    let show = state.show.lock().unwrap();
+    let mut config = state.network.lock().unwrap().clone();
+    config.artnet_enabled = show.network.artnet_enabled;
+    if let Some(node) = show.network.nodes.first() {
+        config.artnet_ip = node.ip.to_string();
+    }
+    config
+}
+
+/// Apply the old modal's single target to the show as ONE node receiving every universe
+/// (see [`main_network_get`]). A bad IP leaves Art-Net off (virtual sink).
+fn apply_single_target(network: &mut ShowNetwork, config: &NetworkConfig) {
+    network.initialized = true;
+    network.nodes.clear();
+    let ip = config.artnet_ip.trim().parse::<Ipv4Addr>();
+    network.artnet_enabled = config.artnet_enabled && ip.is_ok();
+    if let Ok(ip) = ip {
+        network.nodes.push(ArtNetNode {
+            id: Uuid::new_v4(),
+            name: "Destino Art-Net".into(),
+            ip,
+            universes: vec![UniverseRange {
+                first: 0,
+                last: UniverseRange::MAX,
+            }],
+            enabled: true,
+            unicast: true,
+            full_frames: false,
+            origin: NodeOrigin::Manual,
+        });
+    }
 }
 
 /// Apply a network output config: persist it, then **recompile the engine onto the new
@@ -1183,9 +1213,10 @@ fn main_network_set(app: AppHandle, config: NetworkConfig) -> Result<(), String>
     persist_network(&state.network_path, &config)?;
     *state.network.lock().unwrap() = config.clone();
 
-    let target = resolve_target(&config);
+    let target = virtual_sink();
     let show = {
         let mut show = state.show.lock().unwrap();
+        apply_single_target(&mut show.network, &config);
         if let Some(engine) = state.engine.lock().unwrap().as_ref() {
             fold_live_into_show(engine, &mut show);
         }
@@ -1932,7 +1963,7 @@ fn main() {
             // Prefer the real GPU, fall back to software so the window still opens without
             // a configured Vulkan driver. Each attempt binds its own preview WebSocket (a
             // failed attempt frees its port before the next binds).
-            let target = resolve_target(&network);
+            let target = virtual_sink();
             let (config_hp, port_hp) = preview_config(AdapterPreference::HighPerformance, target);
             let (engine, preview_port) = match Engine::start_show(show.clone(), config_hp) {
                 Ok(engine) => (engine, port_hp),

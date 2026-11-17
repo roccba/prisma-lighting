@@ -106,6 +106,13 @@ impl UdpOutput {
         Self::new(bind, target, LinkPolicy::default())
     }
 
+    /// A multi-destination output bound to `bind` (an interface address, or
+    /// `0.0.0.0` to let the OS route), used with [`send_to`](Self::send_to). Its own
+    /// target is just the bind address, reported in [`status`](Self::status).
+    pub fn bound(bind: SocketAddr) -> Self {
+        Self::new(bind, bind, LinkPolicy::default())
+    }
+
     fn open_socket(bind: SocketAddr, target: SocketAddr) -> io::Result<UdpSocket> {
         let domain = if bind.is_ipv4() {
             Domain::IPV4
@@ -161,10 +168,17 @@ impl UdpOutput {
         }
     }
 
-    /// Send one datagram. Never blocks, never panics. Returns `true` if the
-    /// bytes were handed to the kernel, `false` if the frame was dropped (link
-    /// down, buffer full, or a send error) — the caller keeps going regardless.
+    /// Send one datagram to this output's own target. See [`send_to`](Self::send_to).
     pub fn send(&mut self, bytes: &[u8]) -> bool {
+        self.send_to(bytes, self.target)
+    }
+
+    /// Send one datagram to `target` through this output's socket — one socket can
+    /// serve every node of a rig (docs/DEVICES-SPEC.md §5). Never blocks, never
+    /// panics. Returns `true` if the bytes were handed to the kernel, `false` if the
+    /// frame was dropped (link down, buffer full, or a send error) — the caller keeps
+    /// going regardless.
+    pub fn send_to(&mut self, bytes: &[u8], target: SocketAddr) -> bool {
         // If we are down, try to recover on the backoff timer, but do not block.
         if self.socket.is_none() {
             if Instant::now() >= self.next_rebind {
@@ -175,7 +189,6 @@ impl UdpOutput {
             }
         }
 
-        let target = self.target;
         let socket = self.socket.as_ref().expect("socket present");
         match socket.send_to(bytes, target) {
             Ok(_) => {

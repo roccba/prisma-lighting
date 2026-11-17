@@ -92,6 +92,23 @@ impl ArtDmx<'_> {
     }
 }
 
+/// Copy an encoded `ArtDmx` into `buf` padded to a full 512-channel universe (zeros
+/// after its data, Length set to 512), for nodes that only accept full frames
+/// (docs/DEVICES-SPEC.md). `buf` is cleared first and, once it has grown to
+/// [`ARTDMX_HEADER_LEN`] + [`MAX_CHANNELS`], never reallocates (hot path, §3.3).
+/// Returns `false` (leaving `buf` empty) if `artdmx` is not an encoded `ArtDmx`.
+pub fn write_full_frame(artdmx: &[u8], buf: &mut Vec<u8>) -> bool {
+    if artdmx.len() < ARTDMX_HEADER_LEN || artdmx.len() > ARTDMX_HEADER_LEN + MAX_CHANNELS {
+        buf.clear();
+        return false;
+    }
+    buf.clear();
+    buf.extend_from_slice(artdmx);
+    buf.resize(ARTDMX_HEADER_LEN + MAX_CHANNELS, 0);
+    buf[16..18].copy_from_slice(&(MAX_CHANNELS as u16).to_be_bytes());
+    true
+}
+
 /// Encode an `ArtSync` packet into `buf` (cleared first).
 ///
 /// Sent after a frame's `ArtDmx` packets so nodes present all universes on the
@@ -290,5 +307,26 @@ mod tests {
         buf[16] = 0x02; // 0x0200 = 512 channels claimed, only 4 present
         buf[17] = 0x00;
         assert!(parse_artdmx(&buf).is_none());
+    }
+
+    #[test]
+    fn full_frame_pads_data_and_length_to_512() {
+        let mut short = Vec::new();
+        ArtDmx {
+            sequence: 1,
+            physical: 0,
+            port_address: 3,
+            data: &[9, 8, 7],
+        }
+        .write_to(&mut short);
+        let mut full = Vec::with_capacity(ARTDMX_HEADER_LEN + MAX_CHANNELS);
+        assert!(write_full_frame(&short, &mut full));
+        assert_eq!(full.len(), ARTDMX_HEADER_LEN + MAX_CHANNELS);
+        let parsed = parse_artdmx(&full).expect("still a valid ArtDmx");
+        assert_eq!(parsed.port_address, 3);
+        assert_eq!(parsed.data.len(), MAX_CHANNELS);
+        assert_eq!(&parsed.data[..3], &[9, 8, 7]);
+        assert!(parsed.data[3..].iter().all(|&b| b == 0));
+        assert!(!write_full_frame(&[1, 2, 3], &mut full), "not an ArtDmx");
     }
 }
