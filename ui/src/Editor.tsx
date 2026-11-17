@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   addZone,
   applyToLive,
@@ -146,6 +147,11 @@ export default function Editor() {
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
         if (e.shiftKey) redoCmd().then(setEditor); else undoCmd().then(setEditor);
+      } else if (e.key === "F11") {
+        // Same as the main window: toggle this window's fullscreen.
+        e.preventDefault();
+        const w = getCurrentWindow();
+        w.isFullscreen().then((fs) => w.setFullscreen(!fs)).catch(() => {});
       }
     };
     window.addEventListener("keydown", onKey);

@@ -1,11 +1,15 @@
+import { useEffect, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Patch } from "./api";
 import {
   AddFixtures,
   Bolt,
   Bulb,
+  Close,
   Eye,
   EyeOff,
   FolderOpen,
+  Fullscreen,
   Isolate,
   Library,
   Redo,
@@ -135,6 +139,46 @@ export function Toolbar(p: Props) {
           />
         ))}
       </div>
+
+      {/* Window (right-aligned): in fullscreen the editor has no title bar, so these are
+          the only visible way to leave fullscreen or close it. */}
+      <WindowButtons />
+    </div>
+  );
+}
+
+/** Fullscreen toggle (mirrors F11) + close. Close goes through the normal close request, so
+ *  the unsaved-changes guard and the apply-to-live-on-close path both still run. */
+function WindowButtons() {
+  const [fullscreen, setFullscreen] = useState(false);
+  useEffect(() => {
+    const w = getCurrentWindow();
+    const sync = () => w.isFullscreen().then(setFullscreen).catch(() => {});
+    sync();
+    const un = w.onResized(sync); // fullscreen changes (F11, button, WM) resize the window
+    return () => {
+      un.then((f) => f()).catch(() => {});
+    };
+  }, []);
+  const toggle = () => {
+    const w = getCurrentWindow();
+    w.setFullscreen(!fullscreen).catch(() => {});
+  };
+  return (
+    <div className="pr-toolbar-group pr-toolbar-end">
+      <TButton
+        icon={<Fullscreen />}
+        label="Pantalla completa"
+        title="Pantalla completa (F11)"
+        onClick={toggle}
+        active={fullscreen}
+      />
+      <TButton
+        icon={<Close />}
+        label="Cerrar"
+        title="Cerrar el editor y volver al show"
+        onClick={() => getCurrentWindow().close().catch(() => {})}
+      />
     </div>
   );
 }

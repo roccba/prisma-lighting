@@ -1506,6 +1506,35 @@ fn close_splash(app: AppHandle) {
     }
 }
 
+/// The patch-editor window, opened to MATCH the main window: on its monitor, fullscreen
+/// if it is fullscreen (maximized otherwise), and as its child so it stays above it and
+/// travels with it. A plain maximized window left a fullscreen operator with an editor
+/// that had a title bar and the desktop panel, possibly on the other monitor.
+/// (On Wayland the compositor ignores client positions; the parent link is what keeps the
+/// editor with the main window there.)
+fn editor_window_builder(
+    app: &AppHandle,
+) -> tauri::Result<WebviewWindowBuilder<'_, tauri::Wry, AppHandle>> {
+    let mut builder =
+        WebviewWindowBuilder::new(app, "editor", WebviewUrl::App("index.html".into()))
+            .title("Prisma — Editor de Patch")
+            .inner_size(1280.0, 800.0)
+            .min_inner_size(1280.0, 800.0);
+    let Some(main) = app.get_webview_window("main") else {
+        return Ok(builder.maximized(true));
+    };
+    if let Ok(Some(monitor)) = main.current_monitor() {
+        let scale = monitor.scale_factor();
+        let pos = monitor.position();
+        builder = builder.position(pos.x as f64 / scale, pos.y as f64 / scale);
+    }
+    let fullscreen = main.is_fullscreen().unwrap_or(false);
+    builder
+        .fullscreen(fullscreen)
+        .maximized(!fullscreen)
+        .parent(&main)
+}
+
 // `async` on purpose: a Tauri v2 sync command runs on the main (event-loop) thread,
 // and `WebviewWindowBuilder::build()` blocks waiting for that same event loop to create
 // the window — a deadlock that hangs on Windows/WebView2 (GTK tolerated it, so it only
@@ -1521,13 +1550,7 @@ async fn main_open_editor(app: AppHandle) -> Result<(), String> {
     if let Some(engine) = app.state::<AppState>().engine.lock().unwrap().as_ref() {
         engine.set_frozen(true);
     }
-    let win = match WebviewWindowBuilder::new(&app, "editor", WebviewUrl::App("index.html".into()))
-        .title("Prisma — Editor de Patch")
-        .inner_size(1280.0, 800.0)
-        .min_inner_size(1280.0, 800.0)
-        .maximized(true)
-        .build()
-    {
+    let win = match editor_window_builder(&app).and_then(|b| b.build()) {
         Ok(win) => win,
         Err(e) => {
             let msg = format!("editor window failed to open: {e}");

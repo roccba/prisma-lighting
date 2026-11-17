@@ -345,6 +345,8 @@ input, textarea, [contenteditable="true"] {
 .pr-toolbar .sep { border-left: 1px solid var(--divider); margin-left: 4px; padding-left: 14px; }
 /* a labelled cluster of controls inside the toolbar (zone selector, view modes) */
 .pr-toolbar-group { display: flex; align-items: center; gap: 6px; }
+/* A group pushed to the far right of the toolbar (window controls). */
+.pr-toolbar-end { margin-left: auto; }
 .pr-toolbar-label { font-size: var(--fs-small); color: var(--text-label); text-transform: uppercase; letter-spacing: .05em; }
 /* segmented button row (View / Highlight modes) — `.pr-tabbtn` children join seamlessly */
 .pr-segmented { display: inline-flex; }

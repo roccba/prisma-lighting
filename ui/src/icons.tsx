@@ -202,3 +202,21 @@ export function Grid(p: IconProps) {
     </Svg>
   );
 }
+
+/** Fullscreen — four outward corners. */
+export function Fullscreen(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
+    </Svg>
+  );
+}
+
+/** Close — an X. */
+export function Close(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M6 6l12 12M18 6L6 18" />
+    </Svg>
+  );
+}
