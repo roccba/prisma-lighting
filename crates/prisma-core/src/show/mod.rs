@@ -17,6 +17,7 @@ mod version;
 
 pub use error::ShowError;
 pub use model::{
-    Cell, Layer, MasterState, NetworkConfig, ParamSet, Show, Source, ZoneLive, ZoneShow,
+    ArtNetNode, Cell, InterfaceRef, Layer, MasterState, NetworkConfig, NodeOrigin, ParamSet, Show,
+    Source, UniverseRange, ZoneLive, ZoneShow,
 };
 pub use version::{load_show, save_show, CURRENT_SCHEMA_VERSION, FORMAT_ID};

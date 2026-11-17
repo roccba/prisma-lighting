@@ -18,6 +18,7 @@ pub mod packet;
 pub mod plan;
 pub mod priority;
 pub mod rate;
+pub mod route;
 pub mod router;
 pub mod scheduler;
 pub mod sink;

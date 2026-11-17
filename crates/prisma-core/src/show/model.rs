@@ -29,6 +29,7 @@
 //! them on load.
 
 use std::collections::BTreeMap;
+use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use prisma_patch::{BlendMode, Patch};
@@ -247,13 +248,150 @@ impl Default for MasterState {
     }
 }
 
-/// Reserved network/output configuration (M8-SPEC §5).
+/// The Show's DMX network output (docs/DEVICES-SPEC.md): which Art-Net nodes receive
+/// which universes, through which network interface.
 ///
-/// The device manager is its own later spec; M8 keeps the virtual sink and writes
-/// this placeholder so a populated config is an **additive** change, not a schema
-/// break. Empty on purpose.
+/// Lives in the Show — not the machine config — because the nodes and the lighting
+/// network belong to the rig the show drives (Bauti, 2026-11-16). Filled in additively
+/// over the M8 placeholder (`"network": {}`), so old files load unchanged: every field
+/// has a serde default, and [`initialized`](Self::initialized) tells a never-configured
+/// show (which the app migrates from the old app-wide Art-Net target) apart from one
+/// whose operator deliberately left it without nodes.
+///
+/// Universe numbers here are the raw Art-Net 15-bit **port address** (`Net:Sub-Net:
+/// Universe`, 0-based) — the wire truth. The UI shows them 1-based, like professional consoles.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct NetworkConfig {}
+pub struct NetworkConfig {
+    /// `false` until the device manager (or the one-time migration) has written this
+    /// config. Old shows deserialize `false`.
+    #[serde(default)]
+    pub initialized: bool,
+    /// Master switch ("Habilitar"). Off → output goes to the loopback virtual sink.
+    #[serde(default)]
+    pub artnet_enabled: bool,
+    /// Send one ArtSync per frame to every enabled node (tear-free multi-node output).
+    #[serde(default = "default_true")]
+    pub artsync: bool,
+    /// The network interface to send from, by network (see [`InterfaceRef`]). `None` =
+    /// let the OS route.
+    #[serde(default)]
+    pub interface: Option<InterfaceRef>,
+    /// The Art-Net nodes, in the operator's order.
+    #[serde(default)]
+    pub nodes: Vec<ArtNetNode>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// The network interface a show sends from, stored by its **network** so the show
+/// still resolves on another machine, where the same NIC has another name ("eth0" vs
+/// "Ethernet 2"). `name_hint` is only for display.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InterfaceRef {
+    pub address: Ipv4Addr,
+    pub prefix_len: u8,
+    #[serde(default)]
+    pub name_hint: String,
+}
+
+impl InterfaceRef {
+    /// Whether `ip` is on this interface's network.
+    pub fn contains(&self, ip: Ipv4Addr) -> bool {
+        let mask = prefix_mask(self.prefix_len);
+        u32::from(ip) & mask == u32::from(self.address) & mask
+    }
+
+    /// The network's directed broadcast address (e.g. `2.255.255.255` for 2.x/8).
+    pub fn broadcast(&self) -> Ipv4Addr {
+        Ipv4Addr::from(u32::from(self.address) | !prefix_mask(self.prefix_len))
+    }
+}
+
+fn prefix_mask(prefix_len: u8) -> u32 {
+    match prefix_len {
+        0 => 0,
+        n if n >= 32 => u32::MAX,
+        n => u32::MAX << (32 - n),
+    }
+}
+
+/// One Art-Net node (a controller board: H802RA, ESP32/WLED, …) and the universes it
+/// receives.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtNetNode {
+    pub id: Uuid,
+    pub name: String,
+    pub ip: Ipv4Addr,
+    /// Inclusive port-address ranges this node receives.
+    #[serde(default)]
+    pub universes: Vec<UniverseRange>,
+    /// Quick mute of one node without deleting it.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// `true` = unicast to [`ip`](Self::ip); `false` = the interface's subnet broadcast.
+    #[serde(default = "default_true")]
+    pub unicast: bool,
+    /// Pad every ArtDmx to 512 channels, for nodes that need full frames.
+    #[serde(default)]
+    pub full_frames: bool,
+    /// Where the node came from (manual entry or a Scan), for display.
+    #[serde(default)]
+    pub origin: NodeOrigin,
+}
+
+impl ArtNetNode {
+    /// Whether this node receives `port_address`.
+    pub fn receives(&self, port_address: u16) -> bool {
+        self.universes.iter().any(|r| r.contains(port_address))
+    }
+}
+
+/// An inclusive range of Art-Net port addresses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UniverseRange {
+    pub first: u16,
+    pub last: u16,
+}
+
+impl UniverseRange {
+    /// The highest valid Art-Net port address (15 bits).
+    pub const MAX: u16 = 0x7FFF;
+
+    pub fn contains(&self, port_address: u16) -> bool {
+        (self.first..=self.last).contains(&port_address)
+    }
+}
+
+/// How a node entered the list.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum NodeOrigin {
+    #[default]
+    Manual,
+    /// Found by Scan (ArtPollReply): the node's own long name and MAC, for display.
+    Scanned { long_name: String, mac: String },
+}
+
+impl NetworkConfig {
+    /// Structural checks the device manager runs before applying: every range ordered
+    /// and within 15 bits. (Unreachable IPs or uncovered universes are warnings in the
+    /// UI, not errors — the show must still run.)
+    pub fn validate(&self) -> Result<(), crate::show::ShowError> {
+        for node in &self.nodes {
+            for r in &node.universes {
+                if r.first > r.last || r.last > UniverseRange::MAX {
+                    return Err(crate::show::ShowError::InvalidNetwork(format!(
+                        "node \"{}\": universe range {}..={} is invalid",
+                        node.name, r.first, r.last
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+}
 
 /// The Show document (CLAUDE.md §4.3, M8-SPEC §5). Serializes to `.prisma`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

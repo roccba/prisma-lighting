@@ -25,6 +25,8 @@ pub enum ShowError {
         active: usize,
         grid_len: usize,
     },
+    /// The network/output config is malformed (e.g. a reversed universe range).
+    InvalidNetwork(String),
     /// The embedded patch failed its own validation.
     Patch(prisma_patch::PatchError),
     /// JSON (de)serialization failed.
@@ -65,6 +67,7 @@ impl std::fmt::Display for ShowError {
                 f,
                 "zone {zone} active cell {active} is out of range (grid has {grid_len} cells)"
             ),
+            ShowError::InvalidNetwork(msg) => write!(f, "network config invalid: {msg}"),
             ShowError::Patch(e) => write!(f, "embedded patch invalid: {e}"),
             ShowError::Json(e) => write!(f, "show JSON error: {e}"),
         }

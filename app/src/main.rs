@@ -19,9 +19,10 @@ use prisma_editor::{
     FixtureLibrary, FixtureType, PatchDraft, PlacementSpec, PreviewRun, SelectionAggregate,
 };
 use prisma_engine::{
-    load_mappings, load_show, save_mappings, save_show, Cell, CellHost, ControlMode,
+    load_mappings, load_show, save_mappings, save_show, ArtNetNode, Cell, CellHost, ControlMode,
     ControllerMappings, Engine, EngineConfig, EngineHandle, Layer, LedStyle, MapTarget,
-    MidiMapping, MidiNotice, MidiRuntime, ParamSet, Show, Source, ZoneLiveReadout, ZoneShow,
+    MidiMapping, MidiNotice, MidiRuntime, NodeOrigin, ParamSet, Show, ShowNetwork, Source,
+    UniverseRange, ZoneLiveReadout, ZoneShow,
 };
 use prisma_midi::io::{input_port_names, MidiInputLink, MidiIoError, MidiOutputLink};
 use prisma_midi::{DeviceProfile, APC40_KEYWORDS};
@@ -336,6 +337,35 @@ fn resolve_target(net: &NetworkConfig) -> SocketAddr {
         }
     }
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6454)
+}
+
+/// One-time migration of a Show that predates the device manager (`network` never
+/// initialized) from the old app-wide Art-Net target (`network.json`), so it keeps
+/// behaving exactly as before: an enabled legacy target becomes one node receiving every
+/// universe; a disabled one leaves the show on the virtual sink. Idempotent — a show
+/// already initialized (even deliberately without nodes) is never touched.
+fn migrate_network(network: &mut ShowNetwork, legacy: &NetworkConfig) {
+    if network.initialized {
+        return;
+    }
+    network.initialized = true;
+    let ip = legacy.artnet_ip.trim().parse::<Ipv4Addr>();
+    network.artnet_enabled = legacy.artnet_enabled && ip.is_ok();
+    if let (true, Ok(ip)) = (legacy.artnet_enabled, ip) {
+        network.nodes.push(ArtNetNode {
+            id: Uuid::new_v4(),
+            name: "Destino Art-Net".into(),
+            ip,
+            universes: vec![UniverseRange {
+                first: 0,
+                last: UniverseRange::MAX,
+            }],
+            enabled: true,
+            unicast: true,
+            full_frames: false,
+            origin: NodeOrigin::Manual,
+        });
+    }
 }
 
 /// Write the network config to its file, creating the config directory if needed.
@@ -891,6 +921,7 @@ fn main_open_show(app: AppHandle, path: String) -> Result<(), String> {
     show.patch.fit_matrix_size();
     show.patch.compile().map_err(|e| e.to_string())?;
     pad_grids(&mut show);
+    migrate_network(&mut show.network, &state.network.lock().unwrap());
 
     let target = resolve_target(&state.network.lock().unwrap());
     let (config, port) = preview_config(AdapterPreference::Software, target);
@@ -1863,26 +1894,6 @@ fn main() {
                 .path()
                 .app_config_dir()
                 .map_err(|e| format!("no app config dir: {e}"))?;
-            let last_show_file = config_dir.join("last-show.txt");
-            let show = read_last_show(&last_show_file)
-                .and_then(|p| std::fs::read_to_string(&p).ok())
-                .and_then(|json| load_show(&json).ok())
-                .map(|mut s| {
-                    s.patch.fill_zone_members_from_ownership();
-                    s.patch.fit_matrix_size();
-                    // An old save (empty or 16-cell grids) is padded to the full grid.
-                    pad_grids(&mut s);
-                    s
-                })
-                .filter(|s| s.patch.compile().is_ok())
-                .unwrap_or_else(empty_show);
-            // Keep an editable copy as the grid's + zone-set source of truth; the engine
-            // runs its own copy and follows our triggers through the queue.
-            let show_state = show.clone();
-            // The editor draft opens on the same patch (empty until the operator builds a
-            // rig, or the loaded show's rig).
-            let draft_patch = show.patch.clone();
-
             // Network output config (device manager): where DMX goes. Loaded from the
             // per-user app-config dir; a missing/invalid file → defaults (virtual sink),
             // so a fresh install behaves exactly as before.
@@ -1895,6 +1906,28 @@ fn main() {
                 .ok()
                 .and_then(|json| serde_json::from_str::<NetworkConfig>(&json).ok())
                 .unwrap_or_default();
+
+            let last_show_file = config_dir.join("last-show.txt");
+            let mut show = read_last_show(&last_show_file)
+                .and_then(|p| std::fs::read_to_string(&p).ok())
+                .and_then(|json| load_show(&json).ok())
+                .map(|mut s| {
+                    s.patch.fill_zone_members_from_ownership();
+                    s.patch.fit_matrix_size();
+                    // An old save (empty or 16-cell grids) is padded to the full grid.
+                    pad_grids(&mut s);
+                    s
+                })
+                .filter(|s| s.patch.compile().is_ok())
+                .unwrap_or_else(empty_show);
+            // A show from before the device manager inherits the old app-wide target.
+            migrate_network(&mut show.network, &network);
+            // Keep an editable copy as the grid's + zone-set source of truth; the engine
+            // runs its own copy and follows our triggers through the queue.
+            let show_state = show.clone();
+            // The editor draft opens on the same patch (empty until the operator builds a
+            // rig, or the loaded show's rig).
+            let draft_patch = show.patch.clone();
 
             // Prefer the real GPU, fall back to software so the window still opens without
             // a configured Vulkan driver. Each attempt binds its own preview WebSocket (a
@@ -2055,6 +2088,34 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn legacy(enabled: bool, ip: &str) -> NetworkConfig {
+        NetworkConfig {
+            artnet_enabled: enabled,
+            artnet_ip: ip.into(),
+            artnet_port: 6454,
+        }
+    }
+
+    #[test]
+    fn migrate_network_turns_an_enabled_legacy_target_into_one_all_universe_node() {
+        let mut net = ShowNetwork::default();
+        migrate_network(&mut net, &legacy(true, "2.255.255.255"));
+        assert!(net.initialized && net.artnet_enabled);
+        assert_eq!(net.nodes.len(), 1);
+        assert_eq!(net.nodes[0].ip, Ipv4Addr::new(2, 255, 255, 255));
+        assert!(net.nodes[0].receives(0) && net.nodes[0].receives(UniverseRange::MAX));
+    }
+
+    #[test]
+    fn migrate_network_keeps_a_disabled_legacy_on_the_virtual_sink_and_runs_once() {
+        let mut net = ShowNetwork::default();
+        migrate_network(&mut net, &legacy(false, "10.0.0.1"));
+        assert!(net.initialized && !net.artnet_enabled && net.nodes.is_empty());
+        // Already initialized: a later enabled legacy config must not add a node.
+        migrate_network(&mut net, &legacy(true, "10.0.0.1"));
+        assert!(net.nodes.is_empty());
+    }
 
     #[test]
     fn empty_show_default_zone_has_a_seeded_lit_grid() {

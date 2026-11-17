@@ -225,3 +225,90 @@ fn new_show_builds_one_zone_show_per_patch_zone() {
     }
     show.validate().expect("a fresh show is valid");
 }
+
+// --- Network output (docs/DEVICES-SPEC.md) ---
+
+use prisma_core::show::{ArtNetNode, InterfaceRef, NetworkConfig, NodeOrigin, UniverseRange};
+use std::net::Ipv4Addr;
+
+fn h802ra() -> ArtNetNode {
+    ArtNetNode {
+        id: Uuid::new_v4(),
+        name: "H802RA".into(),
+        ip: Ipv4Addr::new(169, 254, 99, 11),
+        universes: vec![UniverseRange { first: 0, last: 71 }],
+        enabled: true,
+        unicast: true,
+        full_frames: false,
+        origin: NodeOrigin::Scanned {
+            long_name: "Oem ArtNet-Node".into(),
+            mac: "48:E0:C7:4D:96:64".into(),
+        },
+    }
+}
+
+#[test]
+fn network_config_round_trips_inside_the_show() {
+    let mut show = populated_show();
+    show.network = NetworkConfig {
+        initialized: true,
+        artnet_enabled: true,
+        artsync: true,
+        interface: Some(InterfaceRef {
+            address: Ipv4Addr::new(169, 254, 1, 2),
+            prefix_len: 16,
+            name_hint: "enp3s0".into(),
+        }),
+        nodes: vec![h802ra()],
+    };
+    let back = load_show(&save_show(&show).unwrap()).unwrap();
+    assert_eq!(back.network, show.network);
+}
+
+#[test]
+fn an_m8_placeholder_network_loads_as_never_configured() {
+    // M8 wrote `"network": {}`. It must load (additive change), and read as
+    // "never initialized" so the app can migrate the old app-wide Art-Net target.
+    let json = save_show(&populated_show()).unwrap();
+    let mut v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    v["show"]["network"] = serde_json::json!({});
+    let back = load_show(&v.to_string()).unwrap();
+    assert!(!back.network.initialized);
+    assert!(!back.network.artnet_enabled);
+    assert!(back.network.artsync, "ArtSync defaults on");
+    assert!(back.network.nodes.is_empty());
+}
+
+#[test]
+fn interface_matches_by_network_not_name() {
+    let iface = InterfaceRef {
+        address: Ipv4Addr::new(169, 254, 1, 2),
+        prefix_len: 16,
+        name_hint: "eth0".into(),
+    };
+    assert!(iface.contains(Ipv4Addr::new(169, 254, 99, 11)));
+    assert!(!iface.contains(Ipv4Addr::new(192, 168, 1, 11)));
+    assert_eq!(iface.broadcast(), Ipv4Addr::new(169, 254, 255, 255));
+    let two = InterfaceRef {
+        address: Ipv4Addr::new(2, 0, 0, 10),
+        prefix_len: 8,
+        name_hint: String::new(),
+    };
+    assert_eq!(two.broadcast(), Ipv4Addr::new(2, 255, 255, 255));
+}
+
+#[test]
+fn network_validate_rejects_bad_ranges() {
+    let mut net = NetworkConfig {
+        nodes: vec![h802ra()],
+        ..Default::default()
+    };
+    assert!(net.validate().is_ok());
+    net.nodes[0].universes = vec![UniverseRange { first: 5, last: 4 }];
+    assert!(matches!(net.validate(), Err(ShowError::InvalidNetwork(_))));
+    net.nodes[0].universes = vec![UniverseRange {
+        first: 0,
+        last: 0x8000,
+    }];
+    assert!(matches!(net.validate(), Err(ShowError::InvalidNetwork(_))));
+}

@@ -50,8 +50,8 @@ pub use mappings::{
 pub use notify::{Filter, Subscription, SubscriptionCloser};
 pub use overlap::{OverlapSnapshot, NO_CELL, NO_ZONE};
 pub use show::{
-    load_show, save_show, Cell, Layer, MasterState, ParamSet, Show, ShowError, Source, ZoneLive,
-    ZoneShow,
+    load_show, save_show, ArtNetNode, Cell, InterfaceRef, Layer, MasterState, NetworkConfig,
+    NodeOrigin, ParamSet, Show, ShowError, Source, UniverseRange, ZoneLive, ZoneShow,
 };
 pub use slot::{ParamHandle, ParamId};
 pub use source::{priority, SourceId};

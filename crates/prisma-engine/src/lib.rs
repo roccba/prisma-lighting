@@ -45,8 +45,12 @@ pub use engine::{Engine, EngineError, EngineHandle, ShutdownReport, ZoneLiveRead
 // The Show model the assembly consumes, re-exported so the app (which sits on this
 // crate) can build a `Show` without depending on `prisma-core` directly.
 pub use prisma_core::show::{
-    load_show, save_show, Cell, Layer, MasterState, ParamSet, Show, Source, ZoneLive, ZoneShow,
+    load_show, save_show, ArtNetNode, Cell, InterfaceRef, Layer, MasterState, NodeOrigin, ParamSet,
+    Show, Source, UniverseRange, ZoneLive, ZoneShow,
 };
+// The Show's network output (docs/DEVICES-SPEC.md), aliased so it never reads as the
+// app's legacy app-wide `NetworkConfig` (`network.json`) it replaces.
+pub use prisma_core::show::NetworkConfig as ShowNetwork;
 // The MIDI transport (M9) and its document types, re-exported for the app shell.
 pub use prisma_core::mappings::{
     load_mappings, save_mappings, ControlMode, ControllerMappings, LedAnimation, LedRate, LedStyle,
