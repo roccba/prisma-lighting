@@ -14,20 +14,28 @@ interface FaderProps {
 }
 
 const TICKS = 11; // 10 segments; major at both ends
+/** Knob width in px — keep in sync with `.pr-hslider` `--pr-knob-w` in theme.css. */
+const KNOB_W = 30;
 
 export function Fader({ value, onChange, onGrabbedChange, ...rest }: FaderProps) {
   const railRef = useRef<HTMLDivElement>(null);
   const [grabbed, setGrabbed] = useState(false);
   const v = Math.max(0, Math.min(1, value));
-  const pct = `${v * 100}%`;
+  // Constrain the knob's travel to WITHIN the rail (like VFader): at v=0 its left edge is
+  // at 0, at v=1 its right edge is at the rail's end. Without this it overhung each end by
+  // half its width and covered the value box beside the fader. Slot, fill and ticks are
+  // inset by half a knob so the knob's centre always sits on the fill's end.
+  const travel = `${v.toFixed(4)} * (100% - var(--pr-knob-w))`;
 
   const valueFromEvent = (clientX: number): number => {
     const rail = railRef.current;
     if (!rail) return v;
     const rect = rail.getBoundingClientRect();
-    const pad = 4; // matches .pr-hslider padding
-    const x = clientX - rect.left - pad;
-    const span = Math.max(1, rect.width - 2 * pad);
+    // The knob's CENTRE travels between half a knob in from each end (see the knob style
+    // below), so the pointer maps onto that same span — the knob lands under the cursor.
+    const half = KNOB_W / 2;
+    const x = clientX - rect.left - half;
+    const span = Math.max(1, rect.width - KNOB_W);
     return Math.max(0, Math.min(1, x / span));
   };
 
@@ -81,13 +89,13 @@ export function Fader({ value, onChange, onGrabbedChange, ...rest }: FaderProps)
       aria-label={rest["aria-label"]}
     >
       <div className="slot" />
-      <div className="fill" style={{ width: pct }} />
+      <div className="fill" style={{ width: `calc(${travel})` }} />
       <div className="ticks">
         {Array.from({ length: TICKS }, (_, i) => (
           <i key={i} className={i === 0 || i === TICKS - 1 ? "major" : ""} />
         ))}
       </div>
-      <div className={`pr-knob${grabbed ? " is-grabbed" : ""}`} style={{ left: `calc(${pct} - 15px)` }}>
+      <div className={`pr-knob${grabbed ? " is-grabbed" : ""}`} style={{ left: `calc(${travel})` }}>
         <span className="ridge" />
         <span className="ridge" />
         <span className="ridge" />

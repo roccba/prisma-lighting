@@ -391,10 +391,12 @@ input, textarea, [contenteditable="true"] {
 .pr-fader .pr-knob .ridge { height: 2px; }
 
 /* horizontal slider: same knob, rotated (vertical ridges) */
-.pr-hslider { position: relative; height: 44px; padding: 0 4px; }
-.pr-hslider .slot { position: absolute; top: 21px; left: 4px; right: 4px; height: 6px; background: #050505; border: 1px solid var(--btn-border-dark); border-radius: var(--r-md); box-shadow: inset 0 0 3px rgba(0,0,0,.8); }
-.pr-hslider .fill { position: absolute; top: 21px; left: 4px; height: 6px; background: linear-gradient(90deg, var(--accent), var(--accent-bright)); border-radius: var(--r-md) 0 0 var(--r-md); }
-.pr-hslider .ticks { position: absolute; top: 30px; left: 4px; right: 4px; display: flex; justify-content: space-between; pointer-events: none; }
+/* `--pr-knob-w` = knob width (keep in sync with KNOB_W in Fader.tsx). The rail parts are
+   inset by half of it so the knob, which travels inside the rail, centres on their ends. */
+.pr-hslider { --pr-knob-w: 30px; position: relative; height: 44px; }
+.pr-hslider .slot { position: absolute; top: 21px; left: calc(var(--pr-knob-w) / 2); right: calc(var(--pr-knob-w) / 2); height: 6px; background: #050505; border: 1px solid var(--btn-border-dark); border-radius: var(--r-md); box-shadow: inset 0 0 3px rgba(0,0,0,.8); }
+.pr-hslider .fill { position: absolute; top: 21px; left: calc(var(--pr-knob-w) / 2); height: 6px; background: linear-gradient(90deg, var(--accent), var(--accent-bright)); border-radius: var(--r-md) 0 0 var(--r-md); }
+.pr-hslider .ticks { position: absolute; top: 30px; left: calc(var(--pr-knob-w) / 2); right: calc(var(--pr-knob-w) / 2); display: flex; justify-content: space-between; pointer-events: none; }
 .pr-hslider .ticks i { width: 1px; height: 6px; background: #4a4a4a; }
 .pr-hslider .ticks i.major { height: 10px; background: #666; }
 .pr-hslider .pr-knob { position: absolute; top: 9px; width: 30px; height: 30px; flex-direction: row; background: linear-gradient(90deg, #575757 0%, #3d3d3d 50%, #2c2c2c 100%); border-left-color: #6e6e6e; }
@@ -691,7 +693,13 @@ input, textarea, [contenteditable="true"] {
 .pr-field { width: auto; min-width: 0; display: grid; grid-template-columns: 92px 52px 1fr; grid-template-areas: "label value control"; align-items: center; gap: 10px; }
 .pr-field-label { grid-area: label; font-size: var(--fs-base); color: var(--text-label); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pr-field-control { grid-area: control; min-width: 0; }
-.pr-field-control .pr-hslider { height: 30px; }
+/* Compact fader for parameter rows: every part fits INSIDE its 40px box (knob 5–35,
+   slot 17–23, ticks 26–36) — the default 44px geometry squeezed into 30px let the knob
+   and ticks hang 10px below it. */
+.pr-field-control .pr-hslider { height: 40px; }
+.pr-field-control .pr-hslider .pr-knob { top: 5px; }
+.pr-field-control .pr-hslider .slot, .pr-field-control .pr-hslider .fill { top: 17px; }
+.pr-field-control .pr-hslider .ticks { top: 26px; }
 .pr-field-block { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
 .pr-field-block .pr-field-label { grid-area: auto; }
 .pr-field-block .pr-field-control { grid-area: auto; }
