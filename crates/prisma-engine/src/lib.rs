@@ -47,6 +47,8 @@ pub use engine::{
 pub use prisma_output::netif::{host_interfaces, HostInterface, InterfaceResolution};
 // Art-Net Scan (docs/DEVICES-SPEC.md §7).
 pub use prisma_output::discovery::{scan as artnet_scan, DiscoveredNode, ScanError};
+// The node monitor: single owner of UDP 6454 — status + Scan (§7–§8).
+pub use prisma_output::monitor::{NodeMonitor, NodeStatus};
 
 // The Show model the assembly consumes, re-exported so the app (which sits on this
 // crate) can build a `Show` without depending on `prisma-core` directly.

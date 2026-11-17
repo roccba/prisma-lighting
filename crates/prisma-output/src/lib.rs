@@ -15,6 +15,7 @@ pub mod affinity;
 pub mod discovery;
 pub mod frame;
 pub mod highlight;
+pub mod monitor;
 pub mod netif;
 pub mod packet;
 pub mod plan;

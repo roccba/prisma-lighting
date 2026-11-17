@@ -19,11 +19,11 @@ use prisma_editor::{
     FixtureLibrary, FixtureType, PatchDraft, PlacementSpec, PreviewRun, SelectionAggregate,
 };
 use prisma_engine::{
-    artnet_scan, host_interfaces, load_mappings, load_show, save_mappings, save_show, ArtNetNode,
-    Cell, CellHost, ControlMode, ControllerMappings, DiscoveredNode, Engine, EngineConfig,
-    EngineHandle, HostInterface, InterfaceResolution, Layer, LedStyle, MapTarget, MidiMapping,
-    MidiNotice, MidiRuntime, NodeOrigin, ParamSet, ScanError, Show, ShowNetwork, Source,
-    UniverseRange, ZoneLiveReadout, ZoneShow,
+    host_interfaces, load_mappings, load_show, save_mappings, save_show, ArtNetNode, Cell,
+    CellHost, ControlMode, ControllerMappings, DiscoveredNode, Engine, EngineConfig, EngineHandle,
+    HostInterface, InterfaceResolution, Layer, LedStyle, MapTarget, MidiMapping, MidiNotice,
+    MidiRuntime, NodeMonitor, NodeOrigin, NodeStatus, ParamSet, ScanError, Show, ShowNetwork,
+    Source, UniverseRange, ZoneLiveReadout, ZoneShow,
 };
 use prisma_midi::io::{input_port_names, MidiInputLink, MidiIoError, MidiOutputLink};
 use prisma_midi::{DeviceProfile, APC40_KEYWORDS};
@@ -280,6 +280,9 @@ struct AppState {
     network: Mutex<NetworkConfig>,
     /// Where the network config file lives — the per-user app-config dir.
     network_path: PathBuf,
+    /// The Art-Net node monitor (status + Scan), the single owner of UDP 6454. `None`
+    /// when another program holds the port; retried on the next Scan.
+    artnet_monitor: Mutex<Option<Arc<NodeMonitor>>>,
     /// File holding the path of the last opened/saved show, so the next launch reopens it.
     /// Empty/missing ⇒ boot empty. Cleared by "Nueva configuración".
     last_show_file: PathBuf,
@@ -891,6 +894,7 @@ fn main_new_show(app: AppHandle) -> Result<(), String> {
             drop(guard);
             *state.draft.lock().unwrap() = PatchDraft::new(show.patch.clone());
             *state.show.lock().unwrap() = show;
+            watch_show_nodes(&state);
             if let Some(engine) = state.engine.lock().unwrap().as_ref() {
                 refresh_all_cells(engine);
             }
@@ -936,6 +940,7 @@ fn main_open_show(app: AppHandle, path: String) -> Result<(), String> {
             // opened next, shows this rig), then tell the main window to re-fetch.
             *state.draft.lock().unwrap() = PatchDraft::new(show.patch.clone());
             *state.show.lock().unwrap() = show;
+            watch_show_nodes(&state);
             if let Some(engine) = state.engine.lock().unwrap().as_ref() {
                 refresh_all_cells(engine);
             }
@@ -1233,6 +1238,7 @@ fn main_network_set(app: AppHandle, config: NetworkConfig) -> Result<(), String>
                 *state.preview_port.lock().unwrap() = port;
             }
             drop(guard);
+            watch_show_nodes(&state);
             // The preview WebSocket moved to a fresh port; nudge the UI to re-fetch.
             let _ = app.emit("layout-changed", ());
             Ok(())
@@ -1333,30 +1339,108 @@ impl From<&DiscoveredNode> for ScannedNodeInfo {
     }
 }
 
+/// Start the Art-Net node monitor if it is not running, and return it. Its status
+/// changes reach the UI as `artnet-node-status` events (`[{ip, status}]`).
+fn ensure_artnet_monitor(app: &AppHandle) -> Result<Arc<NodeMonitor>, String> {
+    let state = app.state::<AppState>();
+    let mut slot = state.artnet_monitor.lock().unwrap();
+    if let Some(m) = slot.as_ref() {
+        return Ok(Arc::clone(m));
+    }
+    let emitter = app.clone();
+    let monitor = NodeMonitor::start(Box::new(move |changed| {
+        let payload: Vec<NodeStatusInfo> = changed
+            .iter()
+            .map(|&(ip, st)| NodeStatusInfo::new(ip, st))
+            .collect();
+        let _ = emitter.emit("artnet-node-status", payload);
+    }))
+    .map_err(|e| match e {
+        ScanError::PortBusy(_) => "El puerto UDP 6454 está ocupado por otro programa \
+             (¿otro programa de iluminación abierto?). Podés agregar los nodos a mano."
+            .to_string(),
+        other => other.to_string(),
+    })?;
+    let monitor = Arc::new(monitor);
+    *slot = Some(Arc::clone(&monitor));
+    drop(slot);
+    watch_show_nodes(&state);
+    Ok(monitor)
+}
+
+/// Point the monitor at the running show's nodes (their status is what the UI shows).
+fn watch_show_nodes(state: &AppState) {
+    let ips: Vec<Ipv4Addr> = state
+        .show
+        .lock()
+        .unwrap()
+        .network
+        .nodes
+        .iter()
+        .map(|n| n.ip)
+        .collect();
+    if let Some(m) = state.artnet_monitor.lock().unwrap().as_ref() {
+        m.set_watched(ips);
+    }
+}
+
+/// A node's reachability for the UI: "online" (responde), "silent" (sin respuesta —
+/// neutral, some devices never answer ArtPoll) or "lost" (dejó de responder — alarm).
+#[derive(Serialize, Clone)]
+struct NodeStatusInfo {
+    ip: String,
+    status: &'static str,
+}
+
+impl NodeStatusInfo {
+    fn new(ip: Ipv4Addr, status: NodeStatus) -> Self {
+        Self {
+            ip: ip.to_string(),
+            status: match status {
+                NodeStatus::Online => "online",
+                NodeStatus::Silent => "silent",
+                NodeStatus::Lost => "lost",
+            },
+        }
+    }
+}
+
+/// Current status of every node of the running show (initial fill for the Device
+/// Manager; later changes arrive as `artnet-node-status` events). Empty if the monitor
+/// is not running (port held).
+#[tauri::command]
+fn main_node_statuses(state: State<AppState>) -> Vec<NodeStatusInfo> {
+    let Some(monitor) = state.artnet_monitor.lock().unwrap().clone() else {
+        return Vec::new();
+    };
+    let ips: Vec<Ipv4Addr> = state
+        .show
+        .lock()
+        .unwrap()
+        .network
+        .nodes
+        .iter()
+        .map(|n| n.ip)
+        .collect();
+    ips.into_iter()
+        .map(|ip| NodeStatusInfo::new(ip, monitor.status(ip)))
+        .collect()
+}
+
 /// How long a Scan listens for replies (spec §7: ~3 s, with a re-poll halfway).
 const SCAN_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
 
-/// Scan the network for Art-Net nodes (ArtPoll → ArtPollReply), like the classic Scan.
-/// Polls every host interface's subnet broadcast plus 255.255.255.255, so a board on a
-/// link-local network (the H802RA at 169.254.x) is found without picking an interface
-/// first. Runs off the UI/event thread. The raw replies are also written to
+/// Scan the network for Art-Net nodes (ArtPoll → ArtPollReply), like the classic Scan,
+/// through the node monitor (the one owner of UDP 6454). It polls every host
+/// interface's subnet broadcast plus 255.255.255.255, so a board on a link-local
+/// network (the H802RA at 169.254.x) is found without picking an interface first. Runs off the UI/event thread. The raw replies are also written to
 /// `artnet-scan.json` in the app-config dir — real device bytes for the parser tests.
 #[tauri::command]
 async fn main_artnet_scan(app: AppHandle) -> Result<Vec<ScannedNodeInfo>, String> {
-    let mut targets: Vec<Ipv4Addr> = host_interfaces().iter().map(|h| h.broadcast()).collect();
-    targets.push(Ipv4Addr::BROADCAST);
-    targets.dedup();
-    let nodes = tauri::async_runtime::spawn_blocking(move || artnet_scan(&targets, SCAN_WINDOW))
+    let monitor = ensure_artnet_monitor(&app)?;
+    let nodes = tauri::async_runtime::spawn_blocking(move || monitor.scan(SCAN_WINDOW))
         .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| match e {
-            ScanError::PortBusy(_) => {
-                "El puerto UDP 6454 está ocupado por otro programa (¿otro programa de iluminación abierto?). \
-                 Podés agregar los nodos a mano."
-                    .to_string()
-            }
-            other => other.to_string(),
-        })?;
+        .map_err(|e| e.to_string())?;
     if let Ok(dir) = app.path().app_config_dir() {
         let dump: Vec<serde_json::Value> = nodes
             .iter()
@@ -2028,6 +2112,7 @@ fn main() {
             main_network_interfaces,
             main_output_status,
             main_artnet_scan,
+            main_node_statuses,
             main_set_zone_solo,
             main_set_zone_blackout,
             main_set_zone_strobe_on,
@@ -2193,6 +2278,7 @@ fn main() {
                 preview_port: Mutex::new(preview_port.unwrap_or(0)),
                 network: Mutex::new(network),
                 network_path,
+                artnet_monitor: Mutex::new(None),
                 last_show_file,
                 midi,
                 midi_link: Mutex::new(None),
@@ -2211,6 +2297,9 @@ fn main() {
             // Open the MIDI input off the boot path's critical section: a missing device
             // just leaves the link empty (the device manager can reconnect later).
             connect_midi(&app.state::<AppState>());
+            // Art-Net node monitor (status dots + Scan). A held 6454 (professional consoles open on this
+            // PC) just leaves it off; the Scan retries and explains.
+            let _ = ensure_artnet_monitor(app.handle());
 
             // Boot splash safety net: the splash webview normally reveals the main window
             // (via `close_splash`) once the UI signals `prisma://ready`, and it has its own
