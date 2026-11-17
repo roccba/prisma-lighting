@@ -19,10 +19,11 @@ use prisma_editor::{
     FixtureLibrary, FixtureType, PatchDraft, PlacementSpec, PreviewRun, SelectionAggregate,
 };
 use prisma_engine::{
-    host_interfaces, load_mappings, load_show, save_mappings, save_show, ArtNetNode, Cell,
-    CellHost, ControlMode, ControllerMappings, Engine, EngineConfig, EngineHandle, HostInterface,
-    InterfaceResolution, Layer, LedStyle, MapTarget, MidiMapping, MidiNotice, MidiRuntime,
-    NodeOrigin, ParamSet, Show, ShowNetwork, Source, UniverseRange, ZoneLiveReadout, ZoneShow,
+    artnet_scan, host_interfaces, load_mappings, load_show, save_mappings, save_show, ArtNetNode,
+    Cell, CellHost, ControlMode, ControllerMappings, DiscoveredNode, Engine, EngineConfig,
+    EngineHandle, HostInterface, InterfaceResolution, Layer, LedStyle, MapTarget, MidiMapping,
+    MidiNotice, MidiRuntime, NodeOrigin, ParamSet, ScanError, Show, ShowNetwork, Source,
+    UniverseRange, ZoneLiveReadout, ZoneShow,
 };
 use prisma_midi::io::{input_port_names, MidiInputLink, MidiIoError, MidiOutputLink};
 use prisma_midi::{DeviceProfile, APC40_KEYWORDS};
@@ -1301,6 +1302,82 @@ fn main_output_status(state: State<AppState>) -> Result<OutputStatusInfo, String
     })
 }
 
+/// One node found by a Scan, for the Device Manager's results list.
+#[derive(Serialize)]
+struct ScannedNodeInfo {
+    ip: String,
+    short_name: String,
+    long_name: String,
+    mac: String,
+    /// Output universes as raw Art-Net port-address ranges `[first, last]` (the UI
+    /// shows them +1, like professional consoles).
+    universes: Vec<[u16; 2]>,
+    /// `BindIndex` groups that answered (the H802RA: 18).
+    binds: usize,
+}
+
+impl From<&DiscoveredNode> for ScannedNodeInfo {
+    fn from(n: &DiscoveredNode) -> Self {
+        Self {
+            ip: n.ip.to_string(),
+            short_name: n.short_name.clone(),
+            long_name: n.long_name.clone(),
+            mac: n.mac_string(),
+            universes: n
+                .universe_ranges()
+                .iter()
+                .map(|r| [r.first, r.last])
+                .collect(),
+            binds: n.binds,
+        }
+    }
+}
+
+/// How long a Scan listens for replies (spec §7: ~3 s, with a re-poll halfway).
+const SCAN_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Scan the network for Art-Net nodes (ArtPoll → ArtPollReply), like the classic Scan.
+/// Polls every host interface's subnet broadcast plus 255.255.255.255, so a board on a
+/// link-local network (the H802RA at 169.254.x) is found without picking an interface
+/// first. Runs off the UI/event thread. The raw replies are also written to
+/// `artnet-scan.json` in the app-config dir — real device bytes for the parser tests.
+#[tauri::command]
+async fn main_artnet_scan(app: AppHandle) -> Result<Vec<ScannedNodeInfo>, String> {
+    let mut targets: Vec<Ipv4Addr> = host_interfaces().iter().map(|h| h.broadcast()).collect();
+    targets.push(Ipv4Addr::BROADCAST);
+    targets.dedup();
+    let nodes = tauri::async_runtime::spawn_blocking(move || artnet_scan(&targets, SCAN_WINDOW))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| match e {
+            ScanError::PortBusy(_) => {
+                "El puerto UDP 6454 está ocupado por otro programa (¿otro programa de iluminación abierto?). \
+                 Podés agregar los nodos a mano."
+                    .to_string()
+            }
+            other => other.to_string(),
+        })?;
+    if let Ok(dir) = app.path().app_config_dir() {
+        let dump: Vec<serde_json::Value> = nodes
+            .iter()
+            .map(|n| {
+                serde_json::json!({
+                    "ip": n.ip.to_string(),
+                    "short_name": n.short_name,
+                    "replies_hex": n.raw_replies.iter().map(|r| {
+                        r.iter().map(|b| format!("{b:02x}")).collect::<String>()
+                    }).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        let _ = persist_text(
+            &dir.join("artnet-scan.json"),
+            &serde_json::to_string_pretty(&dump).unwrap_or_default(),
+        );
+    }
+    Ok(nodes.iter().map(ScannedNodeInfo::from).collect())
+}
+
 // --- MIDI (M9): device I/O, MIDI Learn, LED feedback ---
 
 /// Write a JSON-able config next to the others, creating the config directory if needed.
@@ -1950,6 +2027,7 @@ fn main() {
             main_network_set,
             main_network_interfaces,
             main_output_status,
+            main_artnet_scan,
             main_set_zone_solo,
             main_set_zone_blackout,
             main_set_zone_strobe_on,

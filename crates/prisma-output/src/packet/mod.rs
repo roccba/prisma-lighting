@@ -7,3 +7,4 @@
 //! the virtual sink, and the layer the packet-level tests target (CLAUDE.md §7).
 
 pub mod artnet;
+pub mod artpoll;

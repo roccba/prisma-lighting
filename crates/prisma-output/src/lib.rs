@@ -12,6 +12,7 @@
 //! Art-Net is the first vertical slice; sACN and DDP reuse this same structure.
 
 pub mod affinity;
+pub mod discovery;
 pub mod frame;
 pub mod highlight;
 pub mod netif;

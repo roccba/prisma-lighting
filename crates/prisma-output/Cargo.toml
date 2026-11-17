@@ -35,3 +35,7 @@ glam = "0.29"                                 # Vec3 for test pixel positions
 [[bin]]
 name = "probe"
 path = "src/bin/probe.rs"
+
+[[bin]]
+name = "artnet-scan"
+path = "src/bin/artnet_scan.rs"
