@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -25,6 +25,7 @@ use prisma_patch::{LayoutGeneration, Patch, PatchError};
 use prisma_output::affinity::pin_current_thread;
 use prisma_output::frame::{frame_handoff, Producer};
 use prisma_output::highlight::{highlight_handoff, HighlightState};
+use prisma_output::netif::{self, InterfaceResolution};
 use prisma_output::plan::{OutputPlan, PlanError};
 use prisma_output::rate::RatePlan;
 use prisma_output::route::DestinationTable;
@@ -182,7 +183,20 @@ pub struct EngineHandle {
     /// present only when a show is running ([`Engine::start_show`]). The UI drives
     /// per-zone effect swaps through this; `None` under `IdleContent`.
     zone_commands: Option<ZoneCommandSender>,
+    /// How the show's network output resolved at assembly, for the Device Manager.
+    routing: OutputRouting,
     inner: Option<Running>,
+}
+
+/// How the show's network output resolved when the engine was assembled
+/// (docs/DEVICES-SPEC.md §6, §9): the interface it sends from, and the patch universes
+/// no enabled node receives — both surfaced as warnings, never as a refusal to run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputRouting {
+    pub interface: InterfaceResolution,
+    /// Plan universes (raw port addresses) that no enabled node receives. Empty when
+    /// the output is not routed (everything goes to the virtual sink).
+    pub uncovered: Vec<u16>,
 }
 
 /// A snapshot of a zone's live controls, for the UI to reflect state it did not set
@@ -333,20 +347,22 @@ impl Engine {
         // Per-universe destinations from the show's nodes, compiled here (setup thread)
         // so the output thread only indexes them. Not routed (Art-Net off / no nodes)
         // → every universe to `config.output_target` (the virtual sink in the app).
+        // The show's interface is stored by network; find this machine's NIC on it
+        // (docs/DEVICES-SPEC.md §6). Missing → the OS routes, and the UI warns.
+        let interface = netif::resolve(network.interface.as_ref(), &netif::host_interfaces());
         let destinations = DestinationTable::compile(
             &router.port_addresses(),
             &network,
-            network.interface.as_ref().map(|i| i.broadcast()),
+            interface.broadcast(),
             config.output_target,
         );
-        // ONE socket for the whole rig, bound to the show's interface address when it
-        // has one (step 3 resolves it against the host's interfaces), else 0.0.0.0.
-        let bind_ip = network
-            .interface
-            .as_ref()
-            .map(|i| IpAddr::V4(i.address))
-            .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-        let output_socket = UdpOutput::bound(SocketAddr::new(bind_ip, 0));
+        let routing = OutputRouting {
+            interface: interface.clone(),
+            uncovered: destinations.uncovered().to_vec(),
+        };
+        // ONE socket for the whole rig, bound to the resolved interface (or 0.0.0.0).
+        let output_socket =
+            UdpOutput::bound(SocketAddr::new(IpAddr::V4(interface.bind_address()), 0));
         let artsync = network.artsync && network.artnet_enabled && !network.nodes.is_empty();
         // Render runs at the fastest active output (§1.4), computed from the RatePlan.
         let desired_hz = if universe_count == 0 {
@@ -527,6 +543,7 @@ impl Engine {
             fixture_components,
             master_len,
             zone_commands,
+            routing,
             inner: Some(Running {
                 render,
                 output,
@@ -567,6 +584,11 @@ impl EngineHandle {
     /// stale pairings.
     pub fn generation(&self) -> LayoutGeneration {
         self.generation
+    }
+
+    /// How the show's network output resolved (interface + uncovered universes).
+    pub fn output_routing(&self) -> &OutputRouting {
+        &self.routing
     }
 
     /// Number of zones (the `Patch::zones` / `LiveParams` slot count). Slots address

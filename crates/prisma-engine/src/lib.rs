@@ -40,7 +40,11 @@ pub mod zone_content;
 pub use cells::{CellHost, CELL_ASSIGNED, CELL_EMPTY, CELL_RUNNING};
 pub use config::EngineConfig;
 pub use content::IdleContent;
-pub use engine::{Engine, EngineError, EngineHandle, ShutdownReport, ZoneLiveReadout};
+pub use engine::{
+    Engine, EngineError, EngineHandle, OutputRouting, ShutdownReport, ZoneLiveReadout,
+};
+// Host interfaces for the Device Manager (docs/DEVICES-SPEC.md §6).
+pub use prisma_output::netif::{host_interfaces, HostInterface, InterfaceResolution};
 
 // The Show model the assembly consumes, re-exported so the app (which sits on this
 // crate) can build a `Show` without depending on `prisma-core` directly.

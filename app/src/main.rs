@@ -19,10 +19,10 @@ use prisma_editor::{
     FixtureLibrary, FixtureType, PatchDraft, PlacementSpec, PreviewRun, SelectionAggregate,
 };
 use prisma_engine::{
-    load_mappings, load_show, save_mappings, save_show, ArtNetNode, Cell, CellHost, ControlMode,
-    ControllerMappings, Engine, EngineConfig, EngineHandle, Layer, LedStyle, MapTarget,
-    MidiMapping, MidiNotice, MidiRuntime, NodeOrigin, ParamSet, Show, ShowNetwork, Source,
-    UniverseRange, ZoneLiveReadout, ZoneShow,
+    host_interfaces, load_mappings, load_show, save_mappings, save_show, ArtNetNode, Cell,
+    CellHost, ControlMode, ControllerMappings, Engine, EngineConfig, EngineHandle, HostInterface,
+    InterfaceResolution, Layer, LedStyle, MapTarget, MidiMapping, MidiNotice, MidiRuntime,
+    NodeOrigin, ParamSet, Show, ShowNetwork, Source, UniverseRange, ZoneLiveReadout, ZoneShow,
 };
 use prisma_midi::io::{input_port_names, MidiInputLink, MidiIoError, MidiOutputLink};
 use prisma_midi::{DeviceProfile, APC40_KEYWORDS};
@@ -1240,6 +1240,67 @@ fn main_network_set(app: AppHandle, config: NetworkConfig) -> Result<(), String>
     }
 }
 
+/// A host network interface, for the Device Manager's interface dropdown.
+#[derive(Serialize)]
+struct InterfaceInfo {
+    name: String,
+    address: String,
+    prefix_len: u8,
+}
+
+impl From<&HostInterface> for InterfaceInfo {
+    fn from(h: &HostInterface) -> Self {
+        Self {
+            name: h.name.clone(),
+            address: h.address.to_string(),
+            prefix_len: h.prefix_len,
+        }
+    }
+}
+
+/// This machine's IPv4 interfaces (loopback excluded), for choosing the show's output
+/// interface (docs/DEVICES-SPEC.md §6). Setup path only — never the output thread.
+#[tauri::command]
+fn main_network_interfaces() -> Vec<InterfaceInfo> {
+    host_interfaces().iter().map(InterfaceInfo::from).collect()
+}
+
+/// How the running show's output resolved: the interface (or why none), and the patch
+/// universes no enabled node receives — the Device Manager's warnings (§9).
+#[derive(Serialize)]
+struct OutputStatusInfo {
+    /// "unset" (OS routes), "resolved" or "missing" (the show's network is not here).
+    interface_state: &'static str,
+    /// The resolved host interface, or the show's wanted network when missing.
+    interface: Option<InterfaceInfo>,
+    /// Uncovered universes, as raw Art-Net port addresses (the UI shows them +1).
+    uncovered: Vec<u16>,
+}
+
+#[tauri::command]
+fn main_output_status(state: State<AppState>) -> Result<OutputStatusInfo, String> {
+    let guard = state.engine.lock().unwrap();
+    let engine = guard.as_ref().ok_or("engine is not running")?;
+    let routing = engine.output_routing();
+    let (interface_state, interface) = match &routing.interface {
+        InterfaceResolution::Unset => ("unset", None),
+        InterfaceResolution::Resolved(h) => ("resolved", Some(InterfaceInfo::from(h))),
+        InterfaceResolution::Missing(r) => (
+            "missing",
+            Some(InterfaceInfo {
+                name: r.name_hint.clone(),
+                address: r.address.to_string(),
+                prefix_len: r.prefix_len,
+            }),
+        ),
+    };
+    Ok(OutputStatusInfo {
+        interface_state,
+        interface,
+        uncovered: routing.uncovered.clone(),
+    })
+}
+
 // --- MIDI (M9): device I/O, MIDI Learn, LED feedback ---
 
 /// Write a JSON-able config next to the others, creating the config directory if needed.
@@ -1887,6 +1948,8 @@ fn main() {
             main_set_zone_speed,
             main_network_get,
             main_network_set,
+            main_network_interfaces,
+            main_output_status,
             main_set_zone_solo,
             main_set_zone_blackout,
             main_set_zone_strobe_on,

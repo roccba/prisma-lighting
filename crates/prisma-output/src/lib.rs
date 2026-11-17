@@ -14,6 +14,7 @@
 pub mod affinity;
 pub mod frame;
 pub mod highlight;
+pub mod netif;
 pub mod packet;
 pub mod plan;
 pub mod priority;
