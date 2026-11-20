@@ -317,15 +317,26 @@ fn prefix_mask(prefix_len: u8) -> u32 {
     }
 }
 
-/// One Art-Net node (a controller board: H802RA, ESP32/WLED, …) and the universes it
-/// receives.
+/// One Art-Net device row, as professional consoles lists it: a node (or one `BindIndex` group of a
+/// node with more than 4 ports — the H802RA answers as 18 of them) and the universe of
+/// each of its output ports.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArtNetNode {
     pub id: Uuid,
+    /// Short name ("H802RA"; professional consoles "Nombre del dispositivo").
     pub name: String,
-    pub ip: Ipv4Addr,
-    /// Inclusive port-address ranges this node receives.
+    /// Long name ("Oem ArtNet-Node").
     #[serde(default)]
+    pub long_name: String,
+    /// Unicast destination. `0.0.0.0` = not set yet (a manually added device before its
+    /// IP is configured): a unicast node without an IP receives nothing.
+    pub ip: Ipv4Addr,
+    /// The universe (raw Art-Net port address) of each output port, in port order.
+    #[serde(default)]
+    pub ports: Vec<u16>,
+    /// Pre-ports format (inclusive ranges), read only to migrate; see
+    /// [`NetworkConfig::normalize`]. Never written.
+    #[serde(default, skip_serializing)]
     pub universes: Vec<UniverseRange>,
     /// Quick mute of one node without deleting it.
     #[serde(default = "default_true")]
@@ -344,7 +355,13 @@ pub struct ArtNetNode {
 impl ArtNetNode {
     /// Whether this node receives `port_address`.
     pub fn receives(&self, port_address: u16) -> bool {
-        self.universes.iter().any(|r| r.contains(port_address))
+        self.ports.contains(&port_address)
+    }
+
+    /// Whether this node has somewhere to send to: broadcast always does; unicast needs
+    /// a configured IP.
+    pub fn has_destination(&self) -> bool {
+        !self.unicast || !self.ip.is_unspecified()
     }
 }
 
@@ -370,8 +387,27 @@ impl UniverseRange {
 pub enum NodeOrigin {
     #[default]
     Manual,
-    /// Found by Scan (ArtPollReply): the node's own long name and MAC, for display.
-    Scanned { long_name: String, mac: String },
+    /// Found by Scan (ArtPollReply): what the node reported about itself, for display.
+    Scanned {
+        #[serde(default)]
+        mac: String,
+        /// 1-based `BindIndex` of this row's group ("BindIdx1"…).
+        #[serde(default = "default_bind")]
+        bind_index: u8,
+        /// ESTA manufacturer code.
+        #[serde(default)]
+        esta: u16,
+        /// Art-Net OEM code.
+        #[serde(default)]
+        oem: u16,
+        /// Firmware revision (`VersInfo`).
+        #[serde(default)]
+        firmware: u16,
+    },
+}
+
+fn default_bind() -> u8 {
+    1
 }
 
 impl NetworkConfig {
@@ -380,16 +416,43 @@ impl NetworkConfig {
     /// UI, not errors — the show must still run.)
     pub fn validate(&self) -> Result<(), crate::show::ShowError> {
         for node in &self.nodes {
-            for r in &node.universes {
-                if r.first > r.last || r.last > UniverseRange::MAX {
-                    return Err(crate::show::ShowError::InvalidNetwork(format!(
-                        "node \"{}\": universe range {}..={} is invalid",
-                        node.name, r.first, r.last
-                    )));
-                }
+            if let Some(&u) = node.ports.iter().find(|&&u| u > UniverseRange::MAX) {
+                return Err(crate::show::ShowError::InvalidNetwork(format!(
+                    "node \"{}\": universe {u} is beyond Art-Net's 15-bit range",
+                    node.name
+                )));
             }
         }
         Ok(())
+    }
+
+    /// Migrate nodes saved in the pre-ports format (universe ranges) to one universe per
+    /// port. A range the size of a real board becomes its ports; the legacy "every
+    /// universe" target (`0..=32767`, from the old single-IP config) becomes exactly the
+    /// patch's universes, `patch_universes`. Idempotent.
+    pub fn normalize(&mut self, patch_universes: &[u16]) {
+        const REAL_BOARD_MAX: usize = 4096;
+        for node in &mut self.nodes {
+            if node.universes.is_empty() {
+                continue;
+            }
+            let total: usize = node
+                .universes
+                .iter()
+                .map(|r| (r.last.saturating_sub(r.first)) as usize + 1)
+                .sum();
+            if node.ports.is_empty() {
+                node.ports = if total <= REAL_BOARD_MAX {
+                    node.universes
+                        .iter()
+                        .flat_map(|r| r.first..=r.last)
+                        .collect()
+                } else {
+                    patch_universes.to_vec()
+                };
+            }
+            node.universes.clear();
+        }
     }
 }
 

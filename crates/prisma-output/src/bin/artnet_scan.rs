@@ -1,9 +1,9 @@
 //! `artnet-scan` — the Device Manager's Scan from the terminal (docs/DEVICES-SPEC.md §7).
 //!
 //! Polls every host interface's subnet broadcast plus 255.255.255.255 and prints each
-//! node found (replies merged per board), its universes both raw (Art-Net port
-//! address, 0-based) and as professional consoles shows them (+1), and with `--hex` the raw
-//! `ArtPollReply` bytes — the reference data for the parser tests (CLAUDE.md §7).
+//! device row found — one per `BindIndex` group, like professional consoles — with the universe
+//! (Art-Net port address) of each port, and with `--hex` the raw `ArtPollReply`
+//! bytes — the reference data for the parser tests (CLAUDE.md §7).
 //!
 //! Usage: `artnet-scan [seconds] [--hex]`  (default 3 s)
 
@@ -36,34 +36,27 @@ fn main() {
         Ok(nodes) if nodes.is_empty() => println!("no Art-Net nodes answered"),
         Ok(nodes) => {
             for n in &nodes {
-                let raw: Vec<String> = n
-                    .universe_ranges()
-                    .iter()
-                    .map(|r| format!("{}–{}", r.first, r.last))
-                    .collect();
-                let shown: Vec<String> = n
-                    .universe_ranges()
-                    .iter()
-                    .map(|r| format!("{}–{}", r.first + 1, r.last + 1))
-                    .collect();
+                let ports: Vec<String> = n.ports.iter().map(|u| u.to_string()).collect();
                 println!(
-                    "{}  {}  \"{}\" / \"{}\"  MAC {}\n  binds {}  universes raw [{}]  as professional consoles [{}]",
+                    "{}  BindIdx{:<2}  \"{}\" / \"{}\"  MAC {}  ESTA 0x{:04X}  OEM 0x{:04X}  fw {}\n  universes [{}]",
                     n.ip,
-                    n.short_name,
+                    n.bind_index,
                     n.short_name,
                     n.long_name,
                     n.mac_string(),
-                    n.binds,
-                    raw.join(", "),
-                    shown.join(", ")
+                    n.esta,
+                    n.oem,
+                    n.firmware,
+                    ports.join(", ")
                 );
                 if hex {
-                    for r in &n.raw_replies {
-                        println!(
-                            "    {}",
-                            r.iter().map(|b| format!("{b:02x}")).collect::<String>()
-                        );
-                    }
+                    println!(
+                        "    {}",
+                        n.raw_reply
+                            .iter()
+                            .map(|b| format!("{b:02x}"))
+                            .collect::<String>()
+                    );
                 }
             }
         }

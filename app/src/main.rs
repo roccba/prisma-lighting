@@ -23,7 +23,7 @@ use prisma_engine::{
     CellHost, ControlMode, ControllerMappings, DiscoveredNode, Engine, EngineConfig, EngineHandle,
     HostInterface, InterfaceResolution, Layer, LedStyle, MapTarget, MidiMapping, MidiNotice,
     MidiRuntime, NodeMonitor, NodeOrigin, NodeStatus, ParamSet, ScanError, Show, ShowNetwork,
-    Source, UniverseRange, ZoneLiveReadout, ZoneShow,
+    Source, ZoneLiveReadout, ZoneShow,
 };
 use prisma_midi::io::{input_port_names, MidiInputLink, MidiIoError, MidiOutputLink};
 use prisma_midi::{DeviceProfile, APC40_KEYWORDS};
@@ -276,10 +276,9 @@ struct AppState {
     /// is bound per engine, so a recompile never fights the old bind for a fixed port;
     /// the viewer re-queries and reconnects.
     preview_port: Mutex<u16>,
-    /// The network output config (device manager): where DMX is sent.
+    /// The LEGACY app-wide Art-Net target (`network.json`, pre device manager). Read-only:
+    /// it only seeds shows that predate the per-show network ([`prepare_show_network`]).
     network: Mutex<NetworkConfig>,
-    /// Where the network config file lives — the per-user app-config dir.
-    network_path: PathBuf,
     /// The Art-Net node monitor (status + Scan), the single owner of UDP 6454. `None`
     /// when another program holds the port; retried on the next Scan.
     artnet_monitor: Mutex<Option<Arc<NodeMonitor>>>,
@@ -306,13 +305,10 @@ struct MidiConfig {
     input_port: Option<String>,
 }
 
-/// Network output configuration — the device manager. It decides WHERE
-/// the engine sends DMX: the loopback virtual sink (disabled, the dev default) or a real
-/// **Art-Net** target (enabled). Persisted to the per-user app-config dir so it survives
-/// restarts. First cut: one Art-Net target for **every** universe — a node that takes them
-/// all, or a subnet broadcast address (e.g. `2.255.255.255`); the per-node universe table
-/// is the richer later feature (Deferred). Universe numbers are
-/// in the packets, so a broadcast or an all-universes node receives every one.
+/// LEGACY app-wide Art-Net target (`network.json`), from before the device manager: one
+/// IP for every universe. The output now follows each Show's own `network` (nodes); this
+/// is only read to migrate shows that predate it ([`prepare_show_network`]) and is never
+/// written any more.
 #[derive(Serialize, Deserialize, Clone)]
 struct NetworkConfig {
     artnet_enabled: bool,
@@ -339,42 +335,49 @@ fn virtual_sink() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6454)
 }
 
-/// One-time migration of a Show that predates the device manager (`network` never
-/// initialized) from the old app-wide Art-Net target (`network.json`), so it keeps
-/// behaving exactly as before: an enabled legacy target becomes one node receiving every
-/// universe; a disabled one leaves the show on the virtual sink. Idempotent — a show
-/// already initialized (even deliberately without nodes) is never touched.
-fn migrate_network(network: &mut ShowNetwork, legacy: &NetworkConfig) {
-    if network.initialized {
-        return;
+/// Bring a loaded Show's network output up to date: one-time migration from the old
+/// app-wide Art-Net target (`network.json`) for shows that predate the device manager,
+/// then the ranges → one-universe-per-port migration. Idempotent.
+///
+/// The legacy migration keeps an old show behaving exactly as before: an enabled legacy
+/// target becomes one node receiving the patch's universes; a disabled one leaves the
+/// show on the virtual sink. A show already initialized (even deliberately without
+/// nodes) is never re-migrated.
+fn prepare_show_network(show: &mut Show, legacy: &NetworkConfig) {
+    let universes = patch_universes(&show.patch);
+    let network = &mut show.network;
+    if !network.initialized {
+        network.initialized = true;
+        let ip = legacy.artnet_ip.trim().parse::<Ipv4Addr>();
+        network.artnet_enabled = legacy.artnet_enabled && ip.is_ok();
+        if let (true, Ok(ip)) = (legacy.artnet_enabled, ip) {
+            network.nodes.push(ArtNetNode {
+                id: Uuid::new_v4(),
+                name: "Destino Art-Net".into(),
+                long_name: String::new(),
+                ip,
+                ports: universes.clone(),
+                universes: Vec::new(),
+                enabled: true,
+                unicast: true,
+                full_frames: false,
+                origin: NodeOrigin::Manual,
+            });
+        }
     }
-    network.initialized = true;
-    let ip = legacy.artnet_ip.trim().parse::<Ipv4Addr>();
-    network.artnet_enabled = legacy.artnet_enabled && ip.is_ok();
-    if let (true, Ok(ip)) = (legacy.artnet_enabled, ip) {
-        network.nodes.push(ArtNetNode {
-            id: Uuid::new_v4(),
-            name: "Destino Art-Net".into(),
-            ip,
-            universes: vec![UniverseRange {
-                first: 0,
-                last: UniverseRange::MAX,
-            }],
-            enabled: true,
-            unicast: true,
-            full_frames: false,
-            origin: NodeOrigin::Manual,
-        });
-    }
+    network.normalize(&universes);
 }
 
-/// Write the network config to its file, creating the config directory if needed.
-fn persist_network(path: &Path, net: &NetworkConfig) -> Result<(), String> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let json = serde_json::to_string_pretty(net).map_err(|e| e.to_string())?;
-    std::fs::write(path, json).map_err(|e| e.to_string())
+/// The patch's universes (raw Art-Net port addresses), sorted and unique.
+fn patch_universes(patch: &Patch) -> Vec<u16> {
+    let mut u: Vec<u16> = patch
+        .fixtures
+        .iter()
+        .flat_map(|f| f.pixels.iter().map(|p| p.universe))
+        .collect();
+    u.sort_unstable();
+    u.dedup();
+    u
 }
 
 /// Fold the engine's CURRENT live values (master + per-zone) back into the show model, so
@@ -922,7 +925,7 @@ fn main_open_show(app: AppHandle, path: String) -> Result<(), String> {
     show.patch.fit_matrix_size();
     show.patch.compile().map_err(|e| e.to_string())?;
     pad_grids(&mut show);
-    migrate_network(&mut show.network, &state.network.lock().unwrap());
+    prepare_show_network(&mut show, &state.network.lock().unwrap());
 
     let target = virtual_sink();
     let (config, port) = preview_config(AdapterPreference::Software, target);
@@ -1168,67 +1171,20 @@ fn main_set_zone_strobe_rate(state: State<AppState>, zone: Uuid, rate: f32) {
 
 // --- Device manager (network output) ---
 
-/// The current network output config, for the (single-target) device manager UI.
-///
-/// INTERIM bridge until the node-based Device Manager (docs/DEVICES-SPEC.md step 6):
-/// the output now follows the **show's** `network` (nodes), so the old one-IP modal
-/// reads and writes that, presented as its single "Destino Art-Net" node.
-#[tauri::command]
-fn main_network_get(state: State<AppState>) -> NetworkConfig {
-    let show = state.show.lock().unwrap();
-    let mut config = state.network.lock().unwrap().clone();
-    config.artnet_enabled = show.network.artnet_enabled;
-    if let Some(node) = show.network.nodes.first() {
-        config.artnet_ip = node.ip.to_string();
-    }
-    config
-}
-
-/// Apply the old modal's single target to the show as ONE node receiving every universe
-/// (see [`main_network_get`]). A bad IP leaves Art-Net off (virtual sink).
-fn apply_single_target(network: &mut ShowNetwork, config: &NetworkConfig) {
-    network.initialized = true;
-    network.nodes.clear();
-    let ip = config.artnet_ip.trim().parse::<Ipv4Addr>();
-    network.artnet_enabled = config.artnet_enabled && ip.is_ok();
-    if let Ok(ip) = ip {
-        network.nodes.push(ArtNetNode {
-            id: Uuid::new_v4(),
-            name: "Destino Art-Net".into(),
-            ip,
-            universes: vec![UniverseRange {
-                first: 0,
-                last: UniverseRange::MAX,
-            }],
-            enabled: true,
-            unicast: true,
-            full_frames: false,
-            origin: NodeOrigin::Manual,
-        });
-    }
-}
-
-/// Apply a network output config: persist it, then **recompile the engine onto the new
-/// target** (reusing the GPU) so DMX starts flowing to the configured Art-Net node
-/// instead of the virtual sink — the point of the device manager. Live
-/// values are folded into the show first so the retarget does not reset faders. A bad IP
-/// falls back to the virtual sink (never leaves the engine down).
-#[tauri::command]
-fn main_network_set(app: AppHandle, config: NetworkConfig) -> Result<(), String> {
+/// Edit the running show and recompile the engine onto it (reusing the GPU). Live values
+/// are folded into the show first so the recompile does not reset faders; the preview
+/// WebSocket moves to a fresh port, so the UI is nudged to re-fetch.
+fn recompile_running_show(app: &AppHandle, edit: impl FnOnce(&mut Show)) -> Result<(), String> {
     let state = app.state::<AppState>();
-    persist_network(&state.network_path, &config)?;
-    *state.network.lock().unwrap() = config.clone();
-
-    let target = virtual_sink();
     let show = {
         let mut show = state.show.lock().unwrap();
-        apply_single_target(&mut show.network, &config);
+        edit(&mut show);
         if let Some(engine) = state.engine.lock().unwrap().as_ref() {
             fold_live_into_show(engine, &mut show);
         }
         show.clone()
     };
-    let (cfg, port) = preview_config(AdapterPreference::Software, target);
+    let (cfg, port) = preview_config(AdapterPreference::Software, virtual_sink());
     let mut guard = state.engine.lock().unwrap();
     let engine = guard.take().ok_or("engine is not running")?;
     match engine.recompile_show(show, cfg) {
@@ -1239,12 +1195,65 @@ fn main_network_set(app: AppHandle, config: NetworkConfig) -> Result<(), String>
             }
             drop(guard);
             watch_show_nodes(&state);
-            // The preview WebSocket moved to a fresh port; nudge the UI to re-fetch.
             let _ = app.emit("layout-changed", ());
             Ok(())
         }
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// The running show's whole network output config (nodes, interface, enable, ArtSync),
+/// for the Device Manager. Universe numbers are raw port addresses (the UI shows +1).
+#[tauri::command]
+fn main_output_get(state: State<AppState>) -> ShowNetwork {
+    state.show.lock().unwrap().network.clone()
+}
+
+/// Apply the Device Manager's staged config (Aplicar / Aceptar) to the running show and
+/// recompile the output onto it. Validated first; a bad config changes nothing.
+#[tauri::command]
+fn main_output_set(app: AppHandle, network: ShowNetwork) -> Result<(), String> {
+    network.validate().map_err(|e| e.to_string())?;
+    recompile_running_show(&app, |show| {
+        show.network = network;
+        show.network.initialized = true;
+    })
+}
+
+/// This machine's host name, shown in the Device Manager like professional consoles ("Nombre del
+/// host"). From the OS environment / kernel; empty if unknown.
+#[tauri::command]
+fn main_host_name() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .ok()
+        .or_else(|| {
+            std::fs::read_to_string("/proc/sys/kernel/hostname")
+                .ok()
+                .or_else(|| std::fs::read_to_string("/etc/hostname").ok())
+        })
+        .map(|h| h.trim().to_string())
+        .unwrap_or_default()
+}
+
+/// Open a node's web configuration page (the classic "HTTP" button) in the system browser.
+/// Only `http://<IPv4>` is accepted — the command never opens arbitrary URLs.
+#[tauri::command]
+fn main_open_node_page(ip: String) -> Result<(), String> {
+    let ip: Ipv4Addr = ip
+        .trim()
+        .parse()
+        .map_err(|_| format!("IP inválida: {ip}"))?;
+    let url = format!("http://{ip}/");
+    #[cfg(target_os = "windows")]
+    let spawned = std::process::Command::new("cmd")
+        .args(["/C", "start", "", &url])
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let spawned = std::process::Command::new("open").arg(&url).spawn();
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let spawned = std::process::Command::new("xdg-open").arg(&url).spawn();
+    spawned.map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// A host network interface, for the Device Manager's interface dropdown.
@@ -1308,18 +1317,19 @@ fn main_output_status(state: State<AppState>) -> Result<OutputStatusInfo, String
     })
 }
 
-/// One node found by a Scan, for the Device Manager's results list.
+/// One device row found by a Scan (one per `BindIndex` group, like professional consoles).
 #[derive(Serialize)]
 struct ScannedNodeInfo {
     ip: String,
     short_name: String,
     long_name: String,
     mac: String,
-    /// Output universes as raw Art-Net port-address ranges `[first, last]` (the UI
-    /// shows them +1, like professional consoles).
-    universes: Vec<[u16; 2]>,
-    /// `BindIndex` groups that answered (the H802RA: 18).
-    binds: usize,
+    bind_index: u8,
+    /// The universe (raw Art-Net port address) of each output port.
+    ports: Vec<u16>,
+    esta: u16,
+    oem: u16,
+    firmware: u16,
 }
 
 impl From<&DiscoveredNode> for ScannedNodeInfo {
@@ -1329,12 +1339,11 @@ impl From<&DiscoveredNode> for ScannedNodeInfo {
             short_name: n.short_name.clone(),
             long_name: n.long_name.clone(),
             mac: n.mac_string(),
-            universes: n
-                .universe_ranges()
-                .iter()
-                .map(|r| [r.first, r.last])
-                .collect(),
-            binds: n.binds,
+            bind_index: n.bind_index,
+            ports: n.ports.clone(),
+            esta: n.esta,
+            oem: n.oem,
+            firmware: n.firmware,
         }
     }
 }
@@ -1448,9 +1457,8 @@ async fn main_artnet_scan(app: AppHandle) -> Result<Vec<ScannedNodeInfo>, String
                 serde_json::json!({
                     "ip": n.ip.to_string(),
                     "short_name": n.short_name,
-                    "replies_hex": n.raw_replies.iter().map(|r| {
-                        r.iter().map(|b| format!("{b:02x}")).collect::<String>()
-                    }).collect::<Vec<_>>(),
+                    "bind_index": n.bind_index,
+                    "reply_hex": n.raw_reply.iter().map(|b| format!("{b:02x}")).collect::<String>(),
                 })
             })
             .collect();
@@ -2107,9 +2115,11 @@ fn main() {
             main_zones,
             main_set_zone_dimmer,
             main_set_zone_speed,
-            main_network_get,
-            main_network_set,
             main_network_interfaces,
+            main_output_get,
+            main_output_set,
+            main_open_node_page,
+            main_host_name,
             main_output_status,
             main_artnet_scan,
             main_node_statuses,
@@ -2178,7 +2188,7 @@ fn main() {
                 .filter(|s| s.patch.compile().is_ok())
                 .unwrap_or_else(empty_show);
             // A show from before the device manager inherits the old app-wide target.
-            migrate_network(&mut show.network, &network);
+            prepare_show_network(&mut show, &network);
             // Keep an editable copy as the grid's + zone-set source of truth; the engine
             // runs its own copy and follows our triggers through the queue.
             let show_state = show.clone();
@@ -2277,7 +2287,6 @@ fn main() {
                 library_path,
                 preview_port: Mutex::new(preview_port.unwrap_or(0)),
                 network: Mutex::new(network),
-                network_path,
                 artnet_monitor: Mutex::new(None),
                 last_show_file,
                 midi,
@@ -2359,23 +2368,27 @@ mod tests {
     }
 
     #[test]
-    fn migrate_network_turns_an_enabled_legacy_target_into_one_all_universe_node() {
-        let mut net = ShowNetwork::default();
-        migrate_network(&mut net, &legacy(true, "2.255.255.255"));
+    fn an_enabled_legacy_target_becomes_one_node_with_the_patch_universes() {
+        let mut show = empty_show();
+        show.network = ShowNetwork::default();
+        prepare_show_network(&mut show, &legacy(true, "2.255.255.255"));
+        let net = &show.network;
         assert!(net.initialized && net.artnet_enabled);
         assert_eq!(net.nodes.len(), 1);
         assert_eq!(net.nodes[0].ip, Ipv4Addr::new(2, 255, 255, 255));
-        assert!(net.nodes[0].receives(0) && net.nodes[0].receives(UniverseRange::MAX));
+        assert_eq!(net.nodes[0].ports, patch_universes(&show.patch));
     }
 
     #[test]
-    fn migrate_network_keeps_a_disabled_legacy_on_the_virtual_sink_and_runs_once() {
-        let mut net = ShowNetwork::default();
-        migrate_network(&mut net, &legacy(false, "10.0.0.1"));
-        assert!(net.initialized && !net.artnet_enabled && net.nodes.is_empty());
+    fn a_disabled_legacy_stays_on_the_virtual_sink_and_migrates_once() {
+        let mut show = empty_show();
+        show.network = ShowNetwork::default();
+        prepare_show_network(&mut show, &legacy(false, "10.0.0.1"));
+        assert!(show.network.initialized && !show.network.artnet_enabled);
+        assert!(show.network.nodes.is_empty());
         // Already initialized: a later enabled legacy config must not add a node.
-        migrate_network(&mut net, &legacy(true, "10.0.0.1"));
-        assert!(net.nodes.is_empty());
+        prepare_show_network(&mut show, &legacy(true, "10.0.0.1"));
+        assert!(show.network.nodes.is_empty());
     }
 
     #[test]

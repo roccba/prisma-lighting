@@ -305,7 +305,7 @@ mod tests {
 
         let found = monitor.scan(Duration::from_millis(400));
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].universes, [0, 1]);
+        assert_eq!(found[0].ports, [0, 1]);
     }
 
     #[test]

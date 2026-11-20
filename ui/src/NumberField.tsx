@@ -16,6 +16,8 @@ interface NumberFieldProps {
   step?: number;
   width?: number; // input width in px (default matches the theme's 54px)
   disabled?: boolean;
+  /** "spin" (stacked ▲▼, default) or "pm": console-style [value][−][+] buttons. */
+  variant?: "spin" | "pm";
   "aria-label"?: string;
 }
 
@@ -27,6 +29,7 @@ export function NumberField({
   step = 1,
   width,
   disabled,
+  variant = "spin",
   ...rest
 }: NumberFieldProps) {
   const [draft, setDraft] = useState(String(value));
@@ -63,7 +66,7 @@ export function NumberField({
   };
 
   return (
-    <div className="pr-num" aria-label={rest["aria-label"]}>
+    <div className={`pr-num${variant === "pm" ? " pr-pm" : ""}`} aria-label={rest["aria-label"]}>
       <input
         value={draft}
         disabled={disabled}
@@ -86,14 +89,25 @@ export function NumberField({
           }
         }}
       />
-      <span className="pr-spin">
-        <button type="button" tabIndex={-1} disabled={disabled} onClick={() => bump(1)}>
-          ▲
-        </button>
-        <button type="button" tabIndex={-1} disabled={disabled} onClick={() => bump(-1)}>
-          ▼
-        </button>
-      </span>
+      {variant === "pm" ? (
+        <>
+          <button type="button" className="minus" tabIndex={-1} disabled={disabled} onClick={() => bump(-1)}>
+            −
+          </button>
+          <button type="button" className="plus" tabIndex={-1} disabled={disabled} onClick={() => bump(1)}>
+            +
+          </button>
+        </>
+      ) : (
+        <span className="pr-spin">
+          <button type="button" tabIndex={-1} disabled={disabled} onClick={() => bump(1)}>
+            ▲
+          </button>
+          <button type="button" tabIndex={-1} disabled={disabled} onClick={() => bump(-1)}>
+            ▼
+          </button>
+        </span>
+      )}
     </div>
   );
 }

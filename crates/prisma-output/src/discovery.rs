@@ -14,34 +14,33 @@ use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
-use prisma_core::UniverseRange;
 use socket2::{Domain, Protocol, Socket, Type};
 
 use crate::packet::artpoll::{parse_artpollreply, write_artpoll, PollReply};
 use crate::route::ARTNET_PORT;
 
-/// One node found by a scan, its replies merged.
+/// One device row found by a scan: a node, or one `BindIndex` group of a node with more
+/// than 4 ports. Listed exactly as professional consoles does — the H802RA is 18 rows of 4 universes,
+/// same IP and MAC, "BindIdx1"…"BindIdx18".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveredNode {
     pub ip: Ipv4Addr,
     pub short_name: String,
     pub long_name: String,
     pub mac: Option<[u8; 6]>,
-    /// Every output universe (raw port address) across all its replies, sorted, unique.
-    pub universes: Vec<u16>,
-    /// How many `BindIndex` groups answered (1 for a ≤ 4-port node, 18 for the H802RA).
-    pub binds: usize,
-    /// The raw reply datagrams, one per bind, kept so a real device's bytes can be
-    /// saved as a reference fixture for the parser tests (CLAUDE.md §7).
-    pub raw_replies: Vec<Vec<u8>>,
+    /// 1-based `BindIndex` of this group.
+    pub bind_index: u8,
+    /// The universe (raw port address) of each output port, in port order.
+    pub ports: Vec<u16>,
+    pub firmware: u16,
+    pub oem: u16,
+    pub esta: u16,
+    /// The raw reply datagram, kept so a real device's bytes can be saved as a
+    /// reference fixture for the parser tests (CLAUDE.md §7).
+    pub raw_reply: Vec<u8>,
 }
 
 impl DiscoveredNode {
-    /// The universes as contiguous ranges (what a node in the Show stores).
-    pub fn universe_ranges(&self) -> Vec<UniverseRange> {
-        to_ranges(&self.universes)
-    }
-
     /// The MAC as `48:E0:C7:4D:96:64`, or empty when the reply had none.
     pub fn mac_string(&self) -> String {
         self.mac
@@ -152,56 +151,26 @@ fn open(listen: SocketAddr) -> Result<UdpSocket, ScanError> {
     Ok(socket.into())
 }
 
-/// Merge replies into one node per IP. The same bind answering twice (both polls
-/// reached it) counts once.
+/// One row per `(IP, BindIndex)`, sorted by IP then bind, like the classic list. The same
+/// group answering twice (both polls reached it) is listed once.
 pub fn merge(replies: Vec<(PollReply, Vec<u8>)>) -> Vec<DiscoveredNode> {
-    let mut by_ip: BTreeMap<[u8; 4], (DiscoveredNode, Vec<u8>)> = BTreeMap::new();
+    let mut rows: BTreeMap<([u8; 4], u8), DiscoveredNode> = BTreeMap::new();
     for (reply, raw) in replies {
-        let (node, seen_binds) = by_ip.entry(reply.ip).or_insert_with(|| {
-            (
-                DiscoveredNode {
-                    ip: Ipv4Addr::from(reply.ip),
-                    short_name: reply.short_name.clone(),
-                    long_name: reply.long_name.clone(),
-                    mac: reply.mac,
-                    universes: Vec::new(),
-                    binds: 0,
-                    raw_replies: Vec::new(),
-                },
-                Vec::new(),
-            )
-        });
-        if seen_binds.contains(&reply.bind_index) {
-            continue;
-        }
-        seen_binds.push(reply.bind_index);
-        node.binds += 1;
-        node.universes.extend(&reply.output_universes);
-        node.raw_replies.push(raw);
+        rows.entry((reply.ip, reply.bind_index))
+            .or_insert_with(|| DiscoveredNode {
+                ip: Ipv4Addr::from(reply.ip),
+                short_name: reply.short_name,
+                long_name: reply.long_name,
+                mac: reply.mac,
+                bind_index: reply.bind_index,
+                ports: reply.output_universes,
+                firmware: reply.firmware,
+                oem: reply.oem,
+                esta: reply.esta,
+                raw_reply: raw,
+            });
     }
-    by_ip
-        .into_values()
-        .map(|(mut node, _)| {
-            node.universes.sort_unstable();
-            node.universes.dedup();
-            node
-        })
-        .collect()
-}
-
-/// Sorted, unique universes → inclusive contiguous ranges (`[0,1,2,5]` → `0–2, 5`).
-pub fn to_ranges(universes: &[u16]) -> Vec<UniverseRange> {
-    let mut sorted = universes.to_vec();
-    sorted.sort_unstable();
-    sorted.dedup();
-    let mut ranges: Vec<UniverseRange> = Vec::new();
-    for u in sorted {
-        match ranges.last_mut() {
-            Some(r) if r.last + 1 == u => r.last = u,
-            _ => ranges.push(UniverseRange { first: u, last: u }),
-        }
-    }
-    ranges
+    rows.into_values().collect()
 }
 
 #[cfg(test)]
@@ -239,17 +208,16 @@ mod tests {
     }
 
     #[test]
-    fn eighteen_binds_merge_into_one_board_of_72_universes() {
-        let nodes = merge(h802ra_replies());
-        assert_eq!(nodes.len(), 1);
-        let n = &nodes[0];
-        assert_eq!(n.ip, Ipv4Addr::new(169, 254, 99, 11));
-        assert_eq!(n.short_name, "H802RA");
-        assert_eq!(n.binds, 18);
-        assert_eq!(n.universes.len(), 72);
-        assert_eq!(n.universe_ranges(), [UniverseRange { first: 0, last: 71 }]);
-        assert_eq!(n.mac_string(), "48:E0:C7:4D:96:64");
-        assert_eq!(n.raw_replies.len(), 18);
+    fn eighteen_binds_list_as_eighteen_rows_like_pro_consoles() {
+        let rows = merge(h802ra_replies());
+        assert_eq!(rows.len(), 18);
+        assert!(rows.iter().all(|r| r.ip == Ipv4Addr::new(169, 254, 99, 11)));
+        assert_eq!(rows[0].bind_index, 1);
+        assert_eq!(rows[0].ports, [0, 1, 2, 3]);
+        assert_eq!(rows[17].bind_index, 18);
+        assert_eq!(rows[17].ports, [68, 69, 70, 71]);
+        assert_eq!(rows[0].mac_string(), "48:E0:C7:4D:96:64");
+        assert_eq!(rows[0].short_name, "H802RA");
     }
 
     #[test]
@@ -258,29 +226,9 @@ mod tests {
         replies.push(replies[0].clone()); // the re-poll reached bind 1 again
         let other = build_artpollreply([169, 254, 1, 50], "WLED", "WLED", [2; 6], 0, 0, &[0], 1);
         replies.push((parse_artpollreply(&other).unwrap(), other));
-        let nodes = merge(replies);
-        assert_eq!(nodes.len(), 2);
-        assert_eq!(
-            nodes
-                .iter()
-                .find(|n| n.short_name == "H802RA")
-                .unwrap()
-                .binds,
-            18
-        );
-    }
-
-    #[test]
-    fn ranges_collapse_contiguous_universes() {
-        assert_eq!(
-            to_ranges(&[5, 0, 1, 2, 2, 9, 10]),
-            [
-                UniverseRange { first: 0, last: 2 },
-                UniverseRange { first: 5, last: 5 },
-                UniverseRange { first: 9, last: 10 },
-            ]
-        );
-        assert!(to_ranges(&[]).is_empty());
+        let rows = merge(replies);
+        assert_eq!(rows.len(), 19, "18 H802RA groups (bind 1 once) + the WLED");
+        assert_eq!(rows.iter().filter(|n| n.short_name == "WLED").count(), 1);
     }
 
     #[test]
@@ -316,9 +264,9 @@ mod tests {
         let listen: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let nodes = scan_on(listen, &[node_addr], Duration::from_millis(400)).unwrap();
         fake.join().unwrap();
-        assert_eq!(nodes.len(), 1);
-        assert_eq!(nodes[0].universes, (0..8).collect::<Vec<u16>>());
-        assert_eq!(nodes[0].binds, 2);
+        assert_eq!(nodes.len(), 2, "two binds → two rows");
+        assert_eq!(nodes[0].ports, [0, 1, 2, 3]);
+        assert_eq!(nodes[1].ports, [4, 5, 6, 7]);
     }
 
     #[test]

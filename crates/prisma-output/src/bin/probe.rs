@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use prisma_core::{ArtNetNode, NetworkConfig, NodeOrigin, UniverseRange};
+use prisma_core::{ArtNetNode, NetworkConfig, NodeOrigin};
 use prisma_output::frame::frame_handoff;
 use prisma_output::rate::RatePlan;
 use prisma_output::route::DestinationTable;
@@ -100,10 +100,9 @@ fn main() {
                     id: uuid::Uuid::nil(),
                     name: format!("node {k}"),
                     ip: Ipv4Addr::new(127, 0, 1 + (k / 250) as u8, 1 + (k % 250) as u8),
-                    universes: vec![UniverseRange {
-                        first: (1 + k * per) as u16,
-                        last: (k * per + per) as u16,
-                    }],
+                    long_name: String::new(),
+                    ports: ((1 + k * per) as u16..=(k * per + per) as u16).collect(),
+                    universes: Vec::new(),
                     enabled: true,
                     unicast: true,
                     full_frames: false,

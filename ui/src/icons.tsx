@@ -220,3 +220,43 @@ export function Close(p: IconProps) {
     </Svg>
   );
 }
+
+/** Search — a magnifier (Scan). */
+export function Search(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <circle cx="10.5" cy="10.5" r="6" />
+      <path d="M15 15l5 5" />
+    </Svg>
+  );
+}
+
+/** Duplicate — two stacked sheets. */
+export function Duplicate(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <rect x="8" y="8" width="12" height="12" rx="1.5" />
+      <path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8" />
+    </Svg>
+  );
+}
+
+/** Settings — a gear (Configurar). */
+export function Gear(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" />
+    </Svg>
+  );
+}
+
+/** Web page — a globe (HTTP). */
+export function Globe(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z" />
+    </Svg>
+  );
+}

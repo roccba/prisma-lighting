@@ -19,6 +19,11 @@
      for hardware" must never be mistaken for "selected" or "active". ---- */
   --learn:         #E8912D;
   --learn-soft:    rgba(232, 145, 45, .22);
+  /* ---- Status (device/link health): never the accent — "the board answers" must not
+     read as "selected". Used sparingly: dots and warning edges, not fills. ---- */
+  --ok:            #3FB950;
+  --warn:          #C9A227;
+  --danger:        #E5534B;
 
   /* ---- Structural surfaces ---- */
   --bg-app:      #0a0a0a;    /* app background */
@@ -173,6 +178,12 @@ input, textarea, [contenteditable="true"] {
   cursor: pointer;
   border-radius: var(--r-sm);
   user-select: none;
+  /* Icon + label buttons: content centred on both axes, so an icon never sits off the
+     text baseline (a button is a box, not a line of text). */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 .pr-btn:hover  { background: var(--btn-face-hover); }
 .pr-btn:active { background: #222; }
@@ -282,15 +293,18 @@ input, textarea, [contenteditable="true"] {
 /* ============================================================
    Checkbox & toggle
    ============================================================ */
-.pr-chk { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: var(--fs-small); user-select: none; }
+/* A state change must never move layout: the tick is ALWAYS in the box and only toggles
+   `visibility` (with `display: none` an empty box changed the inline baseline and grew a
+   table row by 3px on uncheck), and the control aligns explicitly, not on text baseline. */
+.pr-chk { display: inline-flex; align-items: center; vertical-align: middle; gap: 8px; cursor: pointer; font-size: var(--fs-small); user-select: none; }
 .pr-chk .box {
   width: 16px; height: 16px; background: var(--bg-input);
   border: 1px solid var(--btn-border); border-radius: var(--r-sm);
   display: flex; align-items: center; justify-content: center;
 }
-.pr-chk .box .tick { color: #fff; font-size: 11px; display: none; }
+.pr-chk .box .tick { color: #fff; font-size: 11px; line-height: 1; visibility: hidden; }
 .pr-chk.is-on .box { background: var(--accent); border-color: var(--accent-bright); }
-.pr-chk.is-on .box .tick { display: block; }
+.pr-chk.is-on .box .tick { visibility: visible; }
 
 .pr-tgl { width: 40px; height: 20px; background: var(--bg-input); border: 1px solid var(--btn-border); border-radius: 11px; position: relative; cursor: pointer; }
 .pr-tgl .knob { position: absolute; top: 1px; left: 1px; width: 16px; height: 16px; border-radius: 50%; background: #666; transition: all .15s; }
@@ -650,7 +664,11 @@ input, textarea, [contenteditable="true"] {
 .pr-picker-item { min-width: 76px; }
 
 /* --- Device manager (network output) --- */
-.pr-devmgr { min-width: 380px; }
+/* The Device Manager is a FIXED-size console-style window: switching tabs or toggling
+   anything never resizes (and so never re-centres) it. Each tab's body fills the space
+   between tabs and footer and scrolls inside if it ever needs to. */
+.pr-devmgr { width: min(1000px, 94vw); height: min(560px, 86vh); max-width: none; display: flex; flex-direction: column; }
+.pr-devmgr > .pr-picker-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .pr-devmgr-tabs { display: flex; gap: 2px; padding: 6px 12px 0; border-bottom: 1px solid var(--divider); }
 .pr-devmgr-check { display: flex; align-items: center; gap: 7px; font-size: var(--fs-base); color: var(--text); cursor: pointer; }
 .pr-devmgr-check input { accent-color: var(--accent); }
@@ -663,7 +681,12 @@ input, textarea, [contenteditable="true"] {
 .pr-devmgr-hint { font-size: var(--fs-small); color: var(--text-dim); line-height: 1.5; }
 .pr-devmgr-hint code { font-family: var(--font-mono); color: var(--text); }
 .pr-devmgr-error { font-size: var(--fs-small); color: var(--accent-text); font-family: var(--font-mono); }
-.pr-devmgr-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--divider); }
+.pr-devmgr-foot { flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--divider); }
+/* Fixed-width footer buttons: a label change ("Aplicar" → "Aplicando…") never shifts them. */
+.pr-devmgr-foot .pr-btn { min-width: 92px; }
+/* Reserved status slot at the footer's left (errors, progress): always present, so a
+   message appearing never pushes the layout. Long text ellipsizes; the title has it all. */
+.pr-devmgr-footstatus { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-small); font-family: var(--font-mono); color: var(--accent-text); }
 
 /* --- Large preview (M8 step 6 half, §3.4) --- */
 /* The selected zone at real geometry, effect running live. Fills the preview region
@@ -811,3 +834,76 @@ input.pr-field-value:focus { outline: 1px solid var(--accent); outline-offset: -
 .pr-devmgr-map span { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pr-devmgr-map button { background: transparent; border: none; color: var(--text-dim); cursor: pointer; }
 .pr-devmgr-map button:hover { color: var(--text); }
+
+/* --- Device Manager: Art-Net tab (console-style, docs/DEVICES-SPEC.md §9) ---
+   Every box here has a FIXED size; state changes (selection, On, warnings, dirty) only
+   recolour or fill reserved space, never resize — the rule DESIGN.md asks of dialogs. */
+.pr-artnet { flex: 1 1 auto; min-height: 0; display: flex; gap: 10px; padding: 10px 12px; }
+.pr-artnet-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.pr-artnet-tablewrap { flex: 1 1 auto; min-height: 0; overflow: auto; background: var(--bg-input); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); position: relative; }
+.pr-artnet-table { table-layout: auto; }
+.pr-artnet-table th { position: sticky; top: 0; z-index: 1; white-space: nowrap; }
+.pr-artnet-table td { white-space: nowrap; cursor: default; height: 24px; }
+.pr-artnet-table .col-on, .pr-artnet-table .col-state { width: 1%; text-align: center; }
+.pr-artnet-table .col-long { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.pr-artnet-table .col-ports { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.pr-artnet-table .col-addr { max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+.pr-table td.mono { font-family: var(--font-mono); }
+.pr-table tr.is-off td { color: var(--text-dim); }
+.pr-artnet-empty { padding: 18px; color: var(--text-dim); font-size: var(--fs-small); line-height: 1.6; }
+.pr-artnet-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
+.pr-artnet-host { margin-left: auto; font-size: var(--fs-small); color: var(--text-label); white-space: nowrap; }
+.pr-artnet-count { flex: 0 0 76px; text-align: right; font-size: var(--fs-small); color: var(--text-label); white-space: nowrap; }
+.pr-artnet-side { flex: 0 0 210px; display: flex; flex-direction: column; gap: 10px; padding: 10px; background: var(--bg-panel-2); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); font-size: var(--fs-base); }
+.pr-artnet-side-label { font-size: var(--fs-small); color: var(--text-label); margin-top: 4px; }
+/* Messages fill the panel's free middle; it is a fixed region, so a message appearing
+   never moves the ▲▼ below or anything else. */
+.pr-artnet-messages { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.pr-artnet-order { flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; }
+.pr-artnet-warn { font-size: var(--fs-small); color: var(--text); border-left: 2px solid var(--warn); padding-left: 7px; line-height: 1.5; }
+.pr-artnet-note { font-size: var(--fs-small); color: var(--text-dim); line-height: 1.5; }
+.pr-subdialog { z-index: 110; }
+/* MIDI tab: same frame as Art-Net (table + side panel). */
+.pr-midi { flex: 1 1 auto; min-height: 0; display: flex; gap: 10px; padding: 10px 12px; }
+
+/* Sub-dialogs: fixed sizes, body scrolls inside, footer pinned. */
+.pr-artnet-dialog { max-width: none; display: flex; flex-direction: column; }
+.pr-artnet-dialog > .pr-picker-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.pr-artnet-add { width: 460px; height: 440px; }
+.pr-artnet-config { width: 680px; height: min(780px, 92vh); }
+.pr-artnet-scan { width: min(960px, 92vw); height: min(560px, 80vh); }
+.pr-artnet-form { gap: 10px; }
+.pr-artnet-row { display: flex; align-items: center; gap: 10px; font-size: var(--fs-base); }
+.pr-artnet-lbl { flex: 0 0 100px; text-align: right; color: var(--text-label); font-size: var(--fs-small); }
+.pr-artnet-row .pr-dd { flex: 1 1 auto; }
+.pr-artnet-ports { flex: 1 1 auto; display: flex; flex-direction: column; gap: 6px; }
+.pr-artnet-total { font-size: var(--fs-small); color: var(--text-label); text-align: center; }
+.pr-artnet-total b { color: var(--accent-text); margin-right: 6px; }
+.pr-artnet-config-body { gap: 12px; }
+/* the classic titled sections: a full-width title strip (optional action on its right) over
+   the section body. Not fieldset/legend — the browser draws a legend ON the border line,
+   which never lines up with the rest of the dialog. */
+.pr-group { border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); background: var(--bg-panel-2); flex: 0 0 auto; }
+.pr-group-head { display: flex; align-items: center; justify-content: space-between; height: 30px; padding: 0 10px; background: var(--header-bg); border-bottom: 1px solid var(--btn-border-dark); font-size: var(--fs-small); color: var(--text-label); text-transform: uppercase; letter-spacing: .04em; }
+.pr-group-head .pr-btn { padding: 2px 10px; text-transform: none; letter-spacing: 0; }
+.pr-group-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.pr-artnet-kv { display: grid; grid-template-columns: 170px 1fr; align-items: center; gap: 10px; font-size: var(--fs-base); }
+.pr-artnet-kv > span:first-child { text-align: right; color: var(--text-label); font-size: var(--fs-small); }
+.pr-artnet-kv .pr-devmgr-input { width: 100%; box-sizing: border-box; }
+.pr-artnet-state { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-small); }
+.pr-artnet-portlist { display: flex; flex-direction: column; gap: 6px; }
+.pr-artnet-portval { display: inline-flex; align-items: center; gap: 10px; }
+.pr-artnet-hex { font-family: var(--font-mono); font-size: var(--fs-small); color: var(--text); }
+.pr-artnet-dim { color: var(--text-dim); font-size: var(--fs-small); }
+.pr-ip { display: inline-flex; align-items: center; background: var(--bg-input); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); padding: 0 6px; height: 26px; }
+.pr-ip-oct { display: inline-flex; align-items: center; }
+.pr-ip-oct input { width: 34px; background: transparent; border: none; outline: none; color: var(--accent-text); font-family: var(--font-mono); font-size: var(--fs-value); text-align: center; }
+.pr-ip-oct input:disabled { color: var(--text-dim); }
+.pr-ip-dot { color: var(--text-dim); }
+.pr-artnet-scan-body { padding: 0; }
+
+/* Node reachability dot: online (accent), lost (red alarm), silent/unknown (neutral). */
+.pr-reach { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: transparent; border: 1px solid var(--text-dim); }
+.pr-reach.is-online { background: var(--ok); border-color: var(--ok); }
+.pr-reach.is-silent { background: var(--btn-border); border-color: var(--btn-border); }
+.pr-reach.is-lost { background: var(--danger); border-color: var(--danger); }

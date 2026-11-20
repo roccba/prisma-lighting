@@ -294,23 +294,93 @@ export const setMasterStrobeRate = (rate: number) =>
  *  applies the edits to the running show on close. */
 export const openEditor = () => invoke<void>("main_open_editor");
 
-// --- Device manager (network output) ---
+// --- Device manager (network output, docs/DEVICES-SPEC.md) ---
+//
+// Universe numbers are Art-Net port addresses, shown AS IS — like professional consoles, whose node
+// config shows universe 1 as 0x0001.
 
-/** Network output config: where the engine sends DMX. Disabled → the virtual sink;
- *  enabled → an Art-Net node/broadcast at `artnet_ip:artnet_port`. */
-export interface NetworkConfig {
-  artnet_enabled: boolean;
-  artnet_ip: string;
-  artnet_port: number;
+export type NodeOrigin =
+  | { kind: "manual" }
+  | { kind: "scanned"; mac: string; bind_index: number; esta: number; oem: number; firmware: number };
+
+/** One Art-Net device row, as professional consoles lists it: a node or one BindIndex group of it. */
+export interface ArtNetNode {
+  id: string;
+  /** Short name ("Nombre del dispositivo"). */
+  name: string;
+  long_name: string;
+  /** "0.0.0.0" = not set yet. */
+  ip: string;
+  /** The universe of each output port, in port order. */
+  ports: number[];
+  enabled: boolean;
+  /** false = send to the interface's subnet broadcast instead of the node's IP. */
+  unicast: boolean;
+  /** Pad every ArtDmx to 512 channels. */
+  full_frames: boolean;
+  origin: NodeOrigin;
 }
 
-/** Read the current network output config. */
-export const networkGet = () => invoke<NetworkConfig>("main_network_get");
+/** The output interface, stored by network (address + prefix); name is only a hint. */
+export interface InterfaceRef {
+  address: string;
+  prefix_len: number;
+  name_hint: string;
+}
 
-/** Apply a network output config: persists it and recompiles the engine onto the new
- *  Art-Net target (or the virtual sink when disabled). */
-export const networkSet = (config: NetworkConfig) =>
-  invoke<void>("main_network_set", { config });
+/** The show's whole network output config. */
+export interface ShowNetwork {
+  initialized: boolean;
+  artnet_enabled: boolean;
+  artsync: boolean;
+  interface: InterfaceRef | null;
+  nodes: ArtNetNode[];
+}
+
+/** A host network interface (for the interface dropdown). */
+export interface InterfaceInfo {
+  name: string;
+  address: string;
+  prefix_len: number;
+}
+
+/** How the running show's output resolved: interface + universes no node receives. */
+export interface OutputStatus {
+  interface_state: "unset" | "resolved" | "missing";
+  interface: InterfaceInfo | null;
+  uncovered: number[];
+}
+
+/** One device row found by a Scan (one per BindIndex group, like professional consoles). */
+export interface ScannedNode {
+  ip: string;
+  short_name: string;
+  long_name: string;
+  mac: string;
+  bind_index: number;
+  ports: number[];
+  esta: number;
+  oem: number;
+  firmware: number;
+}
+
+export type NodeReach = "online" | "silent" | "lost";
+export interface NodeStatusInfo {
+  ip: string;
+  status: NodeReach;
+}
+
+export const outputGet = () => invoke<ShowNetwork>("main_output_get");
+/** Apply a staged config to the running show (Aplicar / Aceptar). */
+export const outputSet = (network: ShowNetwork) => invoke<void>("main_output_set", { network });
+export const outputStatus = () => invoke<OutputStatus>("main_output_status");
+export const networkInterfaces = () => invoke<InterfaceInfo[]>("main_network_interfaces");
+/** Scan (~3 s): ArtPoll the network, replies merged per board. */
+export const artnetScan = () => invoke<ScannedNode[]>("main_artnet_scan");
+export const nodeStatuses = () => invoke<NodeStatusInfo[]>("main_node_statuses");
+/** Open the node's web configuration page in the system browser. */
+export const openNodePage = (ip: string) => invoke<void>("main_open_node_page", { ip });
+export const hostName = () => invoke<string>("main_host_name");
 
 /** Save the live show (with its embedded patch) to a `.prisma` file (§5). */
 export const saveShow = (path: string) => invoke<void>("main_save_show", { path });

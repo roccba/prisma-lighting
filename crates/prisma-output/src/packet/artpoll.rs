@@ -42,11 +42,20 @@ pub struct PollReply {
     /// Port addresses of this reply's OUTPUT ports (DMX from the network to the
     /// node's outputs), in port order.
     pub output_universes: Vec<u16>,
+    /// Firmware revision (`VersInfoH:VersInfoL`).
+    pub firmware: u16,
+    /// Art-Net OEM code (`OemHi:Oem`).
+    pub oem: u16,
+    /// ESTA manufacturer code (`EstaManHi:EstaManLo`).
+    pub esta: u16,
 }
 
 // Field offsets (Art-Net 4, ArtPollReply).
 const IP: usize = 10;
+const VERS_INFO: usize = 16;
 const NET_SWITCH: usize = 18;
+const OEM: usize = 20;
+const ESTA_LO: usize = 24;
 const SUB_SWITCH: usize = 19;
 const SHORT_NAME: usize = 26;
 const SHORT_NAME_LEN: usize = 18;
@@ -95,6 +104,9 @@ pub fn parse_artpollreply(buf: &[u8]) -> Option<PollReply> {
         mac,
         bind_index,
         output_universes,
+        firmware: u16::from_be_bytes([buf[VERS_INFO], buf[VERS_INFO + 1]]),
+        oem: u16::from_be_bytes([buf[OEM], buf[OEM + 1]]),
+        esta: u16::from_le_bytes([buf[ESTA_LO], buf[ESTA_LO + 1]]),
     })
 }
 

@@ -231,18 +231,23 @@ fn new_show_builds_one_zone_show_per_patch_zone() {
 use prisma_core::show::{ArtNetNode, InterfaceRef, NetworkConfig, NodeOrigin, UniverseRange};
 use std::net::Ipv4Addr;
 
-fn h802ra() -> ArtNetNode {
+fn h802ra_bind1() -> ArtNetNode {
     ArtNetNode {
         id: Uuid::new_v4(),
         name: "H802RA".into(),
+        long_name: "Oem ArtNet-Node".into(),
         ip: Ipv4Addr::new(169, 254, 99, 11),
-        universes: vec![UniverseRange { first: 0, last: 71 }],
+        ports: vec![1, 2, 3, 4],
+        universes: Vec::new(),
         enabled: true,
         unicast: true,
         full_frames: false,
         origin: NodeOrigin::Scanned {
-            long_name: "Oem ArtNet-Node".into(),
             mac: "48:E0:C7:4D:96:64".into(),
+            bind_index: 1,
+            esta: 0,
+            oem: 0,
+            firmware: 0,
         },
     }
 }
@@ -259,7 +264,7 @@ fn network_config_round_trips_inside_the_show() {
             prefix_len: 16,
             name_hint: "enp3s0".into(),
         }),
-        nodes: vec![h802ra()],
+        nodes: vec![h802ra_bind1()],
     };
     let back = load_show(&save_show(&show).unwrap()).unwrap();
     assert_eq!(back.network, show.network);
@@ -298,17 +303,51 @@ fn interface_matches_by_network_not_name() {
 }
 
 #[test]
-fn network_validate_rejects_bad_ranges() {
+fn network_validate_rejects_universes_beyond_15_bits() {
     let mut net = NetworkConfig {
-        nodes: vec![h802ra()],
+        nodes: vec![h802ra_bind1()],
         ..Default::default()
     };
     assert!(net.validate().is_ok());
-    net.nodes[0].universes = vec![UniverseRange { first: 5, last: 4 }];
+    net.nodes[0].ports = vec![1, 0x8000];
     assert!(matches!(net.validate(), Err(ShowError::InvalidNetwork(_))));
-    net.nodes[0].universes = vec![UniverseRange {
+}
+
+#[test]
+fn legacy_ranges_migrate_to_one_universe_per_port() {
+    // A node saved with ranges (pre-ports) and the old single-IP "every universe" node.
+    let mut board = h802ra_bind1();
+    board.ports.clear();
+    board.universes = vec![UniverseRange { first: 1, last: 4 }];
+    let mut all = h802ra_bind1();
+    all.ports.clear();
+    all.universes = vec![UniverseRange {
         first: 0,
-        last: 0x8000,
+        last: UniverseRange::MAX,
     }];
-    assert!(matches!(net.validate(), Err(ShowError::InvalidNetwork(_))));
+    let mut net = NetworkConfig {
+        nodes: vec![board, all],
+        ..Default::default()
+    };
+    net.normalize(&[0, 1, 2]);
+    assert_eq!(net.nodes[0].ports, [1, 2, 3, 4]);
+    assert_eq!(
+        net.nodes[1].ports,
+        [0, 1, 2],
+        "all-universe target → the patch's universes"
+    );
+    assert!(net.nodes.iter().all(|n| n.universes.is_empty()));
+    // Ranges are never written back.
+    let json = serde_json::to_string(&net).unwrap();
+    assert!(!json.contains("\"universes\""));
+}
+
+#[test]
+fn a_unicast_node_without_ip_has_no_destination() {
+    let mut n = h802ra_bind1();
+    assert!(n.has_destination());
+    n.ip = Ipv4Addr::UNSPECIFIED;
+    assert!(!n.has_destination());
+    n.unicast = false;
+    assert!(n.has_destination(), "broadcast needs no IP");
 }

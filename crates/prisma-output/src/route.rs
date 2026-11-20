@@ -7,7 +7,8 @@
 //! all destinations live in one flat array and each universe owns a contiguous span of it.
 //!
 //! Rules:
-//! - a universe covered by **no** enabled node is not sent (the UI warns);
+//! - a universe covered by **no** enabled node is not sent (the UI warns); a unicast
+//!   node whose IP is not set yet (`0.0.0.0`) counts as no node;
 //! - a universe covered by **several** nodes is sent to each (mirroring is legitimate);
 //! - a node with `unicast: false` is sent to the interface's subnet broadcast;
 //! - `artnet_enabled: false` or no nodes at all → every universe to the loopback virtual
@@ -66,7 +67,11 @@ impl DestinationTable {
         let addr_of = |ip: Ipv4Addr| SocketAddr::new(IpAddr::V4(ip), ARTNET_PORT);
         for &pa in port_addresses {
             let start = table.flat.len() as u32;
-            for node in net.nodes.iter().filter(|n| n.enabled && n.receives(pa)) {
+            for node in net
+                .nodes
+                .iter()
+                .filter(|n| n.enabled && n.has_destination() && n.receives(pa))
+            {
                 let addr = addr_of(if node.unicast { node.ip } else { bcast });
                 // Two nodes sharing a broadcast (or a duplicated IP) get one packet.
                 let span = &table.flat[start as usize..];
@@ -91,7 +96,11 @@ impl DestinationTable {
             table.spans.push((start, len));
         }
 
-        for node in net.nodes.iter().filter(|n| n.enabled) {
+        for node in net
+            .nodes
+            .iter()
+            .filter(|n| n.enabled && n.has_destination())
+        {
             let addr = addr_of(if node.unicast { node.ip } else { bcast });
             if !table.sync_targets.contains(&addr) {
                 table.sync_targets.push(addr);
@@ -146,7 +155,7 @@ impl DestinationTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use prisma_core::{ArtNetNode, NodeOrigin, UniverseRange};
+    use prisma_core::{ArtNetNode, NodeOrigin};
     use uuid::Uuid;
 
     fn node(ip: [u8; 4], first: u16, last: u16) -> ArtNetNode {
@@ -154,7 +163,9 @@ mod tests {
             id: Uuid::new_v4(),
             name: format!("{ip:?}"),
             ip: Ipv4Addr::from(ip),
-            universes: vec![UniverseRange { first, last }],
+            long_name: String::new(),
+            ports: (first..=last).collect(),
+            universes: Vec::new(),
             enabled: true,
             unicast: true,
             full_frames: false,

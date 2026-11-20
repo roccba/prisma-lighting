@@ -377,7 +377,7 @@ mod tests {
         // Two virtual sinks standing in for two boards, on distinct loopback IPs at the
         // real Art-Net port. Node A takes universes 0–1, node B 1–2 (universe 1 is
         // mirrored to both) and wants full 512-channel frames.
-        use prisma_core::{ArtNetNode, NetworkConfig, NodeOrigin, UniverseRange};
+        use prisma_core::{ArtNetNode, NetworkConfig, NodeOrigin};
         let a_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), 6454);
         let b_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 3)), 6454);
         let (Ok(a), Ok(b)) = (crate::sink::spawn(a_addr), crate::sink::spawn(b_addr)) else {
@@ -388,7 +388,9 @@ mod tests {
             id: uuid::Uuid::new_v4(),
             name: String::new(),
             ip,
-            universes: vec![UniverseRange { first, last }],
+            long_name: String::new(),
+            ports: (first..=last).collect(),
+            universes: Vec::new(),
             enabled: true,
             unicast: true,
             full_frames,

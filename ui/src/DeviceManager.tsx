@@ -1,62 +1,26 @@
 import { useEffect, useState } from "react";
-import {
-  controlLabel,
-  midiReconnect,
-  midiSetInput,
-  midiStatus,
-  midiUnmap,
-  networkGet,
-  networkSet,
-  type MapTarget,
-  type MidiStatus,
-  type NetworkConfig,
-  type ZoneInfo,
-} from "./api";
-import { Dropdown } from "./Dropdown";
+import { midiReconnect, midiSetInput, midiStatus, type MidiStatus, type ZoneInfo } from "./api";
+import { ArtNetTab } from "./ArtNetTab";
+import { Check } from "./Check";
+import { Search } from "./icons";
 
-// The device manager: where the engine sends DMX. First cut is the
-// Art-Net tab — enable it and point it at a node IP or a subnet broadcast, Apply
-// recompiles the engine onto that target (it was going to the loopback virtual sink).
-// The per-node universe table is a later feature; today every universe goes to one
-// target (a node that takes them all, or broadcast).
+// The device manager, modelled on the classic (docs/DEVICES-SPEC.md §9). The Art-Net tab
+// (`ArtNetTab`) lists the show's devices — one row per node / BindIndex group — with
+// Scan, staged edits and Aceptar / Aplicar / Cancelar.
 //
-// The MIDI tab (M9) picks the input device (auto-detects the APC40 by default), reconnects
-// after a late hot-plug, and lists the controller profile's mappings. Changes there apply
-// immediately — they do not recompile the engine, so no Apply step.
+// The MIDI tab mirrors the classic port table: each MIDI input, and which one is the
+// "Remoto" (the device that controls Prisma). Only device configuration lives here —
+// controls are mapped and unmapped with MIDI Learn on the main window (right-click a
+// learned control), never from a list, so an assignment cannot be removed by accident.
+// Changes apply immediately (they do not recompile the engine).
 
 interface DeviceManagerProps {
   onClose: () => void;
-  /** The running show's zones in slot order, to name zone-slot mappings. */
+  /** The running show's zones (kept for future per-zone MIDI views). */
   zones: ZoneInfo[];
 }
 
-const AUTO = "__auto__";
-
-const GLOBAL_LABEL: Record<string, string> = {
-  "/master/dimmer": "Master dimmer",
-  "/master/blackout": "Blackout master",
-  "/master/strobe/on": "Strobo global",
-  "/master/strobe/rate": "Velocidad strobo global",
-};
-
-const SUB_LABEL: Record<string, string> = {
-  dimmer: "Dimmer",
-  speed: "Velocidad",
-  solo: "Solo",
-  blackout: "Mute",
-  strobe_on: "Strobo",
-  strobe_rate: "Velocidad strobo",
-};
-
-function targetLabel(t: MapTarget, zones: ZoneInfo[]): string {
-  if ("path" in t) return GLOBAL_LABEL[t.path] ?? t.path;
-  const { slot, sub } = t.zone_slot;
-  const zone = zones[slot]?.name ?? `Zona ${slot + 1} (no está en este show)`;
-  const what = typeof sub === "object" ? `Celda ${sub.cell + 1}` : (SUB_LABEL[sub] ?? sub);
-  return `${what} — ${zone}`;
-}
-
-function MidiTab({ zones }: { zones: ZoneInfo[] }) {
+function MidiTab({ onClose }: { onClose: () => void }) {
   const [status, setStatus] = useState<MidiStatus | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -75,112 +39,87 @@ function MidiTab({ zones }: { zones: ZoneInfo[] }) {
     }
   };
 
-  if (!status) return <div className="pr-devmgr-hint">Cargando…</div>;
-
-  const options = [
-    { value: AUTO, label: "Automático (APC40)" },
-    ...status.ports.map((p) => ({ value: p, label: p })),
-  ];
-  // A configured port that is currently unplugged still shows as the selection.
-  if (status.selected && !status.ports.includes(status.selected)) {
-    options.push({ value: status.selected, label: `${status.selected} (desconectado)` });
-  }
+  // Rows: every input port, plus the configured one if it is unplugged right now.
+  const ports = status ? [...status.ports] : [];
+  if (status?.selected && !ports.includes(status.selected)) ports.push(status.selected);
+  const auto = status?.selected == null;
 
   return (
     <>
-      <div className="pr-devmgr-field">
-        <span className="pr-devmgr-label">Entrada</span>
-        <div className="pr-devmgr-select">
-          <Dropdown
-            value={status.selected ?? AUTO}
-            options={options}
-            disabled={busy}
-            onChange={(v) => run(() => midiSetInput(v === AUTO ? null : v))}
-            aria-label="Entrada MIDI"
-          />
+      <div className="pr-midi">
+        <div className="pr-artnet-main">
+          <div className="pr-artnet-tablewrap">
+            <table className="pr-table pr-artnet-table">
+              <thead>
+                <tr>
+                  <th>Puerto</th>
+                  <th>Nombre del dispositivo</th>
+                  <th className="col-on">Remoto</th>
+                  <th>Estado</th>
+                  <th>Feedback (LEDs)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ports.map((p, i) => {
+                  const connected = status?.connected === p;
+                  const remote = auto ? connected : status?.selected === p;
+                  return (
+                    <tr key={p} className={status?.ports.includes(p) ? "" : "is-off"}>
+                      <td>Entrada {i + 1}</td>
+                      <td>{p}</td>
+                      <td className="col-on">
+                        <Check checked={remote} disabled={busy} onChange={(v) => v && run(() => midiSetInput(p))} />
+                      </td>
+                      <td>{connected ? "Conectado" : status?.ports.includes(p) ? "—" : "Desconectado"}</td>
+                      <td>{connected ? (status?.output ?? "Sin salida") : ""}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {status && ports.length === 0 && <div className="pr-artnet-empty">No hay dispositivos MIDI conectados.</div>}
+          </div>
         </div>
-        <button className="pr-btn" type="button" disabled={busy} onClick={() => run(midiReconnect)}>
-          Reconectar
+        <div className="pr-artnet-side">
+          <Check checked={auto} disabled={busy} onChange={(v) => v && run(() => midiSetInput(null))}>
+            Elegir automáticamente
+          </Check>
+          <div className="pr-artnet-note">
+            Con esta opción, Prisma usa el primer controlador conocido que encuentre (APC40).
+          </div>
+          <div className="pr-artnet-messages">
+            {status?.connected && <div className="pr-artnet-note">Perfil: {status.device}</div>}
+            {status?.error && <div className="pr-artnet-warn">{status.error}</div>}
+            <div className="pr-artnet-note">Las asignaciones se hacen y se quitan con MIDI Learn (Ctrl+M) en la ventana principal.</div>
+          </div>
+          <div className="pr-artnet-order">
+            <button className="pr-btn" type="button" disabled={busy} onClick={() => run(midiReconnect)} title="Buscar dispositivos MIDI y reconectar">
+              <Search size={15} /> Buscar
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className="pr-devmgr-foot">
+        <span className="pr-devmgr-footstatus" />
+        <button className="pr-btn" type="button" onClick={onClose}>
+          Cerrar
         </button>
-      </div>
-
-      <div className={`pr-devmgr-status${status.connected ? " is-ok" : ""}`}>
-        {status.connected ? `Conectado: ${status.connected}` : "Sin dispositivo MIDI conectado"}
-      </div>
-      {status.connected && (
-        <div className="pr-devmgr-status">
-          {status.output
-            ? `Perfil: ${status.device} · LEDs por ${status.output}`
-            : `Perfil: ${status.device} · sin salida (no hay feedback de LEDs)`}
-        </div>
-      )}
-      {status.error && <div className="pr-devmgr-error">Error: {status.error}</div>}
-
-      <div className="pr-devmgr-label">Asignaciones ({status.mappings.length})</div>
-      <div className="pr-devmgr-maps">
-        {status.mappings.length === 0 ? (
-          <div className="pr-devmgr-hint">Ninguna. Usá MIDI Learn (Ctrl+M) en la ventana principal.</div>
-        ) : (
-          status.mappings.map((m) => (
-            <div className="pr-devmgr-map" key={JSON.stringify(m.target)}>
-              <code>{controlLabel(m.control)}</code>
-              <span>{targetLabel(m.target, zones)}</span>
-              <button
-                type="button"
-                title="Quitar asignación"
-                onClick={() =>
-                  midiUnmap(m.target)
-                    .then((mappings) => setStatus((s) => (s ? { ...s, mappings } : s)))
-                    .catch(() => {})
-                }
-              >
-                ✕
-              </button>
-            </div>
-          ))
-        )}
-      </div>
-      <div className="pr-devmgr-hint">
-        Las asignaciones son tuyas, no del show: siguen al operador en cualquier show. Los faders
-        de zona se asignan por posición (zona 1, zona 2…).
       </div>
     </>
   );
 }
 
-const DEFAULT: NetworkConfig = { artnet_enabled: false, artnet_ip: "255.255.255.255", artnet_port: 6454 };
-
-export function DeviceManager({ onClose, zones }: DeviceManagerProps) {
+export function DeviceManager({ onClose }: DeviceManagerProps) {
   const [tab, setTab] = useState<"artnet" | "midi">("artnet");
-  const [cfg, setCfg] = useState<NetworkConfig>(DEFAULT);
-  const [applying, setApplying] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    networkGet()
-      .then(setCfg)
-      .catch(() => setCfg(DEFAULT));
-  }, []);
-
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      // Escape closes the manager — but not from under an open sub-dialog (Configurar,
+      // Agregar, Scan), which would drop the staged edits with it.
+      if (e.key === "Escape" && !document.querySelector(".pr-subdialog")) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-
-  const apply = async () => {
-    setApplying(true);
-    setError(null);
-    try {
-      await networkSet(cfg);
-      onClose();
-    } catch (e) {
-      setError(String(e));
-      setApplying(false);
-    }
-  };
 
   return (
     <div className="pr-picker-backdrop" onPointerDown={onClose}>
@@ -197,70 +136,9 @@ export function DeviceManager({ onClose, zones }: DeviceManagerProps) {
         </div>
 
         {tab === "midi" ? (
-          <>
-            <div className="pr-picker-body">
-              <MidiTab zones={zones} />
-            </div>
-            <div className="pr-devmgr-foot">
-              <button className="pr-btn" type="button" onClick={onClose}>
-                Cerrar
-              </button>
-            </div>
-          </>
+          <MidiTab onClose={onClose} />
         ) : (
-          <>
-            <div className="pr-picker-body">
-              <label className="pr-devmgr-check">
-                <input
-                  type="checkbox"
-                  checked={cfg.artnet_enabled}
-                  onChange={(e) => setCfg({ ...cfg, artnet_enabled: e.target.checked })}
-                />
-                Habilitar Art-Net
-              </label>
-
-              <div className="pr-devmgr-field">
-                <span className="pr-devmgr-label">IP destino</span>
-                <input
-                  className="pr-devmgr-input"
-                  type="text"
-                  value={cfg.artnet_ip}
-                  disabled={!cfg.artnet_enabled}
-                  placeholder="192.168.1.50  ·  broadcast: 2.255.255.255"
-                  onChange={(e) => setCfg({ ...cfg, artnet_ip: e.target.value })}
-                />
-              </div>
-
-              <div className="pr-devmgr-field">
-                <span className="pr-devmgr-label">Puerto</span>
-                <input
-                  className="pr-devmgr-input pr-devmgr-port"
-                  type="number"
-                  min={1}
-                  max={65535}
-                  value={cfg.artnet_port}
-                  disabled={!cfg.artnet_enabled}
-                  onChange={(e) => setCfg({ ...cfg, artnet_port: Number(e.target.value) || 6454 })}
-                />
-              </div>
-
-              <div className="pr-devmgr-hint">
-                Deshabilitado → sink virtual (127.0.0.1:6454). Broadcast por subred:{" "}
-                <code>x.255.255.255</code>. Todos los universos se envían a este destino; sus números
-                van en cada paquete.
-              </div>
-              {error && <div className="pr-devmgr-error">Error: {error}</div>}
-            </div>
-
-            <div className="pr-devmgr-foot">
-              <button className="pr-btn" type="button" onClick={onClose}>
-                Cancelar
-              </button>
-              <button className="pr-btn is-primary" type="button" onClick={apply} disabled={applying}>
-                {applying ? "Aplicando…" : "Aplicar"}
-              </button>
-            </div>
-          </>
+          <ArtNetTab onClose={onClose} />
         )}
       </div>
     </div>
