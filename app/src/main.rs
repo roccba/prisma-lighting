@@ -302,13 +302,11 @@ fn empty_patch() -> Patch {
     patch
 }
 
-/// A zone's starting grid: cell 1 holds the Color effect at R = G = B = 0 (the effect's
-/// manifest defaults), the rest are empty. Every zone starts with it (Bauti: a zone never
-/// begins without content) and with that cell RUNNING.
+/// A zone's starting grid: every cell EMPTY, none running (Bauti, 2026-11-21: lazy
+/// assignment — a cell is assigned only when the operator edits it or plays it with GO;
+/// the effect panel shows an empty cell as a draft until then).
 fn default_grid() -> Vec<Cell> {
-    let mut grid: Vec<Cell> = (0..GRID_CELLS).map(|_| Cell::empty()).collect();
-    grid[0] = Cell::single(Layer::shader("solid".to_string(), ParamSet::new()));
-    grid
+    (0..GRID_CELLS).map(|_| Cell::empty()).collect()
 }
 
 /// Pad every zone's grid up to `GRID_CELLS` with assignable (empty) cells. A zone with an
@@ -323,15 +321,15 @@ fn pad_grids(show: &mut Show) {
     }
 }
 
-/// A new show: the default 50×50 zone, its grid seeded with the Color cell running and
-/// LIT, so the operator starts from a mapped rig (matching a freshly added zone).
+/// A new show: the default 50×50 zone with an empty grid (nothing running) and the
+/// dimmer up, so the operator starts from a mapped rig (matching a freshly added zone).
 fn empty_show() -> Show {
     let mut show = Show::new("Sin título", empty_patch());
-    // The default zone starts at full dimmer (like the reconcile path's new-zone branch)
-    // with its Color cell running, so changing the colour lights the rig at once.
+    // The default zone starts at full dimmer (like the reconcile path's new-zone branch),
+    // so the first cell the operator plays lights the rig at once.
     for zs in &mut show.zones {
         zs.grid = default_grid();
-        zs.active = Some(0);
+        zs.active = None;
         zs.live.dimmer = 1.0;
     }
     show
@@ -943,7 +941,7 @@ fn apply_editor_draft(app: &AppHandle, resume: bool) -> Result<(), String> {
                 None => {
                     let mut zs = ZoneShow::new(pz.id);
                     zs.grid = default_grid();
-                    zs.active = Some(0);
+                    zs.active = None;
                     // A freshly created zone starts LIT (dimmer full) — master defaults to
                     // full too, so the operator sees the zone's content the moment they
                     // assign an effect, instead of a black zone that looks broken.
@@ -2780,7 +2778,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_show_is_a_mapped_50x50_zone_running_its_color_cell() {
+    fn a_new_show_is_a_mapped_50x50_zone_with_an_empty_grid() {
         let show = empty_show();
         let patch = &show.patch;
         assert_eq!(patch.fixtures.len(), (DEFAULT_RIG * DEFAULT_RIG) as usize);
@@ -2795,18 +2793,14 @@ mod tests {
         assert_eq!(patch.fixtures[0].name, "Generic RGB 1 pixel #1");
         patch.clone().compile().expect("default patch compiles");
 
+        // Every cell empty and nothing running: cells are assigned lazily (first edit / GO).
         let zs = &show.zones[0];
-        assert_eq!(zs.active, Some(0));
+        assert_eq!(zs.active, None);
         assert_eq!(zs.grid.len(), GRID_CELLS);
-        match &zs.grid[0].layers[0].source {
-            Source::Shader {
-                effect_id, params, ..
-            } => {
-                assert_eq!(effect_id, "solid");
-                assert!(params.iter().next().is_none(), "manifest defaults: R=G=B=0");
-            }
-            other => panic!("cell 1 is not the Color effect: {other:?}"),
-        }
+        assert!(
+            zs.grid.iter().all(|c| c.layers.is_empty()),
+            "no pre-assigned cell"
+        );
     }
 
     #[test]
