@@ -781,7 +781,8 @@ pub fn pulse() -> EffectManifest {
 }
 
 /// The whole canvas cross-fading through the cell's colour TABLE, one colour per beat
-/// at `speed` BPM; `color_mode` picks the order (loop, ping-pong, random). Global, not
+/// at `speed` BPM; `color_mode` picks the order (loop, ping-pong, random) and `fade`
+/// blends between colours (on) or cuts on the beat (off). Global, not
 /// spatial. Factory table: red, yellow, green, blue. Param order here **is** the uniform
 /// layout the shader reads.
 pub fn color_change() -> EffectManifest {
@@ -799,6 +800,12 @@ pub fn color_change() -> EffectManifest {
             ),
         ),
         color_mode("effect.color_change.color_mode"),
+        // "Atenuar": ON (default) = each colour fades into the next; OFF = hard cut on
+        // the beat.
+        ParamSpec::toggle(
+            "fade",
+            ParamDescriptor::unit_level("effect.color_change.fade", 1.0),
+        ),
     ];
     EffectManifest {
         effect_id: "color_change",

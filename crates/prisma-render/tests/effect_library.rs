@@ -707,6 +707,24 @@ fn color_change_cycles_through_four_colours_globally() {
         "random pick is stable"
     );
 
+    // Atenuar off: no blend — mid-beat still shows the beat's colour, cut on the beat.
+    tree.write_real(&mode, 0.0, ui());
+    let fade = tree.resolve("/fx/cc/param/fade").unwrap();
+    tree.write_real(&fade, 0.0, ui());
+    assert!(
+        close(rgb(&mut cc, 0.5), [1.0, 0.0, 0.0]),
+        "hard cut holds colour 1"
+    );
+    assert!(
+        close(rgb(&mut cc, 0.99), [1.0, 0.0, 0.0]),
+        "still colour 1 before the beat"
+    );
+    assert!(
+        close(rgb(&mut cc, 1.0), [1.0, 1.0, 0.0]),
+        "cuts to colour 2 on the beat"
+    );
+    tree.write_real(&fade, 1.0, ui());
+
     // The table is a list: two colours alternate.
     cc.set_palette(gpu, &[[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
     tree.write_real(&mode, 0.0, ui());

@@ -1,12 +1,14 @@
 // "Color Change" (CLAUDE.md §5.3). The whole target cross-fades through the cell's
 // colour table, one colour per beat at `speed` BPM, in the order `color_mode` picks:
 // Secuencial (1 → 2 → … → n → 1), Ping-pong (1 → … → n → … → 1) or Aleatorio (a
-// stateless hash of the beat). Global, not spatial: every pixel takes the same colour.
+// stateless hash of the beat). `fade` ON blends each colour into the next across the
+// beat; OFF holds each colour and cuts on the beat. Global, not spatial: every pixel
+// takes the same colour.
 //
 // Output is LINEAR-light; gamma is an output-stage concern (§5.2).
 //
 // Uniform convention: globals (time, _pad0, resolution) then one f32 per manifest
-// param in order — here speed, color_mode. The colours come from the `palette`
+// param in order — here speed, color_mode, fade. The colours come from the `palette`
 // uniform (binding 1). See effect.rs.
 struct Uniforms {
     time: f32,
@@ -14,6 +16,7 @@ struct Uniforms {
     resolution: vec2<f32>,
     speed: f32,
     color_mode: f32,
+    fade: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -83,5 +86,6 @@ fn fs() -> @location(0) vec4<f32> {
     let n = pal_len();
     let c0 = pal_color(pal_index(u.color_mode, k, 0u, n));
     let c1 = pal_color(pal_index(u.color_mode, k + 1, 0u, n));
-    return vec4<f32>(mix(c0, c1, fract(beats)), 1.0);
+    let f = select(0.0, fract(beats), u.fade > 0.5);
+    return vec4<f32>(mix(c0, c1, f), 1.0);
 }
