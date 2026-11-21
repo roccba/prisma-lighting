@@ -402,11 +402,15 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
     const el = rowsRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
+      // A detached element (the panel just remounted for another cell) measures 0 high:
+      // ignore it, or the sliders would collapse to one row and spill into columns.
+      if (el.clientHeight === 0) return;
       setRows(Math.max(1, Math.floor((el.clientHeight + ROW_GAP) / (ROW_H + ROW_GAP))));
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [panel?.effect_id]);
+    // The panel remounts per CELL (keyed by it), so re-attach to the new element then too.
+  }, [panel?.effect_id, panel?.cell_index]);
 
   useEffect(() => {
     let live = true;

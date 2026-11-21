@@ -751,8 +751,10 @@ input, textarea, [contenteditable="true"] {
    beside it. The row count is set from the panel's height (EffectParams measures it). */
 .pr-params-scalars { flex: 0 0 auto; min-height: 0; display: grid; grid-auto-flow: column; grid-template-rows: repeat(var(--param-rows, 3), auto); align-content: start; gap: 12px 40px; }
 .pr-params-scalars .pr-field { width: 380px; grid-template-columns: 150px 52px 1fr; }
-/* A BPM row's "Pulsar" sits OUTSIDE the slider (professional consoles), so every fader keeps one length. */
-.pr-params-scalars:has(.pr-tap) { padding-right: 76px; }
+/* A BPM row's "Pulsar" sits OUTSIDE the slider (professional consoles), so every fader keeps one length.
+   The room is reserved on the row itself, so it widens ITS column — a second column of
+   sliders starts after the button instead of on top of it. */
+.pr-params-scalars .pr-field:has(.pr-tap) { margin-right: 76px; }
 /* Effect-specific controls (rose, colour, palette, dropdown) sit just to their right. */
 .pr-params-controls { flex: 0 0 auto; display: flex; flex-flow: row wrap; align-content: flex-start; gap: 18px 28px; }
 /* The ONE shared parameter frame (ParamField): every control — scalar, enum, colour,
