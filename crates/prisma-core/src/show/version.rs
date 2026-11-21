@@ -28,7 +28,11 @@ pub const FORMAT_ID: &str = "prisma.show";
 ///
 /// - **v1** — initial M8 schema: embedded patch, per-zone grids (`ZoneShow`), cells
 ///   holding one layer, master state, reserved network config.
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+/// - **v2** — live model phase 1 (docs/LIVE-MODEL-SPEC.md): clips live in
+///   [`Track`](crate::show::Track)s, zones keep only their live state. No
+///   migration from v1 — there were no shows to keep, so v1 files are refused as
+///   [`ShowError::UnknownSchema`].
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 /// The on-disk wrapper around a show body.
 #[derive(Debug, Serialize, Deserialize)]
@@ -88,12 +92,12 @@ pub fn load_show(json: &str) -> Result<Show, ShowError> {
 type Migration = fn(serde_json::Value) -> Result<serde_json::Value, ShowError>;
 
 /// The oldest schema version this build can migrate from.
-const OLDEST_SUPPORTED: u32 = 1;
+const OLDEST_SUPPORTED: u32 = 2;
 
 /// The migration chain, one step per version gap. `MIGRATIONS[i]` upgrades
 /// `OLDEST_SUPPORTED + i` → `OLDEST_SUPPORTED + i + 1`. A breaking change adds one
 /// entry here and bumps [`CURRENT_SCHEMA_VERSION`]. The `len` invariant is asserted
-/// in tests. Empty at v1 — there is nothing older to migrate from yet.
+/// in tests. Empty at v2 — v1 (per-zone grids) is deliberately not migrated.
 static MIGRATIONS: &[Migration] = &[];
 
 /// Migrate a show body from `from_version` up to [`CURRENT_SCHEMA_VERSION`] by

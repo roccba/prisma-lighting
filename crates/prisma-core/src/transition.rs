@@ -17,10 +17,13 @@
 //! not know what it is fading — the caller lerps its own endpoints (a dimmer, a
 //! colour, an opacity) with [`Transition::eased`].
 
+use serde::{Deserialize, Serialize};
+
 use crate::clock::ClockSnapshot;
 
 /// Which show quantity a transition is measured against.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TimeBase {
     /// Show seconds. Tempo-independent.
     Seconds,
@@ -29,7 +32,8 @@ pub enum TimeBase {
 }
 
 /// Easing applied to linear progress before it is returned.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Easing {
     Linear,
     EaseIn,

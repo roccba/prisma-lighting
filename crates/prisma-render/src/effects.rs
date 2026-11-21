@@ -1054,7 +1054,7 @@ pub fn catalogue() -> Vec<EffectListing> {
 /// One parameter of an effect, flattened for the UI's manifest-driven parameter
 /// panel (M8 step 5, §3.5): its key, real range, and normalized default. The panel
 /// builds itself from this list — never a per-effect hardcoded UI (§5.3). `name` is
-/// the trailing path segment the value is addressed by (`/zone/{id}/layer/0/param/
+/// the trailing path segment the value is addressed by (`/track/{id}/layer/0/param/
 /// {name}`); the real range lets the panel show a value the operator can read.
 #[derive(Debug, Clone)]
 pub struct EffectParam {

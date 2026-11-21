@@ -31,13 +31,13 @@
 //!   is M7/S7; the seam is the Parameter Tree and the output stage, both already
 //!   owned here.
 
-pub mod cells;
+pub mod clips;
 pub mod config;
 pub mod content;
 pub mod engine;
 pub mod zone_content;
 
-pub use cells::{CellEffect, CellHost, CELL_ASSIGNED, CELL_EMPTY, CELL_RUNNING};
+pub use clips::{ClipEffect, ClipHost, CLIP_ASSIGNED, CLIP_EMPTY, CLIP_RUNNING};
 pub use config::EngineConfig;
 pub use content::IdleContent;
 pub use engine::{
@@ -53,8 +53,9 @@ pub use prisma_output::monitor::{NodeMonitor, NodeStatus};
 // The Show model the assembly consumes, re-exported so the app (which sits on this
 // crate) can build a `Show` without depending on `prisma-core` directly.
 pub use prisma_core::show::{
-    load_show, save_show, ArtNetNode, Cell, InterfaceRef, Layer, MasterState, NodeOrigin, ParamSet,
-    Show, Source, UniverseRange, ZoneLive, ZoneShow,
+    load_show, save_show, ArtNetNode, Cell, Destination, InterfaceRef, LaunchMode, Layer,
+    MasterState, NodeOrigin, ParamSet, Show, Source, Track, TrackTransition, UniverseRange,
+    ZoneLive, ZoneShow,
 };
 // The Show's network output (docs/DEVICES-SPEC.md), aliased so it never reads as the
 // app's legacy app-wide `NetworkConfig` (`network.json`) it replaces.
@@ -62,9 +63,11 @@ pub use prisma_core::show::NetworkConfig as ShowNetwork;
 // The MIDI transport (M9) and its document types, re-exported for the app shell.
 pub use prisma_core::mappings::{
     load_mappings, save_mappings, ControlMode, ControllerMappings, LedAnimation, LedRate, LedStyle,
-    MapTarget, MidiControl, MidiMapping, Takeover, ZoneSub,
+    MapTarget, MidiControl, MidiMapping, SlotIds, Takeover, ZoneSub,
 };
 pub use prisma_midi::{MidiNotice, MidiRuntime};
 pub use zone_content::{
-    build_zone_effects, seed_live_from_show, ZoneCommand, ZoneCommandSender, ZoneCompositor,
+    build_track_effects, build_track_instances, destination_slots, seed_live_from_show,
+    track_param_prefix, CompositorOptions, TrackContent, ZoneCommand, ZoneCommandSender,
+    ZoneCompositor,
 };

@@ -1,7 +1,7 @@
 //! The Show model and its `.prisma` persistence (CLAUDE.md §4.3, M8-SPEC §5).
 //!
-//! The Show is the performable document: per-zone grids of assignable cells, each
-//! zone's always-live state, and the master state, over an **embedded** Patch.
+//! The Show is the performable document: tracks of clips, each zone's always-live
+//! state, and the master state, over an **embedded** Patch.
 //! See [`model`] for the data model and [`version`] for the on-disk envelope,
 //! versioning and migration (mirroring `prisma_patch::version`).
 //!
@@ -17,7 +17,7 @@ mod version;
 
 pub use error::ShowError;
 pub use model::{
-    ArtNetNode, Cell, InterfaceRef, Layer, MasterState, NetworkConfig, NodeOrigin, ParamSet, Show,
-    Source, UniverseRange, ZoneLive, ZoneShow,
+    ArtNetNode, Cell, Destination, InterfaceRef, LaunchMode, Layer, MasterState, NetworkConfig,
+    NodeOrigin, ParamSet, Show, Source, Track, TrackTransition, UniverseRange, ZoneLive, ZoneShow,
 };
 pub use version::{load_show, save_show, CURRENT_SCHEMA_VERSION, FORMAT_ID};

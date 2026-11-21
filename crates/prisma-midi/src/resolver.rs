@@ -22,7 +22,8 @@ use std::sync::Arc;
 
 use prisma_core::{
     priority, ControlKind, ControlMode, ControllerMappings, LedStyle, MapTarget, MidiControl,
-    ParamHandle, ParamKind, ParameterTree, ResponseCurve, SourceId, Takeover, WriteOutcome,
+    ParamHandle, ParamKind, ParameterTree, ResponseCurve, SlotIds, SourceId, Takeover,
+    WriteOutcome,
 };
 use uuid::Uuid;
 
@@ -148,13 +149,13 @@ pub fn source_for(control: MidiControl) -> SourceId {
 /// The zone slot a target belongs to: a [`MapTarget::ZoneSlot`] directly, or a literal
 /// `/zone/{uuid}/…` path by that uuid's position. Globals (`/master/*`, `/clock/*`)
 /// belong to no zone.
-fn zone_slot_of(target: &MapTarget, zone_ids: &[Uuid]) -> Option<u16> {
+fn zone_slot_of(target: &MapTarget, ids: &SlotIds) -> Option<u16> {
     match target {
         MapTarget::ZoneSlot { slot, .. } => Some(*slot),
         MapTarget::Path(path) => {
             let id = path.strip_prefix("/zone/")?.split('/').next()?;
             let id = Uuid::parse_str(id).ok()?;
-            zone_ids.iter().position(|z| *z == id).map(|i| i as u16)
+            ids.zones.iter().position(|z| *z == id).map(|i| i as u16)
         }
     }
 }
@@ -165,21 +166,18 @@ impl Binding {
     /// they stay in the profile and bind again on a Show where they make sense.
     pub fn compile(
         tree: Arc<ParameterTree>,
-        zone_ids: &[Uuid],
+        ids: &SlotIds,
         mappings: &ControllerMappings,
     ) -> Binding {
         let mut table = HashMap::with_capacity(mappings.mappings.len());
         for m in &mappings.mappings {
-            let Some(path) = m.target.resolve_path_for(zone_ids, m.mode) else {
+            let Some(path) = m.target.resolve_path_for(ids, m.mode) else {
                 continue;
             };
             let Some(handle) = tree.resolve(&path) else {
                 continue;
             };
-            let state = m
-                .target
-                .feedback_path(zone_ids)
-                .and_then(|p| tree.resolve(&p));
+            let state = m.target.feedback_path(ids).and_then(|p| tree.resolve(&p));
             table.insert(
                 m.control,
                 Resolved {
@@ -190,7 +188,7 @@ impl Binding {
                     mode: m.mode,
                     curve: m.curve,
                     takeover: m.takeover,
-                    zone: zone_slot_of(&m.target, zone_ids),
+                    zone: zone_slot_of(&m.target, ids),
                 },
             );
         }

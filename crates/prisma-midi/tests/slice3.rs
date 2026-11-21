@@ -1,27 +1,52 @@
 //! M9 Slice 3 — pad modes on grid cells (latch / trigger / toggle / momentary), the
 //! operator's LED style, and cell LEDs showing empty / assigned / running in the
-//! zone's colour. Byte seams only: no `midir`, no hardware, no engine (the cell
-//! parameters are registered here the way `prisma-engine::cells` registers them).
+//! zone's colour. Byte seams only: no `midir`, no hardware, no engine (the clip
+//! parameters are registered here the way `prisma-engine::clips` registers them).
+//!
+//! Live model phase 1 bridge: a `ZoneSub::Cell(i)` pad on zone slot n drives clip i
+//! of that zone's home track (`/track/{id}/clip/{i}/…`).
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use prisma_core::{
     ControlMode, ControllerMappings, Curve, LedAnimation, LedRate, LedStyle, ManualClock,
-    MapTarget, ParamDescriptor, ParameterTree, RealRange, SourceId, TreeConfig, ZoneSub,
+    MapTarget, ParamDescriptor, ParameterTree, RealRange, SlotIds, SourceId, TreeConfig, ZoneSub,
 };
 use prisma_midi::{DeviceProfile, MidiOut, MidiRuntime};
 use uuid::Uuid;
 
 const CELLS: usize = 3;
 
-fn tree(zone: Uuid) -> Arc<ParameterTree> {
+/// One zone and its home track, as the engine binds them.
+struct Ids {
+    zone: Uuid,
+    track: Uuid,
+}
+
+impl Ids {
+    fn new() -> Ids {
+        Ids {
+            zone: Uuid::new_v4(),
+            track: Uuid::new_v4(),
+        }
+    }
+    fn slots(&self) -> SlotIds {
+        SlotIds {
+            zones: vec![self.zone],
+            tracks: vec![Some(self.track)],
+        }
+    }
+}
+
+fn tree(ids: &Ids) -> Arc<ParameterTree> {
+    let (zone, track) = (ids.zone, ids.track);
     let tree = ParameterTree::new(TreeConfig {
         clock: Arc::new(ManualClock::new()),
         takeover_timeout: 1_000,
     });
     for i in 0..CELLS {
-        let base = format!("/zone/{zone}/cell/{i}");
+        let base = format!("/track/{track}/clip/{i}");
         tree.register(&format!("{base}/launch"), ParamDescriptor::trigger("l"));
         tree.register(&format!("{base}/trigger"), ParamDescriptor::trigger("t"));
         tree.register(&format!("{base}/hold"), ParamDescriptor::toggle("h", false));
@@ -67,19 +92,20 @@ fn cell(i: u16) -> MapTarget {
     }
 }
 
-fn param(tree: &ParameterTree, zone: Uuid, cell: usize, leaf: &str) -> prisma_core::ParamHandle {
-    tree.resolve(&format!("/zone/{zone}/cell/{cell}/{leaf}"))
+fn param(tree: &ParameterTree, track: Uuid, clip: usize, leaf: &str) -> prisma_core::ParamHandle {
+    tree.resolve(&format!("/track/{track}/clip/{clip}/{leaf}"))
         .unwrap()
 }
 
 #[test]
 fn pad_modes_drive_the_cell_parameters() {
-    let zone = Uuid::new_v4();
-    let tree = tree(zone);
+    let ids = Ids::new();
+    let (zone, track) = (ids.zone, ids.track);
+    let tree = tree(&ids);
     let rt = MidiRuntime::new(ControllerMappings::new("t"));
-    rt.bind(Arc::clone(&tree), vec![zone]);
-    let fires = |leaf| param(&tree, zone, 1, leaf).fire_count().unwrap();
-    let held = || param(&tree, zone, 1, "hold").read_bool().unwrap();
+    rt.bind(Arc::clone(&tree), ids.slots());
+    let fires = |leaf| param(&tree, track, 1, leaf).fire_count().unwrap();
+    let held = || param(&tree, track, 1, "hold").read_bool().unwrap();
 
     // Learn on a grid pad defaults to latch: a tap fires `launch`, the release nothing.
     rt.arm_learn(cell(1));
@@ -143,16 +169,16 @@ fn pad_modes_drive_the_cell_parameters() {
 
 #[test]
 fn cell_leds_show_empty_assigned_running_in_zone_colour_or_the_style() {
-    let zone = Uuid::new_v4();
-    let tree = tree(zone);
+    let ids = Ids::new();
+    let tree = tree(&ids);
     let wire = Wire::default();
     let rt = MidiRuntime::new(ControllerMappings::new("t"));
     rt.set_device(DeviceProfile::apc40_mk2());
     rt.set_output(Some(wire.sink()));
     rt.set_zone_colours(vec![[255, 0, 0]]); // a red zone
-    rt.bind(Arc::clone(&tree), vec![zone]);
+    rt.bind(Arc::clone(&tree), ids.slots());
     let engine = SourceId::new(u8::MAX, 0);
-    let state = |v: f32| tree.write_real(&param(&tree, zone, 0, "state"), v, engine);
+    let state = |v: f32| tree.write_real(&param(&tree, ids.track, 0, "state"), v, engine);
 
     rt.arm_learn(cell(0));
     rt.feed(&[0x90, 0, 127]);

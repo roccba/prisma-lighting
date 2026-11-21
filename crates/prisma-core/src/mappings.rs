@@ -194,32 +194,49 @@ pub enum ZoneSub {
     StrobeOn,
     /// The zone strobe's speed (`strobe/rate`, 1–25 Hz).
     StrobeRate,
-    /// One cell of the zone's scene grid (M9 Slice 3). Which of the cell's
-    /// parameters a control drives depends on its mode — see
+    /// One cell of the zone's scene grid (M9 Slice 3) — since the live model,
+    /// clip `i` of the zone's home track (phase 1 bridge, see [`SlotIds`]). Which of
+    /// the clip's parameters a control drives depends on its mode — see
     /// [`MapTarget::resolve_path_for`].
     Cell(u16),
 }
 
 impl ZoneSub {
-    /// The leaf under `/zone/{uuid}/` this control writes, for a control in `mode`.
-    pub fn leaf(self, mode: ControlMode) -> String {
+    /// The leaf under `/zone/{uuid}/` this control writes. `None` for
+    /// [`ZoneSub::Cell`], which lives under the zone's home track instead (see
+    /// [`MapTarget::resolve_path_for`]).
+    pub fn leaf(self) -> Option<&'static str> {
         match self {
-            ZoneSub::Dimmer => "dimmer".into(),
-            ZoneSub::Speed => "speed".into(),
-            ZoneSub::Solo => "solo".into(),
-            ZoneSub::Blackout => "blackout".into(),
-            ZoneSub::StrobeOn => "strobe/on".into(),
-            ZoneSub::StrobeRate => "strobe/rate".into(),
-            ZoneSub::Cell(i) => format!("cell/{i}/{}", cell_leaf(mode)),
+            ZoneSub::Dimmer => Some("dimmer"),
+            ZoneSub::Speed => Some("speed"),
+            ZoneSub::Solo => Some("solo"),
+            ZoneSub::Blackout => Some("blackout"),
+            ZoneSub::StrobeOn => Some("strobe/on"),
+            ZoneSub::StrobeRate => Some("strobe/rate"),
+            ZoneSub::Cell(_) => None,
         }
     }
+}
 
-    /// A cell's feedback parameter (`cell/{i}/state`), which is what its LED shows
-    /// whatever the mode. `None` for other controls: they show what they write.
-    pub fn feedback_leaf(self) -> Option<String> {
-        match self {
-            ZoneSub::Cell(i) => Some(format!("cell/{i}/state")),
-            _ => None,
+/// The running Show's slot coordinates, resolved at bind time: zone ids in slot
+/// order and, per zone slot, the id of that zone's home track
+/// ([`Show::home_track`](crate::show::Show::home_track)).
+///
+/// **Phase 1 bridge** (docs/LIVE-MODEL-SPEC.md §8): `ZoneSub::Cell(i)` on zone slot
+/// `n` drives clip `i` of `tracks[n]`. Phase 3 replaces it with track-slot targets.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SlotIds {
+    pub zones: Vec<Uuid>,
+    /// Parallel to `zones`; `None` when a zone has no home track.
+    pub tracks: Vec<Option<Uuid>>,
+}
+
+impl From<Vec<Uuid>> for SlotIds {
+    /// Zones only, no tracks: cell targets resolve to nothing.
+    fn from(zones: Vec<Uuid>) -> SlotIds {
+        SlotIds {
+            zones,
+            tracks: Vec::new(),
         }
     }
 }
@@ -235,35 +252,44 @@ fn cell_leaf(mode: ControlMode) -> &'static str {
 }
 
 impl MapTarget {
-    /// The concrete tree path this target addresses, given the running Show's zone
-    /// ids in slot order. `None` when a slot is past the end (a mapping for zone 8 on
-    /// a 4-zone Show simply does nothing).
-    pub fn resolve_path(&self, zone_ids: &[Uuid]) -> Option<String> {
-        self.resolve_path_for(zone_ids, ControlMode::Absolute)
+    /// The concrete tree path this target addresses in the running Show. `None`
+    /// when a slot is past the end (a mapping for zone 8 on a 4-zone Show simply
+    /// does nothing) or a cell's zone has no home track.
+    pub fn resolve_path(&self, ids: &SlotIds) -> Option<String> {
+        self.resolve_path_for(ids, ControlMode::Absolute)
     }
 
     /// Like [`resolve_path`](Self::resolve_path), for a control in `mode` (a grid
     /// cell's parameter depends on it).
-    pub fn resolve_path_for(&self, zone_ids: &[Uuid], mode: ControlMode) -> Option<String> {
+    pub fn resolve_path_for(&self, ids: &SlotIds, mode: ControlMode) -> Option<String> {
         match self {
             MapTarget::Path(p) => Some(p.clone()),
-            MapTarget::ZoneSlot { slot, sub } => zone_ids
-                .get(*slot as usize)
-                .map(|id| format!("/zone/{id}/{}", sub.leaf(mode))),
+            MapTarget::ZoneSlot {
+                slot,
+                sub: ZoneSub::Cell(i),
+            } => {
+                let track = ids.tracks.get(*slot as usize).copied().flatten()?;
+                Some(format!("/track/{track}/clip/{i}/{}", cell_leaf(mode)))
+            }
+            MapTarget::ZoneSlot { slot, sub } => {
+                let zone = ids.zones.get(*slot as usize)?;
+                Some(format!("/zone/{zone}/{}", sub.leaf()?))
+            }
         }
     }
 
     /// The path this target's LED shows, if it differs from what it writes (a grid
-    /// cell shows its `state`).
-    pub fn feedback_path(&self, zone_ids: &[Uuid]) -> Option<String> {
+    /// cell shows its clip's `state`).
+    pub fn feedback_path(&self, ids: &SlotIds) -> Option<String> {
         match self {
-            MapTarget::Path(_) => None,
-            MapTarget::ZoneSlot { slot, sub } => {
-                let leaf = sub.feedback_leaf()?;
-                zone_ids
-                    .get(*slot as usize)
-                    .map(|id| format!("/zone/{id}/{leaf}"))
+            MapTarget::ZoneSlot {
+                slot,
+                sub: ZoneSub::Cell(i),
+            } => {
+                let track = ids.tracks.get(*slot as usize).copied().flatten()?;
+                Some(format!("/track/{track}/clip/{i}/state"))
             }
+            _ => None,
         }
     }
 
@@ -542,14 +568,14 @@ mod tests {
 
     #[test]
     fn zone_slot_resolves_positionally_and_past_the_end_is_none() {
-        let ids = [Uuid::new_v4(), Uuid::new_v4()];
+        let ids = SlotIds::from(vec![Uuid::new_v4(), Uuid::new_v4()]);
         let t = MapTarget::ZoneSlot {
             slot: 1,
             sub: ZoneSub::Speed,
         };
         assert_eq!(
             t.resolve_path(&ids).unwrap(),
-            format!("/zone/{}/speed", ids[1])
+            format!("/zone/{}/speed", ids.zones[1])
         );
         let gone = MapTarget::ZoneSlot {
             slot: 2,
@@ -575,28 +601,50 @@ mod tests {
     }
 
     #[test]
-    fn cells_resolve_by_mode_and_show_their_state() {
-        let ids = [Uuid::new_v4()];
+    fn cells_resolve_to_the_zones_home_track_by_mode_and_show_their_state() {
+        // Phase 1 bridge: Cell(i) on zone slot n → clip i of the zone's home track.
+        let track = Uuid::new_v4();
+        let ids = SlotIds {
+            zones: vec![Uuid::new_v4()],
+            tracks: vec![Some(track)],
+        };
         let cell = MapTarget::ZoneSlot {
             slot: 0,
             sub: ZoneSub::Cell(4),
         };
         let at = |mode| cell.resolve_path_for(&ids, mode).unwrap();
-        let z = ids[0];
-        assert_eq!(at(ControlMode::Latch), format!("/zone/{z}/cell/4/launch"));
+        let t = track;
+        assert_eq!(at(ControlMode::Latch), format!("/track/{t}/clip/4/launch"));
         assert_eq!(
             at(ControlMode::Trigger),
-            format!("/zone/{z}/cell/4/trigger")
+            format!("/track/{t}/clip/4/trigger")
         );
-        assert_eq!(at(ControlMode::Toggle), format!("/zone/{z}/cell/4/hold"));
-        assert_eq!(at(ControlMode::Momentary), format!("/zone/{z}/cell/4/hold"));
+        assert_eq!(at(ControlMode::Toggle), format!("/track/{t}/clip/4/hold"));
+        assert_eq!(
+            at(ControlMode::Momentary),
+            format!("/track/{t}/clip/4/hold")
+        );
         assert_eq!(
             cell.feedback_path(&ids).unwrap(),
-            format!("/zone/{z}/cell/4/state")
+            format!("/track/{t}/clip/4/state")
         );
         assert!(MapTarget::Path("/master/dimmer".into())
             .feedback_path(&ids)
             .is_none());
+    }
+
+    #[test]
+    fn a_cell_on_a_zone_without_a_home_track_resolves_to_nothing() {
+        let ids = SlotIds {
+            zones: vec![Uuid::new_v4()],
+            tracks: vec![None],
+        };
+        let cell = MapTarget::ZoneSlot {
+            slot: 0,
+            sub: ZoneSub::Cell(0),
+        };
+        assert!(cell.resolve_path(&ids).is_none());
+        assert!(cell.feedback_path(&ids).is_none());
     }
 
     #[test]

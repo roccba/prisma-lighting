@@ -1,7 +1,8 @@
-//! Per-zone cell playback state: which cell runs, and where temporary cells return
-//! to (M9 Slice 3 — pad modes on the scene grid).
+//! Per-track clip playback state: which clip runs, and where temporary clips return
+//! to (M9 Slice 3 — pad modes on the scene grid). Named `ZoneDeck` for history; since
+//! the live model (docs/LIVE-MODEL-SPEC.md §5) there is one per **track**.
 //!
-//! A zone's grid (CLAUDE.md §4.3) has one **active** cell. Cells are started four
+//! A track has one **active** clip. Cells are started four
 //! ways, which differ only in what happens *after*:
 //!
 //! - **latch** — the cell becomes the zone's new base content and stays, exactly as

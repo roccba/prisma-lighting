@@ -1,17 +1,22 @@
-//! The Show document model (CLAUDE.md §4.3, M8-SPEC §5).
+//! The Show document model (CLAUDE.md §4.3, docs/LIVE-MODEL-SPEC.md §3).
 //!
-//! The Show is the **performable document**: per-zone grids of assignable cells,
-//! each zone's always-live state, and the master state, over an embedded Patch.
-//! It is what the operator saves as "the show file" (`.prisma`); the Patch is the
-//! reusable wiring it drives.
+//! The Show is the **performable document**: tracks of clips, each zone's
+//! always-live state, and the master state, over an embedded Patch. It is what the
+//! operator saves as "the show file" (`.prisma`); the Patch is the reusable wiring
+//! it drives.
 //!
-//! # Per-zone grids, not a cross-zone matrix (locked decision, M8-SPEC §3.3)
+//! # Tracks, not per-zone grids (LIVE-MODEL-SPEC §2–§3)
 //!
-//! Each [`ZoneShow`] owns its **own** [`grid`](ZoneShow::grid) of [`Cell`]s and
-//! its own [`live`](ZoneShow::live) state. There is no cross-zone `Scene` and no
-//! whole-column firing: you select a zone, edit/trigger *its* grid, and the other
-//! zones keep running untouched. *Selected* (a UI state) is not modelled here at
-//! all — it never changes what a zone outputs (§3.2).
+//! A [`Track`] is a column of clips ([`Cell`]s) that plays at most one at a time
+//! into a [`Destination`] (zones). Zones stay independent output regions: a
+//! [`ZoneShow`] keeps only the zone's live state. Several tracks may reach one zone;
+//! the renderer folds them in track order with each track's blend mode and opacity.
+//! *Selected* (a UI state) is not modelled here at all — it never changes output.
+//!
+//! **Phase 1 bridge.** A new show gets one track per zone ([`Show::new`]), and the
+//! per-zone UI and MIDI grid pads reach a zone's content through
+//! [`Show::home_track`] until the vertical track grid (phase 2) and the track MIDI
+//! targets (phase 3) replace them.
 //!
 //! # Embedded patch (M8-SPEC §5)
 //!
@@ -33,6 +38,8 @@ use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use prisma_patch::{BlendMode, Patch};
+
+use crate::transition::{Easing, TimeBase};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -137,17 +144,18 @@ impl Layer {
     }
 }
 
-/// One assignable cell of a zone's grid (CLAUDE.md §4.3) — a zone's "scene".
+/// One clip of a [`Track`] (LIVE-MODEL-SPEC §2) — what a grid cell holds.
 ///
-/// An **empty** cell has no layers ([`Cell::is_empty`]); triggering it makes the
-/// zone output nothing. A populated M8 cell holds exactly one [`Layer`].
+/// An **empty** cell has no layers ([`Cell::is_empty`]); launching it makes the
+/// track output nothing. A populated cell holds exactly one [`Layer`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cell {
     /// The layer stack, stored inline (not by reference — CLAUDE.md §4.3 "cell
     /// storage decision"). M8 fills exactly one; empty = unassigned.
     #[serde(default)]
     pub layers: Vec<Layer>,
-    /// Transition into this cell, driven by the master clock.
+    /// Transition into this clip, driven by the master clock. Non-zero overrides the
+    /// track's [`TrackTransition`] (LIVE-MODEL-SPEC §3; honoured from phase 2).
     #[serde(default)]
     pub fade_time: Duration,
     /// The operator's label for this cell, shown on the grid. `None` = unnamed (the
@@ -218,33 +226,134 @@ impl Default for ZoneLive {
     }
 }
 
-/// One zone's performable state: its own grid, its running cell, its live state
-/// (CLAUDE.md §4.3). Addressed to a patch zone by [`zone_id`](ZoneShow::zone_id).
+/// One zone's performable state: its always-live state (CLAUDE.md §4.3).
+/// Addressed to a patch zone by [`zone_id`](ZoneShow::zone_id). Content lives in
+/// [`Track`]s, not here.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ZoneShow {
     /// The patch [`Zone::id`](prisma_patch::Zone) this drives.
     pub zone_id: Uuid,
-    /// THIS zone's own grid of assignable cells (its scenes). May be empty.
-    #[serde(default)]
-    pub grid: Vec<Cell>,
-    /// Index of the running cell in [`grid`](ZoneShow::grid), or `None` (nothing
-    /// playing). Validated in range by [`Show::validate`].
-    #[serde(default)]
-    pub active: Option<usize>,
     /// Always-live dimmer/colour/speed/solo/blackout.
     #[serde(default)]
     pub live: ZoneLive,
 }
 
 impl ZoneShow {
-    /// A zone show with an empty grid and default live state.
+    /// A zone show with default live state.
     pub fn new(zone_id: Uuid) -> ZoneShow {
         ZoneShow {
             zone_id,
-            grid: Vec::new(),
-            active: None,
             live: ZoneLive::default(),
         }
+    }
+}
+
+/// Where a track's clips render (LIVE-MODEL-SPEC §3). Groups join in phase 5.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Destination {
+    /// Patch zone ids. A track that reaches several zones gets one effect instance
+    /// per zone, each at that zone's own `mapping_size`.
+    #[serde(default)]
+    pub zones: Vec<Uuid>,
+}
+
+impl Destination {
+    /// A destination of exactly one zone.
+    pub fn zone(zone: Uuid) -> Destination {
+        Destination { zones: vec![zone] }
+    }
+
+    /// Whether this destination reaches `zone`.
+    pub fn reaches(&self, zone: Uuid) -> bool {
+        self.zones.contains(&zone)
+    }
+
+    /// Whether it reaches nothing.
+    pub fn is_empty(&self) -> bool {
+        self.zones.is_empty()
+    }
+}
+
+/// The default transition a track uses between its clips (LIVE-MODEL-SPEC §3,
+/// honoured from phase 2). `time == 0` is a hard cut.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TrackTransition {
+    pub time: f64,
+    pub base: TimeBase,
+    pub easing: Easing,
+}
+
+impl Default for TrackTransition {
+    fn default() -> Self {
+        TrackTransition {
+            time: 0.0,
+            base: TimeBase::Seconds,
+            easing: Easing::Linear,
+        }
+    }
+}
+
+/// How a launch on a track behaves (LIVE-MODEL-SPEC §5, honoured from phase 2).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchMode {
+    /// A launch plays the clip at once.
+    #[default]
+    Direct,
+    /// A launch arms the clip; `/arm/go` plays every armed clip together.
+    Arm,
+}
+
+/// A column of the grid (LIVE-MODEL-SPEC §2–§3): a list of clips playing at most
+/// one at a time into its [`Destination`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Track {
+    pub id: Uuid,
+    pub name: String,
+    pub destination: Destination,
+    /// How this track blends onto the tracks before it, in each zone it reaches.
+    pub blend_mode: BlendMode,
+    /// `0.0..=1.0`.
+    pub opacity: f32,
+    #[serde(default)]
+    pub transition: TrackTransition,
+    #[serde(default)]
+    pub launch: LaunchMode,
+    /// The track's clips. May be empty.
+    #[serde(default)]
+    pub clips: Vec<Cell>,
+    /// Index of the running clip, or `None` (nothing playing). Validated in range by
+    /// [`Show::validate`].
+    #[serde(default)]
+    pub active: Option<usize>,
+    #[serde(default)]
+    pub mute: bool,
+    #[serde(default)]
+    pub solo: bool,
+}
+
+impl Track {
+    /// A track into `destination` with no clips: `Normal`, full opacity, hard cut,
+    /// direct launch.
+    pub fn new(name: impl Into<String>, destination: Destination) -> Track {
+        Track {
+            id: Uuid::new_v4(),
+            name: name.into(),
+            destination,
+            blend_mode: BlendMode::Normal,
+            opacity: 1.0,
+            transition: TrackTransition::default(),
+            launch: LaunchMode::Direct,
+            clips: Vec::new(),
+            active: None,
+            mute: false,
+            solo: false,
+        }
+    }
+
+    /// The running clip, if any (an `active` past the end counts as none).
+    pub fn active_clip(&self) -> Option<&Cell> {
+        self.clips.get(self.active?)
     }
 }
 
@@ -487,6 +596,9 @@ pub struct Show {
     pub patch: Patch,
     /// One [`ZoneShow`] per patch zone. [`Show::validate`] enforces the bijection.
     pub zones: Vec<ZoneShow>,
+    /// The grid's columns, in compositing order (first = bottom).
+    #[serde(default)]
+    pub tracks: Vec<Track>,
     #[serde(default)]
     pub master: MasterState,
     /// Reserved for the device manager (M8-SPEC §5).
@@ -502,15 +614,22 @@ pub struct Show {
 }
 
 impl Show {
-    /// A new show over `patch`, with one empty-grid [`ZoneShow`] per patch zone and
-    /// a fresh id. This is the "engine loads a show" starting point (§9 step 1).
+    /// A new show over `patch`, with one [`ZoneShow`] per patch zone, **one track
+    /// per zone** (named after it, destination = that zone, no clips) and a fresh
+    /// id (LIVE-MODEL-SPEC §8 phase 1).
     pub fn new(name: impl Into<String>, patch: Patch) -> Show {
         let zones = patch.zones.iter().map(|z| ZoneShow::new(z.id)).collect();
+        let tracks = patch
+            .zones
+            .iter()
+            .map(|z| Track::new(z.name.clone(), Destination::zone(z.id)))
+            .collect();
         Show {
             id: Uuid::new_v4(),
             name: name.into(),
             patch,
             zones,
+            tracks,
             master: MasterState::default(),
             network: NetworkConfig::default(),
             embedded_mappings: None,
@@ -522,12 +641,47 @@ impl Show {
         self.zones.iter().find(|z| z.zone_id == zone_id)
     }
 
+    /// The track with this id, if present.
+    pub fn track(&self, track_id: Uuid) -> Option<&Track> {
+        self.tracks.iter().find(|t| t.id == track_id)
+    }
+
+    /// Mutable [`track`](Self::track).
+    pub fn track_mut(&mut self, track_id: Uuid) -> Option<&mut Track> {
+        self.tracks.iter_mut().find(|t| t.id == track_id)
+    }
+
+    /// **Phase 1 bridge** (LIVE-MODEL-SPEC §8): the zone's own track — the first
+    /// whose destination is exactly that one zone. The per-zone UI and the
+    /// `ZoneSub::Cell` MIDI pads reach a zone's clips through it until phases 2–3
+    /// address tracks directly. `None` if no track targets the zone alone.
+    pub fn home_track(&self, zone_id: Uuid) -> Option<&Track> {
+        self.tracks
+            .iter()
+            .find(|t| t.destination.zones == [zone_id])
+    }
+
+    /// Mutable [`home_track`](Self::home_track).
+    pub fn home_track_mut(&mut self, zone_id: Uuid) -> Option<&mut Track> {
+        self.tracks
+            .iter_mut()
+            .find(|t| t.destination.zones == [zone_id])
+    }
+
+    /// Index in [`tracks`](Self::tracks) of the zone's [`home_track`](Self::home_track).
+    pub fn home_track_index(&self, zone_id: Uuid) -> Option<usize> {
+        self.tracks
+            .iter()
+            .position(|t| t.destination.zones == [zone_id])
+    }
+
     /// Structural validation, the Show analogue of [`Patch::validate`]:
     ///
     /// 1. the embedded patch validates;
     /// 2. the zone shows are a **bijection** onto the patch zones — exactly one per
     ///    zone, no unknown `zone_id`, no duplicates;
-    /// 3. every `active` index is in range of its own grid.
+    /// 3. track ids are unique, every destination zone is a patch zone, and every
+    ///    `active` index is in range of its track's clips.
     ///
     /// Loading does **not** validate (work-in-progress saves are allowed); call
     /// this before running a show, as the patch pipeline does.
@@ -545,12 +699,27 @@ impl Show {
             if !seen.insert(zs.zone_id) {
                 return Err(ShowError::DuplicateZone { zone: zs.zone_id });
             }
-            if let Some(active) = zs.active {
-                if active >= zs.grid.len() {
+        }
+
+        let mut track_ids = std::collections::HashSet::with_capacity(self.tracks.len());
+        for t in &self.tracks {
+            if !track_ids.insert(t.id) {
+                return Err(ShowError::DuplicateTrack { track: t.id });
+            }
+            if let Some(&zone) = t
+                .destination
+                .zones
+                .iter()
+                .find(|&&zone| !self.patch.zones.iter().any(|z| z.id == zone))
+            {
+                return Err(ShowError::UnknownDestinationZone { track: t.id, zone });
+            }
+            if let Some(active) = t.active {
+                if active >= t.clips.len() {
                     return Err(ShowError::ActiveOutOfRange {
-                        zone: zs.zone_id,
+                        track: t.id,
                         active,
-                        grid_len: zs.grid.len(),
+                        clips: t.clips.len(),
                     });
                 }
             }

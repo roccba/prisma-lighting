@@ -1,25 +1,24 @@
-//! Scene-grid cells as Parameter Tree targets, and the controller that plays them
-//! (M9 Slice 3 — pads on the grid; CLAUDE.md §4.5 `/zone/{id}/cell/{i}/…`).
+//! Track clips as Parameter Tree targets, and the controller that plays them
+//! (M9 Slice 3 pads, reshaped by docs/LIVE-MODEL-SPEC.md §5).
 //!
-//! Firing a cell used to be a UI command that edited the show and swapped the effect
-//! directly — nothing a MIDI pad (or OSC, later) could reach. Now every cell exposes
-//! tree parameters and **all** transports go through them (§3.1 principle 2):
+//! Every clip exposes tree parameters and **all** transports go through them (§3.1
+//! principle 2):
 //!
 //! ```text
-//! /zone/{id}/cell/{i}/launch    trigger  latch: the cell becomes the zone's base
-//! /zone/{id}/cell/{i}/trigger   trigger  latch + restart the effect from its start
-//! /zone/{id}/cell/{i}/hold      toggle   1 = run temporarily, 0 = return to before
-//! /zone/{id}/cell/{i}/state     level    0 empty · 1 assigned · 2 running (read-only)
-//! /zone/{id}/cells/refresh      trigger  re-read which cells are assigned
+//! /track/{id}/clip/{i}/launch    trigger  latch: the clip becomes the track's base
+//! /track/{id}/clip/{i}/trigger   trigger  latch + restart the effect from its start
+//! /track/{id}/clip/{i}/hold      toggle   1 = run temporarily, 0 = return to before
+//! /track/{id}/clip/{i}/state     level    0 empty · 1 assigned · 2 running (read-only)
+//! /track/{id}/clips/refresh      trigger  re-read which clips are assigned
 //! ```
 //!
-//! The [`CellController`] thread subscribes to those, runs each zone's
-//! [`ZoneDeck`] (the latch/trigger/hold decisions, including where a temporary cell
+//! The [`ClipController`] thread subscribes to those, runs each track's
+//! [`ZoneDeck`] (the latch/trigger/hold decisions, including where a temporary clip
 //! returns to), swaps effects through the frame-boundary queue, and publishes each
-//! cell's `state` — which is what pad LEDs show.
+//! clip's `state` — which is what pad LEDs show.
 //!
 //! The Show document stays with its owner (the app): the controller asks a
-//! [`CellHost`] what a cell holds and tells it when a zone's running cell changed.
+//! [`ClipHost`] what a clip holds and tells it when a track's running clip changed.
 //! The controller holds no lock while it waits for changes, and never calls the host
 //! with one held.
 
@@ -35,50 +34,51 @@ use prisma_core::{
     SubscriptionCloser, TriggerCursor, ZoneDeck,
 };
 use prisma_patch::Patch;
-use prisma_render::effect::EffectInstance;
-use prisma_render::{manifest_by_id, Gpu};
+use prisma_render::Gpu;
 use uuid::Uuid;
 
-use crate::zone_content::ZoneCommandSender;
+use crate::zone_content::{build_track_instances, destination_slots, ZoneCommandSender};
 
-/// `state` value of an empty cell.
-pub const CELL_EMPTY: f32 = 0.0;
-/// `state` value of a cell with an effect that is not running.
-pub const CELL_ASSIGNED: f32 = 1.0;
-/// `state` value of the zone's running cell.
-pub const CELL_RUNNING: f32 = 2.0;
+/// `state` value of an empty clip.
+pub const CLIP_EMPTY: f32 = 0.0;
+/// `state` value of a clip with an effect that is not running.
+pub const CLIP_ASSIGNED: f32 = 1.0;
+/// `state` value of the track's running clip.
+pub const CLIP_RUNNING: f32 = 2.0;
 
-/// What a cell plays: its effect, the effect's stored parameter values and, for an
-/// effect with a palette, the cell's colour table (`None` = the factory colours).
+/// What a clip plays: its effect, the effect's stored parameter values and, for an
+/// effect with a palette, the clip's colour table (`None` = the factory colours).
 #[derive(Debug, Clone, PartialEq)]
-pub struct CellEffect {
+pub struct ClipEffect {
     pub effect_id: String,
     pub params: ParamSet,
     pub palette: Option<Vec<[f32; 3]>>,
 }
 
-/// The owner of the Show document, as the cell controller sees it.
-pub trait CellHost: Send + Sync {
-    /// The effect in `zone`'s cell `cell`, or `None` if it is empty.
-    fn cell_effect(&self, zone: Uuid, cell: usize) -> Option<CellEffect>;
-    /// `zone`'s running cell changed (a pad, a UI click, a release returning).
-    fn active_changed(&self, zone: Uuid, active: Option<usize>);
+/// The owner of the Show document, as the clip controller sees it.
+pub trait ClipHost: Send + Sync {
+    /// The effect in `track`'s clip `clip`, or `None` if it is empty.
+    fn clip_effect(&self, track: Uuid, clip: usize) -> Option<ClipEffect>;
+    /// `track`'s running clip changed (a pad, a UI click, a release returning).
+    fn active_changed(&self, track: Uuid, active: Option<usize>);
 }
 
-/// A cell's stored effect parameters, written when it starts.
+/// A clip's stored effect parameters, written when it starts.
 fn stored_params_source() -> SourceId {
     SourceId::new(priority::UI, 0)
 }
 
-/// The engine writes cell state as the highest tier: it is derived, nobody else's.
+/// The engine writes clip state as the highest tier: it is derived, nobody else's.
 fn engine_source() -> SourceId {
     SourceId::new(u8::MAX, 0)
 }
 
-/// One zone's cell parameters, resolved once.
+/// One track's clip parameters, resolved once.
 #[derive(Clone)]
-pub struct ZoneCells {
-    pub zone: Uuid,
+pub struct TrackClips {
+    pub track: Uuid,
+    /// How many zones the track reaches = effect instances per launch.
+    pub zones: usize,
     pub launch: Vec<ParamHandle>,
     pub trigger: Vec<ParamHandle>,
     pub hold: Vec<ParamHandle>,
@@ -86,73 +86,74 @@ pub struct ZoneCells {
     pub refresh: ParamHandle,
 }
 
-/// Register every zone's cell parameters, sized by the show's grids (zones the show
-/// does not describe get none). Indexed by zone slot.
-pub fn register_cells(tree: &ParameterTree, patch: &Patch, show: &Show) -> Vec<ZoneCells> {
-    patch
-        .zones
+/// Register every track's clip parameters, sized by its clips. Indexed by track
+/// slot (`Show::tracks` order).
+pub fn register_clips(tree: &ParameterTree, patch: &Patch, show: &Show) -> Vec<TrackClips> {
+    show.tracks
         .iter()
-        .map(|zone| {
-            let cells = show.zone(zone.id).map_or(0, |z| z.grid.len());
-            let base = format!("/zone/{}/cell", zone.id);
+        .map(|track| {
+            let clips = track.clips.len();
+            let base = format!("/track/{}/clip", track.id);
             let each = |leaf: &str, desc: &dyn Fn() -> ParamDescriptor| -> Vec<ParamHandle> {
-                (0..cells)
+                (0..clips)
                     .map(|i| tree.register(&format!("{base}/{i}/{leaf}"), desc()))
                     .collect()
             };
-            ZoneCells {
-                zone: zone.id,
-                launch: each("launch", &|| ParamDescriptor::trigger("cell.launch")),
-                trigger: each("trigger", &|| ParamDescriptor::trigger("cell.trigger")),
-                hold: each("hold", &|| ParamDescriptor::toggle("cell.hold", false)),
+            TrackClips {
+                track: track.id,
+                zones: destination_slots(patch, track).len(),
+                launch: each("launch", &|| ParamDescriptor::trigger("clip.launch")),
+                trigger: each("trigger", &|| ParamDescriptor::trigger("clip.trigger")),
+                hold: each("hold", &|| ParamDescriptor::toggle("clip.hold", false)),
                 state: each("state", &|| {
                     ParamDescriptor::level(
-                        "cell.state",
+                        "clip.state",
                         RealRange {
-                            min: CELL_EMPTY,
-                            max: CELL_RUNNING,
+                            min: CLIP_EMPTY,
+                            max: CLIP_RUNNING,
                         },
                         Curve::Linear,
                         0.0,
                     )
                 }),
                 refresh: tree.register(
-                    &format!("/zone/{}/cells/refresh", zone.id),
-                    ParamDescriptor::trigger("cells.refresh"),
+                    &format!("/track/{}/clips/refresh", track.id),
+                    ParamDescriptor::trigger("clips.refresh"),
                 ),
             }
         })
         .collect()
 }
 
-/// Build `effect_id` on the caller's thread (a pipeline compile, never on the render
-/// thread), write its stored params, and queue the swap for the next frame boundary.
-/// `false` if the effect is not in the catalogue or the render loop is gone.
+/// Build `effect_id` for every zone the track reaches on the caller's thread (a
+/// pipeline compile, never on the render thread), write its stored params, and queue
+/// the swap for the next frame boundary. `false` if the effect is not in the
+/// catalogue or the render loop is gone.
 #[allow(clippy::too_many_arguments)] // each is a distinct piece of the engine it needs
-pub fn fire_zone_effect(
+pub fn fire_track_effect(
     gpu: &Gpu,
     tree: &ParameterTree,
     sender: &ZoneCommandSender,
     slot: usize,
-    zone: Uuid,
+    clips: &TrackClips,
     effect_id: &str,
     params: &ParamSet,
     palette: Option<&[[f32; 3]]>,
     src: SourceId,
 ) -> bool {
-    let Some(manifest) = manifest_by_id(effect_id) else {
-        return false;
-    };
-    let prefix = format!("/zone/{zone}/layer/0");
-    let effect = EffectInstance::new(gpu, tree, &prefix, &manifest);
-    for (name, value) in params.iter() {
-        tree.write_path(&format!("{prefix}/param/{name}"), value, src);
+    match build_track_instances(
+        gpu,
+        tree,
+        clips.track,
+        clips.zones,
+        effect_id,
+        params,
+        palette,
+        src,
+    ) {
+        Some(effects) => sender.set_track_effects(slot, effects),
+        None => false,
     }
-    // Uploaded here, on the caller's thread, before the swap is queued.
-    if let Some(colors) = palette {
-        effect.set_palette(gpu, colors);
-    }
-    sender.set_zone_effect(slot, Some(effect))
 }
 
 #[derive(Clone, Copy)]
@@ -163,26 +164,26 @@ enum Action {
     Refresh,
 }
 
-/// The running cell controller. Dropping it stops the thread and waits for it.
-pub struct CellController {
+/// The running clip controller. Dropping it stops the thread and waits for it.
+pub struct ClipController {
     closer: SubscriptionCloser,
     thread: Option<JoinHandle<()>>,
 }
 
-impl CellController {
-    /// Start playing `zones` (by slot) from their show `active` cells. Publishes every
-    /// cell's state once, then follows the pads.
+impl ClipController {
+    /// Start playing `tracks` (by slot) from their show `active` clips. Publishes every
+    /// clip's state once, then follows the pads.
     pub fn start(
         tree: Arc<ParameterTree>,
         gpu: Arc<Gpu>,
         sender: ZoneCommandSender,
-        zones: Vec<ZoneCells>,
+        tracks: Vec<TrackClips>,
         active: Vec<Option<usize>>,
-        host: Arc<dyn CellHost>,
-    ) -> CellController {
+        host: Arc<dyn ClipHost>,
+    ) -> ClipController {
         let mut routes: HashMap<ParamId, (usize, usize, Action)> = HashMap::new();
         let mut cursors: HashMap<ParamId, TriggerCursor> = HashMap::new();
-        for (slot, z) in zones.iter().enumerate() {
+        for (slot, z) in tracks.iter().enumerate() {
             for (cell, h) in z.launch.iter().enumerate() {
                 routes.insert(h.id(), (slot, cell, Action::Launch));
             }
@@ -197,7 +198,7 @@ impl CellController {
         // Subscribe, then prime every trigger cursor at its current count, so nothing
         // fired before start is replayed and nothing fired after is missed.
         let sub = tree.subscribe(Filter::Ids(routes.keys().copied().collect()));
-        for z in &zones {
+        for z in &tracks {
             for h in z.launch.iter().chain(&z.trigger).chain([&z.refresh]) {
                 let mut c = TriggerCursor::new();
                 c.poll(h.fire_count().unwrap_or(0));
@@ -209,18 +210,18 @@ impl CellController {
             tree,
             gpu,
             sender,
-            decks: zones
+            decks: tracks
                 .iter()
                 .enumerate()
                 .map(|(slot, _)| ZoneDeck::new(active.get(slot).copied().flatten()))
                 .collect(),
-            zones,
+            tracks,
             host,
         };
         let thread = std::thread::Builder::new()
-            .name("prisma-cells".into())
+            .name("prisma-clips".into())
             .spawn(move || {
-                for slot in 0..ctl.zones.len() {
+                for slot in 0..ctl.tracks.len() {
                     ctl.publish_states(slot);
                 }
                 loop {
@@ -248,15 +249,15 @@ impl CellController {
                     }
                 }
             })
-            .expect("spawn cell controller thread");
-        CellController {
+            .expect("spawn clip controller thread");
+        ClipController {
             closer,
             thread: Some(thread),
         }
     }
 }
 
-impl Drop for CellController {
+impl Drop for ClipController {
     fn drop(&mut self) {
         self.closer.close();
         if let Some(thread) = self.thread.take() {
@@ -269,9 +270,9 @@ struct Controller {
     tree: Arc<ParameterTree>,
     gpu: Arc<Gpu>,
     sender: ZoneCommandSender,
-    zones: Vec<ZoneCells>,
+    tracks: Vec<TrackClips>,
     decks: Vec<ZoneDeck>,
-    host: Arc<dyn CellHost>,
+    host: Arc<dyn ClipHost>,
 }
 
 impl Controller {
@@ -300,17 +301,17 @@ impl Controller {
     }
 
     fn held_cells(&self, slot: usize) -> Vec<usize> {
-        (0..self.zones[slot].hold.len())
+        (0..self.tracks[slot].hold.len())
             .filter(|&c| self.decks[slot].is_held(c))
             .collect()
     }
 
-    /// A latch/trigger forgot these temporary cells: put their `hold` back to 0 so a
+    /// A latch/trigger forgot these temporary clips: put their `hold` back to 0 so a
     /// toggle pad's next tap presses again instead of releasing a hold that is gone.
     fn release_hold_params(&self, slot: usize, cells: Vec<usize>) {
         for cell in cells {
             self.tree
-                .write_real(&self.zones[slot].hold[cell], 0.0, engine_source());
+                .write_real(&self.tracks[slot].hold[cell], 0.0, engine_source());
         }
     }
 
@@ -318,24 +319,24 @@ impl Controller {
         let DeckChange::Play { cell, restart } = change else {
             return;
         };
-        let zone = self.zones[slot].zone;
-        let effect = cell.and_then(|c| self.host.cell_effect(zone, c));
+        let track = self.tracks[slot].track;
+        let effect = cell.and_then(|c| self.host.clip_effect(track, c));
         match effect {
-            Some(CellEffect {
+            Some(ClipEffect {
                 effect_id,
                 params,
                 palette,
             }) => {
-                fire_zone_effect(
+                fire_track_effect(
                     &self.gpu,
                     &self.tree,
                     &self.sender,
                     slot,
-                    zone,
+                    &self.tracks[slot],
                     &effect_id,
                     &params,
                     palette.as_deref(),
-                    // The cell's stored values are a load, not a performance: written at
+                    // The clip's stored values are a load, not a performance: written at
                     // UI tier so the panel (or a controller) takes them over at once. At
                     // the engine's tier they would lock every control out for the
                     // takeover timeout after each effect change.
@@ -343,26 +344,26 @@ impl Controller {
                 );
             }
             None => {
-                self.sender.set_zone_effect(slot, None);
+                self.sender.clear_track(slot);
             }
         }
         if restart {
-            self.sender.restart_zone(slot);
+            self.sender.restart_track(slot);
         }
-        self.host.active_changed(zone, self.decks[slot].active());
+        self.host.active_changed(track, self.decks[slot].active());
         self.publish_states(slot);
     }
 
     fn publish_states(&self, slot: usize) {
-        let z = &self.zones[slot];
+        let z = &self.tracks[slot];
         let active = self.decks[slot].active();
-        for (cell, handle) in z.state.iter().enumerate() {
-            let value = if active == Some(cell) {
-                CELL_RUNNING
-            } else if self.host.cell_effect(z.zone, cell).is_some() {
-                CELL_ASSIGNED
+        for (clip, handle) in z.state.iter().enumerate() {
+            let value = if active == Some(clip) {
+                CLIP_RUNNING
+            } else if self.host.clip_effect(z.track, clip).is_some() {
+                CLIP_ASSIGNED
             } else {
-                CELL_EMPTY
+                CLIP_EMPTY
             };
             self.tree.write_real(handle, value, engine_source());
         }

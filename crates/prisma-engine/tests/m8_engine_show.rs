@@ -79,13 +79,18 @@ fn build_show() -> Show {
     params.set("g", 0.5);
     params.set("b", 0.5);
 
+    // `Show::new` gave the zone its own track (live model phase 1); play the solid on it.
+    assert_eq!(show.tracks.len(), 1, "one track per zone");
+    let track = show.home_track_mut(zone_id).expect("the zone's own track");
+    track
+        .clips
+        .push(Cell::single(Layer::shader("solid", params)));
+    track.active = Some(0);
     let zs = show
         .zones
         .iter_mut()
         .find(|z| z.zone_id == zone_id)
         .expect("zone show exists");
-    zs.grid.push(Cell::single(Layer::shader("solid", params)));
-    zs.active = Some(0);
     zs.live.dimmer = 1.0; // lit — otherwise the (default-down) fader keeps it dark
     show
 }
@@ -163,8 +168,8 @@ fn engine_runs_a_show_and_lights_the_wire() {
     // frame-boundary queue. The flat solid becomes a gradient — pixel 0 goes dark,
     // pixel 3 rises (each still x0.5 by the zone fader). Proof the swap reached the
     // wire, off the render thread.
-    let zone_id = Uuid::from_u128(0x1); // the single zone in build_patch
-    assert!(engine.trigger_zone_effect(0, zone_id, "gradient", &ParamSet::new(), None));
+    assert_eq!(engine.track_count(), 1);
+    assert!(engine.trigger_track_effect(0, "gradient", &ParamSet::new(), None));
     wait_for("the triggered gradient reaches the wire", || {
         let snap = dev_sink.snapshot();
         match snap.universes.get(&1) {

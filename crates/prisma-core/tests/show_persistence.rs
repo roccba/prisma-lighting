@@ -1,11 +1,16 @@
-//! M8 step 1 acceptance: the Show model (`.prisma`) round-trips and its
-//! persistence enforces the envelope contract (CLAUDE.md §4.3, M8-SPEC §5).
+//! The Show model (`.prisma`) round-trips and its persistence enforces the envelope
+//! contract (CLAUDE.md §4.3, M8-SPEC §5) — on the track model of
+//! docs/LIVE-MODEL-SPEC.md §3 (phase 1).
 //!
 //! Headless — no GPU. This is the "done when: a `.prisma` loads/saves round-trip
 //! identical; no UI" gate of Part A step 1.
 
-use prisma_core::show::{load_show, save_show, Cell, Layer, ParamSet, Show, ShowError};
+use prisma_core::show::{
+    load_show, save_show, Cell, Destination, LaunchMode, Layer, ParamSet, Show, ShowError, Track,
+    TrackTransition,
+};
 use prisma_core::show::{CURRENT_SCHEMA_VERSION, FORMAT_ID};
+use prisma_core::{Easing, TimeBase};
 use prisma_patch::{
     BlendMode, ColorOrder, ComponentSet, Fixture, FixtureProfile, GammaCalibration, Patch, Pixel,
     PixelRef, Zone,
@@ -69,7 +74,8 @@ fn two_zone_patch() -> Patch {
 }
 
 /// A show over `two_zone_patch`, with content so the round-trip has something to
-/// compare: an effect in each zone's grid, one active, live values nudged.
+/// compare: an effect on each zone's own track, one running, live values nudged, and
+/// an extra track over both zones with non-default settings.
 fn populated_show() -> Show {
     let patch = two_zone_patch();
     let zone_a = patch.zones[0].id;
@@ -81,14 +87,17 @@ fn populated_show() -> Show {
         let mut params = ParamSet::new();
         params.set("scale", 0.3);
         params.set("speed", 0.7);
+        let track = show.home_track_mut(zone_a).expect("booth track exists");
+        track
+            .clips
+            .push(Cell::single(Layer::shader("plasma", params)));
+        track.clips.push(Cell::empty());
+        track.active = Some(0);
         let zs = show
             .zones
             .iter_mut()
             .find(|z| z.zone_id == zone_a)
             .expect("booth zone show exists");
-        zs.grid.push(Cell::single(Layer::shader("plasma", params)));
-        zs.grid.push(Cell::empty());
-        zs.active = Some(0);
         zs.live.dimmer = 0.8;
         zs.live.color_filter = [1.0, 0.5, 0.2];
     }
@@ -100,14 +109,39 @@ fn populated_show() -> Show {
         let mut layer = Layer::shader("wave", params);
         layer.blend_mode = BlendMode::Add;
         layer.opacity = 0.6;
+        let track = show.home_track_mut(zone_b).expect("ceiling track exists");
+        track.clips.push(Cell::single(layer));
+        track.active = None;
         let zs = show
             .zones
             .iter_mut()
             .find(|z| z.zone_id == zone_b)
             .expect("ceiling zone show exists");
-        zs.grid.push(Cell::single(layer));
-        zs.active = None;
         zs.live.speed_multiplier = 1.5;
+    }
+
+    // A third track over both zones, every setting off its default.
+    {
+        let mut track = Track::new(
+            "Strobe",
+            Destination {
+                zones: vec![zone_a, zone_b],
+            },
+        );
+        track.blend_mode = BlendMode::Max;
+        track.opacity = 0.4;
+        track.transition = TrackTransition {
+            time: 2.0,
+            base: TimeBase::Beats,
+            easing: Easing::EaseInOut,
+        };
+        track.launch = LaunchMode::Arm;
+        track.mute = true;
+        let mut clip = Cell::single(Layer::shader("strobe", ParamSet::new()));
+        clip.fade_time = std::time::Duration::from_millis(500);
+        track.clips.push(clip);
+        track.active = Some(0);
+        show.tracks.push(track);
     }
 
     show.master.dimmer = 0.9;
@@ -171,21 +205,74 @@ fn a_patch_file_is_rejected_by_the_show_loader() {
 }
 
 #[test]
-fn validate_rejects_an_out_of_range_active_cell() {
+fn validate_rejects_an_out_of_range_active_clip() {
     let mut show = populated_show();
     let zone_a = show.patch.zones[0].id;
-    let zs = show.zones.iter_mut().find(|z| z.zone_id == zone_a).unwrap();
-    zs.active = Some(99); // grid has 2 cells
+    let track = show.home_track_mut(zone_a).unwrap();
+    track.active = Some(99); // the track has 2 clips
+    let id = track.id;
 
     match show.validate() {
         Err(ShowError::ActiveOutOfRange {
-            active, grid_len, ..
+            track,
+            active,
+            clips,
         }) => {
-            assert_eq!(active, 99);
-            assert_eq!(grid_len, 2);
+            assert_eq!((track, active, clips), (id, 99, 2));
         }
         other => panic!("expected ActiveOutOfRange, got {other:?}"),
     }
+}
+
+#[test]
+fn validate_rejects_a_destination_zone_not_in_the_patch() {
+    let mut show = populated_show();
+    let ghost = Uuid::from_u128(0xDEAD);
+    show.tracks[2].destination.zones.push(ghost);
+    let id = show.tracks[2].id;
+    match show.validate() {
+        Err(ShowError::UnknownDestinationZone { track, zone }) => {
+            assert_eq!((track, zone), (id, ghost));
+        }
+        other => panic!("expected UnknownDestinationZone, got {other:?}"),
+    }
+}
+
+#[test]
+fn validate_rejects_a_duplicate_track_id() {
+    let mut show = populated_show();
+    let dup = show.tracks[0].clone();
+    show.tracks.push(dup);
+    match show.validate() {
+        Err(ShowError::DuplicateTrack { track }) => assert_eq!(track, show.tracks[0].id),
+        other => panic!("expected DuplicateTrack, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_v1_per_zone_grid_file_is_refused_as_too_old() {
+    // No migration from v1 (per-zone grids): there were no shows to keep.
+    let json = save_show(&populated_show()).expect("save");
+    let mut value: serde_json::Value = serde_json::from_str(&json).expect("json");
+    value["schema_version"] = serde_json::json!(1);
+    let old = serde_json::to_string(&value).expect("reserialize");
+    match load_show(&old) {
+        Err(ShowError::UnknownSchema { version }) => assert_eq!(version, 1),
+        other => panic!("expected UnknownSchema, got {other:?}"),
+    }
+}
+
+#[test]
+fn track_settings_serialize_readably() {
+    let json = save_show(&populated_show()).expect("save");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("json");
+    let strobe = &value["show"]["tracks"][2];
+    assert_eq!(strobe["launch"], "arm");
+    assert_eq!(strobe["transition"]["base"], "beats");
+    assert_eq!(strobe["transition"]["easing"], "ease_in_out");
+    // A zone show carries live state only — content lives in tracks.
+    let zone = &value["show"]["zones"][0];
+    assert!(zone.get("grid").is_none() && zone.get("active").is_none());
 }
 
 #[test]
@@ -213,17 +300,35 @@ fn validate_rejects_an_unknown_zone_id() {
 }
 
 #[test]
-fn new_show_builds_one_zone_show_per_patch_zone() {
+fn new_show_builds_one_zone_show_and_one_track_per_patch_zone() {
     let patch = two_zone_patch();
     let show = Show::new("fresh", patch.clone());
     assert_eq!(show.zones.len(), patch.zones.len());
-    for z in &patch.zones {
+    assert_eq!(show.tracks.len(), patch.zones.len());
+    for (z, track) in patch.zones.iter().zip(&show.tracks) {
         assert!(
             show.zone(z.id).is_some(),
             "every patch zone has a zone show"
         );
+        // Track i is zone i's own: named after it, reaching it alone, plain, empty.
+        assert_eq!(track.destination.zones, vec![z.id]);
+        assert_eq!(track.name, z.name);
+        assert_eq!(track.blend_mode, BlendMode::Normal);
+        assert_eq!(track.opacity, 1.0);
+        assert!(track.clips.is_empty() && track.active.is_none());
+        assert_eq!(show.home_track(z.id).map(|t| t.id), Some(track.id));
     }
     show.validate().expect("a fresh show is valid");
+}
+
+#[test]
+fn a_zone_reached_only_by_a_shared_track_has_no_home_track() {
+    let patch = two_zone_patch();
+    let (a, b) = (patch.zones[0].id, patch.zones[1].id);
+    let mut show = Show::new("shared", patch);
+    show.tracks = vec![Track::new("both", Destination { zones: vec![a, b] })];
+    assert!(show.home_track(a).is_none() && show.home_track(b).is_none());
+    show.validate().expect("a multi-zone track is valid");
 }
 
 // --- Network output (docs/DEVICES-SPEC.md) ---
@@ -353,18 +458,18 @@ fn a_unicast_node_without_ip_has_no_destination() {
 }
 
 #[test]
-fn a_cells_colour_table_round_trips_and_older_files_load_without_one() {
+fn a_clips_colour_table_round_trips_and_a_layer_without_one_loads_none() {
     use prisma_core::show::Source;
     let mut show = populated_show();
     // A long table (well past the old 8 fixed slots) stored as a list on the layer.
     let table: Vec<[f32; 3]> = (0..40).map(|i| [i as f32 / 40.0, 0.5, 1.0]).collect();
-    let layer = &mut show.zones[0].grid[0].layers[0];
+    let layer = &mut show.tracks[0].clips[0].layers[0];
     let Source::Shader { palette, .. } = &mut layer.source;
     *palette = Some(table.clone());
 
     let back = load_show(&save_show(&show).unwrap()).unwrap();
     assert_eq!(back, show);
-    let Source::Shader { palette, .. } = &back.zones[0].grid[0].layers[0].source;
+    let Source::Shader { palette, .. } = &back.tracks[0].clips[0].layers[0].source;
     assert_eq!(palette.as_deref(), Some(&table[..]));
 
     // A layer without a table is written without the field, and reads back as None
@@ -372,6 +477,6 @@ fn a_cells_colour_table_round_trips_and_older_files_load_without_one() {
     let json = save_show(&populated_show()).unwrap();
     assert!(!json.contains("\"palette\""));
     let old = load_show(&json).unwrap();
-    let Source::Shader { palette, .. } = &old.zones[0].grid[0].layers[0].source;
+    let Source::Shader { palette, .. } = &old.tracks[0].clips[0].layers[0].source;
     assert!(palette.is_none());
 }

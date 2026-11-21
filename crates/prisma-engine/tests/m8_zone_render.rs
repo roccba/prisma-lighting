@@ -15,7 +15,7 @@ use half::f16;
 use prisma_core::source::{priority, SourceId};
 use prisma_core::zone::ZoneStates;
 use prisma_core::{ClockSnapshot, ParameterTree};
-use prisma_engine::{ZoneCommandSender, ZoneCompositor};
+use prisma_engine::{CompositorOptions, TrackContent, ZoneCommandSender, ZoneCompositor};
 use prisma_patch::{
     BlendMode, ColorOrder, ComponentSet, Fixture, FixtureProfile, GammaCalibration, Patch,
     PatchIndex, Pixel, PixelRef, Zone,
@@ -228,7 +228,7 @@ fn two_zones_at_different_mapping_sizes_render_independently() {
         Some(solid_effect(gpu, &tree, "/z/booth", [0.5, 0.5, 0.5])),
         Some(gradient_effect(gpu, &tree, "/z/ceiling")),
     ];
-    let mut content = ZoneCompositor::new(gpu, &patch, &index, effects);
+    let mut content = ZoneCompositor::new(gpu, &patch, &index, TrackContent::one_per_zone(effects));
     let px = render_and_gather(gpu, &patch, &index, &mut content, &lit_zones(2));
 
     // Booth (0..4): flat 0.5 everywhere, nothing bled in from the ceiling.
@@ -270,7 +270,7 @@ fn a_zone_renders_at_its_own_mapping_size_and_upscales_nearest() {
     let index = patch.compile().expect("rig compiles");
 
     let effects = vec![Some(gradient_effect(gpu, &tree, "/z/only"))];
-    let mut content = ZoneCompositor::new(gpu, &patch, &index, effects);
+    let mut content = ZoneCompositor::new(gpu, &patch, &index, TrackContent::one_per_zone(effects));
     let px = render_and_gather(gpu, &patch, &index, &mut content, &lit_zones(1));
 
     // gradient@2 = [0, 1]; placed nearest into 4 cells = [0, 0, 1, 1]. A
@@ -308,7 +308,7 @@ fn a_dark_zone_contributes_nothing_and_does_not_block_others() {
         Some(solid_effect(gpu, &tree, "/z/a", [1.0, 1.0, 1.0])),
         Some(solid_effect(gpu, &tree, "/z/b", [1.0, 1.0, 1.0])),
     ];
-    let mut content = ZoneCompositor::new(gpu, &patch, &index, effects);
+    let mut content = ZoneCompositor::new(gpu, &patch, &index, TrackContent::one_per_zone(effects));
 
     // Zone a lit, zone b dark.
     let mut zones = ZoneStates::new(2);
@@ -351,7 +351,7 @@ fn a_queued_effect_swap_applies_whole_at_the_next_frame() {
         Some(solid_effect(gpu, &tree, "/q/a0", [0.25, 0.25, 0.25])),
         Some(solid_effect(gpu, &tree, "/q/b0", [0.25, 0.25, 0.25])),
     ];
-    let mut content = ZoneCompositor::new(gpu, &patch, &index, effects);
+    let mut content = ZoneCompositor::new(gpu, &patch, &index, TrackContent::one_per_zone(effects));
     let sender = content.command_sender();
     let zones = lit_zones(2);
 
@@ -367,11 +367,14 @@ fn a_queued_effect_swap_applies_whole_at_the_next_frame() {
     // Queue a swap for BOTH zones. In the app the UI thread builds the
     // EffectInstance (a pipeline compile) off the render thread and sends it; here
     // the test thread stands in for that producer.
-    assert!(sender.set_zone_effect(
+    assert!(sender.set_track_effects(
         0,
-        Some(solid_effect(gpu, &tree, "/q/a1", [0.75, 0.75, 0.75]))
+        vec![Some(solid_effect(gpu, &tree, "/q/a1", [0.75, 0.75, 0.75]))]
     ));
-    assert!(sender.set_zone_effect(1, Some(solid_effect(gpu, &tree, "/q/b1", [0.9, 0.9, 0.9]))));
+    assert!(sender.set_track_effects(
+        1,
+        vec![Some(solid_effect(gpu, &tree, "/q/b1", [0.9, 0.9, 0.9]))]
+    ));
 
     // Frame N+1: the swap applied at the boundary. BOTH zones show their NEW effect,
     // wholly — no pixel remains at 0.25 (a half-and-half frame), and both zones
@@ -444,7 +447,12 @@ fn negative_zone_speed_runs_the_effect_in_reverse() {
     // Effect speed real 1.0 (norm 0.25 over 0..4) so time drives the field.
     tree.write_path("/z/n/param/speed", 0.25, ui());
     let mut zones = lit_zones(1);
-    let mut content = ZoneCompositor::new(&gpu, &patch, &index, vec![Some(noise)]);
+    let mut content = ZoneCompositor::new(
+        &gpu,
+        &patch,
+        &index,
+        TrackContent::one_per_zone(vec![Some(noise)]),
+    );
 
     let dt_ns = 80_000_000u64; // 0.08 s per step
 
@@ -492,4 +500,259 @@ fn negative_zone_speed_runs_the_effect_in_reverse() {
             c[i][0]
         );
     }
+}
+
+// --- Live model phase 1: tracks folded inside a zone (LIVE-MODEL-SPEC §4.1) ---
+
+/// One track into `zone` with `effect`, blending with `mode` at `opacity`.
+fn track(
+    zone: usize,
+    mode: BlendMode,
+    opacity: f32,
+    effect: Option<EffectInstance>,
+) -> TrackContent {
+    TrackContent {
+        zones: vec![zone],
+        blend_mode: mode,
+        opacity,
+        effects: vec![effect],
+    }
+}
+
+fn grey(gpu: &Gpu, tree: &ParameterTree, prefix: &str, v: f32) -> Option<EffectInstance> {
+    Some(solid_effect(gpu, tree, prefix, [v, v, v]))
+}
+
+/// Two tracks reaching one zone fold in track order with the upper track's blend
+/// mode and opacity — `Add` sums, `Normal` at 0.5 mixes halfway.
+#[test]
+fn two_tracks_in_a_zone_fold_with_blend_mode_and_opacity() {
+    let gpu = software_gpu();
+    let gpu = &gpu;
+    let patch = build_patch(4, &[("z", &[0, 1, 2, 3], 4, BlendMode::Normal)]);
+    let index = patch.compile().expect("rig compiles");
+    let tree = ParameterTree::with_defaults();
+    let zones = lit_zones(1);
+
+    let mut add = ZoneCompositor::new(
+        gpu,
+        &patch,
+        &index,
+        vec![
+            track(0, BlendMode::Normal, 1.0, grey(gpu, &tree, "/a/0", 0.25)),
+            track(0, BlendMode::Add, 1.0, grey(gpu, &tree, "/a/1", 0.5)),
+        ],
+    );
+    for (p, px) in render_and_gather(gpu, &patch, &index, &mut add, &zones)
+        .iter()
+        .enumerate()
+    {
+        assert!(
+            approx(*px, 0.75),
+            "Add: pixel {p} = {px:?}, want 0.25 + 0.5"
+        );
+    }
+
+    let mut half = ZoneCompositor::new(
+        gpu,
+        &patch,
+        &index,
+        vec![
+            track(0, BlendMode::Normal, 1.0, grey(gpu, &tree, "/h/0", 0.2)),
+            track(0, BlendMode::Normal, 0.5, grey(gpu, &tree, "/h/1", 0.8)),
+        ],
+    );
+    for (p, px) in render_and_gather(gpu, &patch, &index, &mut half, &zones)
+        .iter()
+        .enumerate()
+    {
+        assert!(
+            approx(*px, 0.5),
+            "Normal @0.5: pixel {p} = {px:?}, want 0.5"
+        );
+    }
+}
+
+/// A track with nothing playing contributes nothing and does not cover the track
+/// below it, even as an opaque `Normal` track on top.
+#[test]
+fn a_track_with_no_clip_does_not_cover_the_track_below() {
+    let gpu = software_gpu();
+    let gpu = &gpu;
+    let patch = build_patch(4, &[("z", &[0, 1, 2, 3], 4, BlendMode::Normal)]);
+    let index = patch.compile().expect("rig compiles");
+    let tree = ParameterTree::with_defaults();
+    let zones = lit_zones(1);
+
+    let mut content = ZoneCompositor::new(
+        gpu,
+        &patch,
+        &index,
+        vec![
+            track(0, BlendMode::Normal, 1.0, grey(gpu, &tree, "/e/0", 0.4)),
+            track(0, BlendMode::Normal, 1.0, None),
+        ],
+    );
+    for (p, px) in render_and_gather(gpu, &patch, &index, &mut content, &zones)
+        .iter()
+        .enumerate()
+    {
+        assert!(approx(*px, 0.4), "pixel {p} = {px:?}, want the lower track");
+    }
+
+    // Stopping the lower one too leaves the zone dark (it no longer contributes).
+    content.set_track_effects(0, vec![]);
+    for (p, px) in render_and_gather(gpu, &patch, &index, &mut content, &zones)
+        .iter()
+        .enumerate()
+    {
+        assert!(approx(*px, 0.0), "pixel {p} = {px:?}, want black");
+    }
+}
+
+/// Track order is compositing order: with `Normal`, the later track wins.
+#[test]
+fn track_order_decides_which_normal_track_wins() {
+    let gpu = software_gpu();
+    let gpu = &gpu;
+    let patch = build_patch(4, &[("z", &[0, 1, 2, 3], 4, BlendMode::Normal)]);
+    let index = patch.compile().expect("rig compiles");
+    let tree = ParameterTree::with_defaults();
+    let zones = lit_zones(1);
+
+    for (low, high) in [(0.2, 0.7), (0.7, 0.2)] {
+        let mut content = ZoneCompositor::new(
+            gpu,
+            &patch,
+            &index,
+            vec![
+                track(0, BlendMode::Normal, 1.0, grey(gpu, &tree, "/o/0", low)),
+                track(0, BlendMode::Normal, 1.0, grey(gpu, &tree, "/o/1", high)),
+            ],
+        );
+        for (p, px) in render_and_gather(gpu, &patch, &index, &mut content, &zones)
+            .iter()
+            .enumerate()
+        {
+            assert!(
+                approx(*px, high),
+                "pixel {p} = {px:?}, want the top track {high}"
+            );
+        }
+    }
+}
+
+/// The 1:1 shortcut (one plain track rendered straight into the zone texture) and
+/// the fold (the same track blended `Normal` @1 over black) produce the SAME frame,
+/// bit for bit — on an animated effect, at a zone whose mapping is upscaled.
+#[test]
+fn the_one_to_one_shortcut_matches_the_fold_exactly() {
+    let gpu = software_gpu();
+    let gpu = &gpu;
+    let patch = build_patch(
+        8,
+        &[
+            ("a", &[0, 1, 2, 3], 2, BlendMode::Normal),
+            ("b", &[4, 5, 6, 7], 4, BlendMode::Normal),
+        ],
+    );
+    let index = patch.compile().expect("rig compiles");
+    let mut zones = lit_zones(2);
+    zones.set_speed_multiplier(1, 2.5);
+
+    let build = |options: CompositorOptions, tree: &ParameterTree| {
+        let plasma = EffectInstance::new(gpu, tree, "/s/0", &effects::plasma());
+        ZoneCompositor::with_options(
+            gpu,
+            &patch,
+            &index,
+            vec![
+                track(
+                    0,
+                    BlendMode::Normal,
+                    1.0,
+                    Some(gradient_effect(gpu, tree, "/s/g")),
+                ),
+                track(1, BlendMode::Normal, 1.0, Some(plasma)),
+            ],
+            options,
+        )
+    };
+    let (tree_a, tree_b) = (
+        ParameterTree::with_defaults(),
+        ParameterTree::with_defaults(),
+    );
+    let mut shortcut = build(CompositorOptions::default(), &tree_a);
+    let mut folded = build(CompositorOptions { force_fold: true }, &tree_b);
+
+    for step in 0..3u64 {
+        let clock = playing_clock(step * 70_000_000);
+        let a = render_and_gather_at(gpu, &patch, &index, &mut shortcut, &zones, &clock);
+        let b = render_and_gather_at(gpu, &patch, &index, &mut folded, &zones, &clock);
+        assert!(
+            a.iter().any(|px| px[0] > EPS),
+            "the content must not be black (a vacuous comparison)"
+        );
+        assert_eq!(a, b, "frame {step}: shortcut and fold must agree exactly");
+    }
+}
+
+/// Restarting one track rewinds only that track's phase: a second track in the same
+/// zone keeps animating where it was.
+#[test]
+fn restarting_a_track_does_not_move_another_track_in_the_zone() {
+    let gpu = software_gpu();
+    let gpu = &gpu;
+    let patch = build_patch(8, &[("z", &[0, 1, 2, 3, 4, 5, 6, 7], 8, BlendMode::Normal)]);
+    let index = patch.compile().expect("rig compiles");
+    let zones = lit_zones(1);
+
+    // Bottom: animated noise, visible. Top: noise at opacity 0 — present, invisible.
+    let build = |tree: &ParameterTree| {
+        let low = EffectInstance::new(gpu, tree, "/r/0", &effects::noise());
+        tree.write_path("/r/0/param/speed", 0.25, ui());
+        let high = EffectInstance::new(gpu, tree, "/r/1", &effects::noise());
+        ZoneCompositor::new(
+            gpu,
+            &patch,
+            &index,
+            vec![
+                track(0, BlendMode::Normal, 1.0, Some(low)),
+                track(0, BlendMode::Normal, 0.0, Some(high)),
+            ],
+        )
+    };
+    let (ta, tb, tc) = (
+        ParameterTree::with_defaults(),
+        ParameterTree::with_defaults(),
+        ParameterTree::with_defaults(),
+    );
+    let (mut reference, mut top_restarted, mut bottom_restarted) =
+        (build(&ta), build(&tb), build(&tc));
+
+    let dt = 300_000_000u64;
+    let frame = |c: &mut ZoneCompositor, show_ns| {
+        render_and_gather_at(gpu, &patch, &index, c, &zones, &playing_clock(show_ns))
+    };
+    for c in [&mut reference, &mut top_restarted, &mut bottom_restarted] {
+        frame(c, 0);
+        frame(c, dt);
+    }
+    assert!(top_restarted.command_sender().restart_track(1));
+    assert!(bottom_restarted.command_sender().restart_track(0));
+
+    let want = frame(&mut reference, 2 * dt);
+    assert_eq!(
+        frame(&mut top_restarted, 2 * dt),
+        want,
+        "restarting the top track must not move the bottom one"
+    );
+    let rewound = frame(&mut bottom_restarted, 2 * dt);
+    assert!(
+        rewound
+            .iter()
+            .zip(&want)
+            .any(|(x, y)| (x[0] - y[0]).abs() > 0.008),
+        "restarting the bottom track must rewind it"
+    );
 }

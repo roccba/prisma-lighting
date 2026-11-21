@@ -19,12 +19,16 @@ pub enum ShowError {
     DuplicateZone { zone: Uuid },
     /// Some patch zones have no zone show — the bijection is incomplete.
     MissingZones { expected: usize, found: usize },
-    /// A zone's `active` index is out of range of its own grid.
+    /// A track's `active` index is out of range of its clips.
     ActiveOutOfRange {
-        zone: Uuid,
+        track: Uuid,
         active: usize,
-        grid_len: usize,
+        clips: usize,
     },
+    /// Two tracks share an id.
+    DuplicateTrack { track: Uuid },
+    /// A track's destination names a zone absent from the embedded patch.
+    UnknownDestinationZone { track: Uuid, zone: Uuid },
     /// The network/output config is malformed (e.g. a reversed universe range).
     InvalidNetwork(String),
     /// The embedded patch failed its own validation.
@@ -60,12 +64,19 @@ impl std::fmt::Display for ShowError {
                 "show covers {found} of {expected} patch zones (one zone show per zone required)"
             ),
             ShowError::ActiveOutOfRange {
-                zone,
+                track,
                 active,
-                grid_len,
+                clips,
             } => write!(
                 f,
-                "zone {zone} active cell {active} is out of range (grid has {grid_len} cells)"
+                "track {track} active clip {active} is out of range (track has {clips} clips)"
+            ),
+            ShowError::DuplicateTrack { track } => {
+                write!(f, "track id {track} is used by more than one track")
+            }
+            ShowError::UnknownDestinationZone { track, zone } => write!(
+                f,
+                "track {track} targets zone {zone}, which is not in the patch"
             ),
             ShowError::InvalidNetwork(msg) => write!(f, "network config invalid: {msg}"),
             ShowError::Patch(e) => write!(f, "embedded patch invalid: {e}"),

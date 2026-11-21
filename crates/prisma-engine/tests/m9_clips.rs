@@ -1,7 +1,8 @@
-//! M9 Slice 3 — grid cells as tree targets, played by the engine's cell controller:
-//! a momentary hold returns to what ran before, a latch makes a new base, a trigger
-//! restarts, an empty cell stops the zone, and the whole thing survives a recompile.
-//! Validated on the wire (virtual sink) and on each cell's published `state`.
+//! Track clips as tree targets (`/track/{id}/clip/{i}/…`, LIVE-MODEL-SPEC §5),
+//! played by the engine's clip controller: a momentary hold returns to what ran
+//! before, a latch makes a new base, a trigger restarts, an empty clip stops the
+//! track, and the whole thing survives a recompile. Validated on the wire (virtual
+//! sink) and on each clip's published `state`.
 //!
 //! One test function, its own binary (one Vulkan bring-up at a time — see m8_engine_show).
 
@@ -12,7 +13,7 @@ use std::time::{Duration, Instant};
 use prisma_core::show::{Cell, Layer, ParamSet, Show};
 use prisma_core::{priority, SourceId};
 use prisma_engine::{
-    CellEffect, CellHost, Engine, EngineConfig, CELL_ASSIGNED, CELL_EMPTY, CELL_RUNNING,
+    ClipEffect, ClipHost, Engine, EngineConfig, CLIP_ASSIGNED, CLIP_EMPTY, CLIP_RUNNING,
 };
 use prisma_output::sink;
 use prisma_patch::{
@@ -76,39 +77,40 @@ fn solid(v: f32) -> Cell {
     Cell::single(Layer::shader("solid", p))
 }
 
-/// Cells: 0 = grey 0.5 (running), 1 = white, 2 = empty.
+/// The zone's own track: clips 0 = grey 0.5 (running), 1 = white, 2 = empty.
 fn show() -> Show {
-    let mut show = Show::new("cells", patch());
+    let mut show = Show::new("clips", patch());
+    let track = show.home_track_mut(ZONE).unwrap();
+    track.clips = vec![solid(0.5), solid(1.0), Cell::empty()];
+    track.active = Some(0);
     let zs = show.zones.iter_mut().find(|z| z.zone_id == ZONE).unwrap();
-    zs.grid = vec![solid(0.5), solid(1.0), Cell::empty()];
-    zs.active = Some(0);
     zs.live.dimmer = 1.0;
     show
 }
 
-/// The app's role: owns the show, hears about the running cell.
+/// The app's role: owns the show, hears about the running clip.
 struct Host(Mutex<Show>);
 
-impl CellHost for Host {
-    fn cell_effect(&self, zone: Uuid, cell: usize) -> Option<CellEffect> {
+impl ClipHost for Host {
+    fn clip_effect(&self, track: Uuid, clip: usize) -> Option<ClipEffect> {
         let show = self.0.lock().unwrap();
-        let layer = show.zone(zone)?.grid.get(cell)?.layers.first()?.clone();
+        let layer = show.track(track)?.clips.get(clip)?.layers.first()?.clone();
         match layer.source {
             prisma_core::show::Source::Shader {
                 effect_id,
                 params,
                 palette,
-            } => Some(CellEffect {
+            } => Some(ClipEffect {
                 effect_id,
                 params,
                 palette,
             }),
         }
     }
-    fn active_changed(&self, zone: Uuid, active: Option<usize>) {
+    fn active_changed(&self, track: Uuid, active: Option<usize>) {
         let mut show = self.0.lock().unwrap();
-        if let Some(zs) = show.zones.iter_mut().find(|z| z.zone_id == zone) {
-            zs.active = active;
+        if let Some(t) = show.track_mut(track) {
+            t.active = active;
         }
     }
 }
@@ -125,12 +127,15 @@ fn wait_for(what: &str, mut pred: impl FnMut() -> bool) {
 }
 
 #[test]
-fn pads_play_cells_through_the_tree() {
+fn pads_play_clips_through_the_tree() {
     let dev_sink = sink::spawn(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).expect("sink");
     let config = || EngineConfig::new(AdapterPreference::Software, dev_sink.local_addr());
-    let host = Arc::new(Host(Mutex::new(show())));
-    let engine = Engine::start_show(show(), config()).expect("engine starts");
-    engine.set_cell_host(host.clone());
+    // One show for both sides: track ids are minted by `Show::new`.
+    let show = show();
+    let track = show.home_track(ZONE).unwrap().id;
+    let host = Arc::new(Host(Mutex::new(show.clone())));
+    let engine = Engine::start_show(show, config()).expect("engine starts");
+    engine.set_clip_host(host.clone());
 
     let wire = |lo: u8, hi: u8| {
         let snap = dev_sink.snapshot();
@@ -138,7 +143,7 @@ fn pads_play_cells_through_the_tree() {
             .get(&1)
             .is_some_and(|u| u.data.len() >= 12 && (lo..=hi).contains(&u.data[0]))
     };
-    let path = |cell: usize, leaf: &str| format!("/zone/{ZONE}/cell/{cell}/{leaf}");
+    let path = |clip: usize, leaf: &str| format!("/track/{track}/clip/{clip}/{leaf}");
     let state = |engine: &prisma_engine::EngineHandle, cell: usize| {
         engine
             .tree()
@@ -148,13 +153,18 @@ fn pads_play_cells_through_the_tree() {
             .unwrap()
     };
     let midi = SourceId::new(priority::MIDI, 1);
-    let active = || host.0.lock().unwrap().zone(ZONE).unwrap().active;
+    let active = || host.0.lock().unwrap().track(track).unwrap().active;
+    // The old per-zone cell targets are gone.
+    assert!(engine
+        .tree()
+        .resolve(&format!("/zone/{ZONE}/cell/0/launch"))
+        .is_none());
 
     // States published from the show: running, assigned, empty.
-    wait_for("initial cell states", || {
-        state(&engine, 0) == CELL_RUNNING
-            && state(&engine, 1) == CELL_ASSIGNED
-            && state(&engine, 2) == CELL_EMPTY
+    wait_for("initial clip states", || {
+        state(&engine, 0) == CLIP_RUNNING
+            && state(&engine, 1) == CLIP_ASSIGNED
+            && state(&engine, 2) == CLIP_EMPTY
     });
     wait_for("grey on the wire", || wire(120, 136));
 
@@ -162,23 +172,23 @@ fn pads_play_cells_through_the_tree() {
     let hold1 = engine.tree().resolve(&path(1, "hold")).unwrap();
     engine.tree().write_real(&hold1, 1.0, midi);
     wait_for("held white on the wire", || wire(250, 255));
-    wait_for("held cell runs", || {
-        state(&engine, 1) == CELL_RUNNING && state(&engine, 0) == CELL_ASSIGNED
+    wait_for("held clip runs", || {
+        state(&engine, 1) == CLIP_RUNNING && state(&engine, 0) == CLIP_ASSIGNED
     });
-    assert_eq!(active(), Some(1), "the host hears the running cell");
+    assert_eq!(active(), Some(1), "the host hears the running clip");
     engine.tree().write_real(&hold1, 0.0, midi);
     wait_for("release returns to grey", || {
         wire(120, 136) && active() == Some(0)
     });
 
     // Latch (the UI click path): white becomes the base and stays.
-    assert!(engine.fire_cell(0, 1));
+    assert!(engine.fire_clip(0, 1));
     wait_for("latched white", || wire(250, 255) && active() == Some(1));
-    // The started cell's stored params are a load, not a lock: the panel (UI tier) can
+    // The started clip's stored params are a load, not a lock: the panel (UI tier) can
     // move one right away instead of waiting out the takeover timeout.
     let r = engine
         .tree()
-        .resolve(&format!("/zone/{ZONE}/layer/0/param/r"))
+        .resolve(&format!("/track/{track}/layer/0/param/r"))
         .unwrap();
     assert_eq!(
         engine.tree().write(&r, 0.7, SourceId::new(priority::UI, 1)),
@@ -190,30 +200,30 @@ fn pads_play_cells_through_the_tree() {
     let hold0 = engine.tree().resolve(&path(0, "hold")).unwrap();
     engine.tree().write_real(&hold0, 1.0, midi);
     wait_for("held grey over white", || wire(120, 136));
-    assert!(engine.fire_cell(0, 1));
+    assert!(engine.fire_clip(0, 1));
     wait_for("latch clears the hold", || {
         wire(250, 255) && hold0.read_bool() == Some(false)
     });
 
-    // Trigger restarts (the running cell stays the same); empty cell stops the zone.
+    // Trigger restarts (the running clip stays the same); an empty clip stops the track.
     let trig0 = engine.tree().resolve(&path(0, "trigger")).unwrap();
     engine.tree().fire(&trig0, midi);
     wait_for("trigger plays grey", || {
         wire(120, 136) && active() == Some(0)
     });
-    assert!(engine.fire_cell(0, 2));
-    wait_for("empty cell goes dark", || wire(0, 4) && active() == Some(2));
+    assert!(engine.fire_clip(0, 2));
+    wait_for("empty clip goes dark", || wire(0, 4) && active() == Some(2));
 
-    // Grid edit: cell 2 gets an effect; a refresh publishes it (running, since active).
-    host.0.lock().unwrap().zones[0].grid[2] = solid(1.0);
-    engine.refresh_cells(0);
-    wait_for("refreshed state", || state(&engine, 2) == CELL_RUNNING);
+    // Clip edit: clip 2 gets an effect; a refresh publishes it (running, since active).
+    host.0.lock().unwrap().tracks[0].clips[2] = solid(1.0);
+    engine.refresh_clips(0);
+    wait_for("refreshed state", || state(&engine, 2) == CLIP_RUNNING);
 
     // Recompile onto the host's current show: the controller follows the new tree.
     let current = host.0.lock().unwrap().clone();
     let engine = engine.recompile_show(current, config()).expect("recompile");
     wait_for("states after recompile", || {
-        state(&engine, 2) == CELL_RUNNING && state(&engine, 0) == CELL_ASSIGNED
+        state(&engine, 2) == CLIP_RUNNING && state(&engine, 0) == CLIP_ASSIGNED
     });
     let hold0 = engine.tree().resolve(&path(0, "hold")).unwrap();
     engine.tree().write_real(&hold0, 1.0, midi);
@@ -221,10 +231,24 @@ fn pads_play_cells_through_the_tree() {
         wire(120, 136) && active() == Some(0)
     });
 
+    // Phase 1 MIDI bridge: a grid pad learned on `ZoneSub::Cell(1)` of zone slot 0
+    // plays clip 1 of that zone's home track (here: white, over the held grey).
+    engine.tree().write_real(&hold0, 0.0, midi);
+    wait_for("hold released", || active() == Some(2));
+    let midi_rt = engine.midi();
+    midi_rt.arm_learn(prisma_core::MapTarget::ZoneSlot {
+        slot: 0,
+        sub: prisma_core::ZoneSub::Cell(1),
+    });
+    midi_rt.feed(&[0x90, 33, 127]); // learned as a latch → launches clip 1
+    wait_for("the pad latched the home track's clip 1", || {
+        wire(250, 255) && active() == Some(1)
+    });
+
     let report = engine.shutdown();
     assert_eq!(
         report.gpu_strong_refs_at_release, 1,
-        "cells released the GPU"
+        "clips released the GPU"
     );
     let _ = dev_sink.stop_and_collect();
 }

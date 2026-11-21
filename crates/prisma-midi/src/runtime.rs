@@ -35,9 +35,8 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use prisma_core::{
     ControlMode, ControllerMappings, MapTarget, MidiControl, MidiMapping, ParameterTree,
-    ResponseCurve, Takeover,
+    ResponseCurve, SlotIds, Takeover,
 };
-use uuid::Uuid;
 
 use crate::feedback::{send_led, Feedback, MidiOut};
 use crate::message::{EventKind, MidiEvent};
@@ -70,7 +69,7 @@ struct State {
     profile: ControllerMappings,
     /// The running tree and zone order, kept so a profile change can recompile the
     /// binding without the host re-supplying them.
-    tree: Option<(Arc<ParameterTree>, Vec<Uuid>)>,
+    tree: Option<(Arc<ParameterTree>, SlotIds)>,
     binding: Option<Binding>,
     learn: Option<MapTarget>,
     out: Option<MidiOut>,
@@ -166,11 +165,11 @@ impl MidiRuntime {
         *self.listener.lock() = listener;
     }
 
-    /// Bind to a running tree, with its zones in slot order. Recompiles every
-    /// mapping's target against it (slot → uuid → handle, once).
-    pub fn bind(&self, tree: Arc<ParameterTree>, zone_ids: Vec<Uuid>) {
+    /// Bind to a running tree, with its zones (and their home tracks) in slot order.
+    /// Recompiles every mapping's target against it (slot → uuid → handle, once).
+    pub fn bind(&self, tree: Arc<ParameterTree>, ids: impl Into<SlotIds>) {
         let mut s = self.state.lock();
-        s.tree = Some((tree, zone_ids));
+        s.tree = Some((tree, ids.into()));
         s.rebuild();
     }
 
