@@ -435,8 +435,13 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
   // whenever another cell is selected.
   const [draftEffect, setDraftEffect] = useState(DRAFT_DEFAULT_EFFECT);
   useEffect(() => setDraftEffect(DRAFT_DEFAULT_EFFECT), [zoneId, cell]);
-  // The in-flight assignment of a draft cell: edits made while it is pending wait for it,
-  // so one drag of a slider assigns the cell once and then writes to it.
+  // The assignment of a draft cell: edits made while it is pending (and until the panel
+  // re-reads the cell as assigned) wait for it, so one drag of a slider assigns the cell
+  // once and then writes to it. It belongs to ONE draft: whenever the panel shows a draft
+  // again — another cell, another draft effect, or this cell emptied (auto-clear, Limpiar)
+  // — it is dropped, so the next edit assigns the cell afresh. Without that reset a cleared
+  // cell kept the old, already-resolved assignment and every later edit queued behind it
+  // as a write to an empty cell: lazy assignment worked only once.
   const assigning = useRef<Promise<void> | null>(null);
   useEffect(() => {
     assigning.current = null;
@@ -453,7 +458,13 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
       const p = panelRef.current;
       if (!p || p.cell_index == null || !isBlackColor(p)) return;
       clearCell(zoneId, p.cell_index)
-        .then(() => onGridChange?.()) // the grid shows it empty; the panel drafts it
+        .then(() => {
+          // Reset to a freshly selected empty cell (the draft effect back to its default,
+          // no assignment held), then re-read: the grid shows it empty, the panel drafts it.
+          assigning.current = null;
+          setDraftEffect(DRAFT_DEFAULT_EFFECT);
+          onGridChange?.();
+        })
         .catch(() => {});
     }, AUTO_CLEAR_MS);
   };
@@ -474,6 +485,11 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
     return () => ro.disconnect();
     // The panel remounts per CELL (keyed by it), so re-attach to the new element then too.
   }, [panel?.effect_id, panel?.cell_index]);
+
+  // The cell is (again) empty: back to the state of a freshly selected empty cell.
+  useEffect(() => {
+    if (panel?.draft) assigning.current = null;
+  }, [panel?.draft, panel?.cell_index]);
 
   useEffect(() => {
     let live = true;
