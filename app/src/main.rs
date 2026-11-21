@@ -184,29 +184,72 @@ fn grid_dto(zs: &ZoneShow) -> Vec<CellInfo> {
         .collect()
 }
 
-/// A fresh patch for a new show: no fixtures, a minimal 1×1×1 world, and ONE empty zone
-/// ("Zona 1") so the operator starts with something to select and populate rather than a
-/// blank console. Valid and compilable (`fit_matrix_size` yields `[1,1,1]` for a
-/// fixture-less rig; a member-less zone contributes no pixels). The operator adds fixtures
-/// to the zone (and more zones) in the patch editor.
+/// Side of the default rig (like professional consoles, a fresh start is a mapped square, not a blank).
+const DEFAULT_RIG: u32 = 50;
+
+/// A fresh patch for a new show: ONE zone ("Zona 1") already mapped with a
+/// `DEFAULT_RIG`×`DEFAULT_RIG` matrix of 1-pixel RGB fixtures, addressed from universe 1
+/// channel 1 (170 per universe), and the zone's render matrix set to that same size so the
+/// content is sharp from the first frame. Unrouted universes go to the virtual sink, so
+/// this lights nothing on the network until a device is configured.
 fn empty_patch() -> Patch {
-    Patch {
+    let zone_id = Uuid::new_v4();
+    let side = DEFAULT_RIG;
+    let spec = PlacementSpec {
+        fixture_type: FixtureType {
+            name: "Generic RGB 1 pixel".into(),
+            pixel_count: 1,
+            components: prisma_patch::ComponentSet::Rgb,
+            color_order: prisma_patch::ColorOrder::Rgb,
+            arrangement: prisma_editor::FixtureArrangement::Strip,
+            roles: Vec::new(),
+        },
+        start_number: 1,
+        rotation: prisma_editor::Rotation::R0,
+        count: [side, side, 1],
+        offset: [0, 0, 0],
+        start_position: [0, 0, 0],
+        start_corner: prisma_editor::StartCorner::TopLeft,
+        orientation: prisma_editor::MainOrientation::Horizontal,
+        snake: false,
+        snake_rotation: false,
+        start_universe: 1,
+        start_channel: 1,
+        channel_offset: 0,
+        universe_offset: 0,
+        start_channel_every_universe: false,
+        fixtures_per_universe: Some(170),
+        zone: zone_id,
+    };
+    let mut patch = Patch {
         id: Uuid::new_v4(),
         name: "Sin título".into(),
         matrix_size: [1, 1, 1],
-        fixtures: Vec::new(),
+        fixtures: plan(&spec).unwrap_or_default(),
         zones: vec![Zone {
-            id: Uuid::new_v4(),
+            id: zone_id,
             name: "Zona 1".into(),
             members: Vec::new(),
             bounds: None,
             z_order: 0,
             blend_mode: BlendMode::Normal,
-            mapping_size: [16, 16, 1],
+            mapping_size: [side, side, 1],
             display_color: ZONE_COLORS[0],
             world_transform: None,
         }],
-    }
+    };
+    patch.fill_zone_members_from_ownership();
+    patch.fit_matrix_size();
+    patch
+}
+
+/// A zone's starting grid: cell 1 holds the Color effect at R = G = B = 0 (the effect's
+/// manifest defaults), the rest are empty. Every zone starts with it (Bauti: a zone never
+/// begins without content) and with that cell RUNNING.
+fn default_grid() -> Vec<Cell> {
+    let mut grid: Vec<Cell> = (0..GRID_CELLS).map(|_| Cell::empty()).collect();
+    grid[0] = Cell::single(Layer::shader("solid".to_string(), ParamSet::new()));
+    grid
 }
 
 /// Pad every zone's grid up to `GRID_CELLS` with assignable (empty) cells. A zone with an
@@ -221,14 +264,15 @@ fn pad_grids(show: &mut Show) {
     }
 }
 
-/// A blank show with a single default zone whose scene grid is seeded and LIT, so the
-/// operator can map pixels and immediately assign effects (matching a freshly added zone).
+/// A new show: the default 50×50 zone, its grid seeded with the Color cell running and
+/// LIT, so the operator starts from a mapped rig (matching a freshly added zone).
 fn empty_show() -> Show {
     let mut show = Show::new("Sin título", empty_patch());
-    pad_grids(&mut show);
-    // The default zone starts at full dimmer (like the reconcile path's new-zone branch),
-    // so its content is visible the moment an effect is assigned instead of a black zone.
+    // The default zone starts at full dimmer (like the reconcile path's new-zone branch)
+    // with its Color cell running, so changing the colour lights the rig at once.
     for zs in &mut show.zones {
+        zs.grid = default_grid();
+        zs.active = Some(0);
         zs.live.dimmer = 1.0;
     }
     show
@@ -839,7 +883,8 @@ fn apply_editor_draft(app: &AppHandle, resume: bool) -> Result<(), String> {
                 // seeded zones — otherwise its scene grid would render nothing.
                 None => {
                     let mut zs = ZoneShow::new(pz.id);
-                    zs.grid = (0..GRID_CELLS).map(|_| Cell::empty()).collect();
+                    zs.grid = default_grid();
+                    zs.active = Some(0);
                     // A freshly created zone starts LIT (dimmer full) — master defaults to
                     // full too, so the operator sees the zone's content the moment they
                     // assign an effect, instead of a black zone that looks broken.
@@ -895,8 +940,8 @@ fn main_save_show(state: State<AppState>, path: String) -> Result<(), String> {
     Ok(())
 }
 
-/// "Nueva configuración": reset to a completely empty state — no zones, no patch, nothing
-/// running, exactly as a from-zero launch. The last-show memory is cleared, so the next
+/// "Nueva configuración": reset to the default state — exactly as a from-zero launch (the
+/// default 50×50 zone with its Color cell). The last-show memory is cleared, so the next
 /// launch also starts empty until a show is opened or saved. Validated before the engine is
 /// torn down, so a failure leaves the running show intact. The main window re-fetches on
 /// `layout-changed`.
@@ -2426,6 +2471,34 @@ mod tests {
             "default zone's scene grid must be seeded"
         );
         assert_eq!(show.zones[0].live.dimmer, 1.0, "default zone starts lit");
+    }
+
+    #[test]
+    fn a_new_show_is_a_mapped_50x50_zone_running_its_color_cell() {
+        let show = empty_show();
+        let patch = &show.patch;
+        assert_eq!(patch.fixtures.len(), (DEFAULT_RIG * DEFAULT_RIG) as usize);
+        assert_eq!(patch.zones[0].mapping_size, [DEFAULT_RIG, DEFAULT_RIG, 1]);
+        assert_eq!(patch.matrix_size[..2], [DEFAULT_RIG, DEFAULT_RIG]);
+        let universes: std::collections::BTreeSet<u16> = patch
+            .fixtures
+            .iter()
+            .flat_map(|f| f.pixels.iter().map(|p| p.universe))
+            .collect();
+        assert_eq!(universes.len(), 15, "2500 RGB px at 170 per universe");
+        assert_eq!(patch.fixtures[0].name, "Generic RGB 1 pixel #1");
+        patch.clone().compile().expect("default patch compiles");
+
+        let zs = &show.zones[0];
+        assert_eq!(zs.active, Some(0));
+        assert_eq!(zs.grid.len(), GRID_CELLS);
+        match &zs.grid[0].layers[0].source {
+            Source::Shader { effect_id, params } => {
+                assert_eq!(effect_id, "solid");
+                assert!(params.iter().next().is_none(), "manifest defaults: R=G=B=0");
+            }
+            other => panic!("cell 1 is not the Color effect: {other:?}"),
+        }
     }
 
     #[test]
