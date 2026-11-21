@@ -56,6 +56,14 @@ const QUICK_STRIP_H = 28;
 const PICKER_W = 640;
 const PICKER_H = 330;
 
+/** Whether a coloured cell reads as LIGHT as shown — idle darkened by `--cell-shade`
+ *  (35% black), running lit by `--cell-glow` (20% white) — so its text goes dark
+ *  (keep the factors in sync with those tokens). Same luma rule as the colour selector. */
+function isLightCell([r, g, b]: Rgb, active: boolean): boolean {
+  const shown = (c: number) => (active ? c + (255 - c) * 0.2 : c * 0.65);
+  return shown(r) * 0.299 + shown(g) * 0.587 + shown(b) * 0.114 > 150;
+}
+
 interface MenuState {
   index: number;
   x: number;
@@ -256,7 +264,7 @@ export function SceneGrid({ zoneId, slot, onActiveChange }: SceneGridProps) {
                   else cellEls.current.delete(cell.index);
                 }}
                 className={`pr-cell ${assigned ? "is-assigned" : "is-empty"}${cell.active ? " is-active" : ""}${
-                  assigned && cell.color ? " has-color" : ""
+                  assigned && cell.color ? ` has-color${isLightCell(cell.color, cell.active) ? " is-light" : ""}` : ""
                 }${menu?.index === cell.index ? " is-menu" : ""}`}
                 style={assigned ? style : undefined}
                 onPointerDown={(e) => onCellPointerDown(e, cell)}

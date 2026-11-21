@@ -67,7 +67,8 @@
 
   /* ---- Scene-grid cells (a cell's own colour is the operator's label colour) ---- */
   --cell-ink:        #fff;                     /* label on a coloured cell */
-  --cell-ink-shadow: 0 1px 2px rgba(0,0,0,.85);/* keeps it legible on light colours */
+  --cell-ink-shadow: 0 1px 2px rgba(0,0,0,.85);/* keeps it legible on mid colours */
+  --cell-ink-dark:   #111;                     /* label on a LIGHT coloured cell */
   --cell-shade:      rgba(0,0,0,.35);          /* darkens a coloured cell at idle */
   --cell-glow:       rgba(255,255,255,.2);     /* lights the running cell up */
   --cell-max:        90px;                     /* cell size cap */
@@ -521,7 +522,10 @@ input, textarea, [contenteditable="true"] {
    inside `.pr-grid-wrap` (the largest square that fits 8 columns across AND every row
    down, capped at --cell-max), so the grid region needs no width of its own. */
 .pr-region-grid { flex: 1 1 auto; }
-.pr-region-preview { flex: 0 0 auto; width: min(40vh, 400px); height: min(40vh, 400px); }
+/* Also bounded by the row's own height (`100cqh` of `.pr-mainwin-mid`): in a normal
+   (non-maximized) window the row is shorter than 40vh and the square would spill over the
+   work row below. */
+.pr-region-preview { flex: 0 0 auto; width: min(40vh, 400px, 100cqh); height: min(40vh, 400px, 100cqh); }
 /* Bottom work row: FIXED height, not resizable (console-style). The effect-parameters
    panel (a swappable slot — groups will share it later) sits left at a fixed width where
    every parameter fits without scrolling; the master strip sits right at a fixed width. */
@@ -669,6 +673,11 @@ input, textarea, [contenteditable="true"] {
 .pr-cell-rename { width: 100%; min-width: 0; background: var(--bg-input); color: var(--text); border: 1px solid var(--accent); border-radius: var(--r-sm); font-family: var(--font-ui); font-size: var(--fs-tiny); font-weight: 700; padding: 2px 3px; outline: none; }
 .pr-cell-clear { position: absolute; top: 0; right: 1px; background: transparent; border: none; color: var(--text-dim); cursor: pointer; font-size: var(--fs-small); line-height: 1; padding: 1px 3px; display: none; }
 .pr-cell.has-color .pr-cell-clear { color: var(--cell-ink); text-shadow: var(--cell-ink-shadow); }
+/* Light colours (white, yellow, …) take dark text instead — luma decided in SceneGrid. */
+.pr-cell.has-color.is-light .pr-cell-num,
+.pr-cell.has-color.is-light .pr-cell-title,
+.pr-cell.has-color.is-light .pr-cell-effect,
+.pr-cell.has-color.is-light .pr-cell-clear { color: var(--cell-ink-dark); text-shadow: none; }
 .pr-cell.is-assigned:hover .pr-cell-clear { display: block; }
 .pr-cell-clear:hover { color: var(--accent-text); }
 
