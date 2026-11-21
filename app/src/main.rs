@@ -15,8 +15,9 @@ use std::sync::{Arc, Mutex};
 
 use glam::Vec3;
 use prisma_editor::{
-    aggregate, load_library, next_free_address, plan, plan_preview, save_library, EditOp,
-    FixtureLibrary, FixtureType, PatchDraft, PlacementSpec, PreviewRun, SelectionAggregate,
+    aggregate, load_library, next_fixture_id, next_free_address, plan, plan_preview, save_library,
+    EditOp, FixtureLibrary, FixtureType, PatchDraft, PlacementError, PlacementSpec, PreviewRun,
+    SelectionAggregate,
 };
 use prisma_engine::{
     host_interfaces, load_mappings, load_show, save_mappings, save_show, ArtNetNode, Cell,
@@ -538,6 +539,26 @@ fn editor_next_free_address(state: State<AppState>) -> [u16; 2] {
     [u, c]
 }
 
+/// The next free fixture ID, to prefill "Iniciar ID de instalación".
+#[tauri::command]
+fn editor_next_fixture_id(state: State<AppState>) -> u32 {
+    next_fixture_id(state.draft.lock().unwrap().patch())
+}
+
+/// A placement error in the operator's words (the dialog shows it verbatim).
+fn placement_error_text(e: &PlacementError) -> String {
+    match e {
+        PlacementError::Empty => "No hay nada que añadir (cuenta o píxeles en cero).".into(),
+        PlacementError::FixtureTooBig { span } => {
+            format!("La instalación necesita {span} canales: no entra en un universo (512).")
+        }
+        PlacementError::StartChannelTooHigh { start, span } => format!(
+            "La instalación necesita {span} canales y no entra desde el canal {start} hasta el final del universo."
+        ),
+        PlacementError::OutOfUniverses => "Se acabaron los universos DMX.".into(),
+    }
+}
+
 /// Place fixtures from the dialog spec (§4). They go into `spec.zone` — the active
 /// zone (§4.1/§6). Appends via an undoable `InsertFixtures` op.
 #[tauri::command]
@@ -546,7 +567,7 @@ fn editor_place_fixtures(
     spec: PlacementSpec,
 ) -> Result<EditorState, String> {
     let mut draft = state.draft.lock().unwrap();
-    let fixtures = plan(&spec).map_err(|e| e.to_string())?;
+    let fixtures = plan(&spec).map_err(|e| placement_error_text(&e))?;
     let base = draft.patch().fixtures.len();
     let at = fixtures
         .into_iter()
@@ -2097,6 +2118,7 @@ fn main() {
             editor_library_update_type,
             editor_library_remove_type,
             editor_next_free_address,
+            editor_next_fixture_id,
             editor_preview_placement,
             editor_place_fixtures,
             editor_translate_fixtures,

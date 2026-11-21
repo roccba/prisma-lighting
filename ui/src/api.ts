@@ -102,18 +102,15 @@ export interface PixelRole {
   pixels: number[];
 }
 
-/** Signal direction — the way a fixture's pixels are wired (§4.1), all eight. */
-export type Direction =
-  | "Right"
-  | "Left"
-  | "Down"
-  | "Up"
-  | "DownRight"
-  | "DownLeft"
-  | "UpRight"
-  | "UpLeft";
+/** Direction of the pixels inside a fixture: clockwise from "Original" (a strip runs
+ *  left → right). The 45° steps are Prisma's diagonals. */
+export type Rotation = "R0" | "R45" | "R90" | "R135" | "R180" | "R225" | "R270" | "R315";
 
-export type Rotation = "R0" | "R90" | "R180" | "R270";
+/** Grid corner that receives the first DMX address (professional consoles "Esquina inicial"). */
+export type StartCorner = "TopLeft" | "TopRight" | "BottomLeft" | "BottomRight";
+
+/** Addressing walks rows (Horizontal) or columns (Vertical) first. */
+export type MainOrientation = "Horizontal" | "Vertical";
 
 export interface FixtureType {
   name: string;
@@ -133,18 +130,22 @@ export interface FixtureLibrary {
 
 export interface PlacementSpec {
   fixture_type: FixtureType;
-  name_prefix: string;
   start_number: number;
   rotation: Rotation;
   count: [number, number, number];
+  /** Gap in cells BETWEEN neighbouring fixtures (0 = touching). */
   offset: [number, number, number];
+  /** Top-left cell of the grid, 0-based (the dialog shows it 1-based). */
   start_position: [number, number, number];
-  direction: Direction;
+  start_corner: StartCorner;
+  orientation: MainOrientation;
   snake: boolean;
+  snake_rotation: boolean;
   start_universe: number;
   start_channel: number;
   channel_offset: number;
   universe_offset: number;
+  start_channel_every_universe: boolean;
   fixtures_per_universe: number | null;
   zone: string;
 }
@@ -173,6 +174,8 @@ export const removeFixtureType = (index: number) =>
   invoke<FixtureLibrary>("editor_library_remove_type", { index });
 
 export const nextFreeAddress = () => invoke<[number, number]>("editor_next_free_address");
+
+export const nextFixtureId = () => invoke<number>("editor_next_fixture_id");
 
 export const previewPlacement = (spec: PlacementSpec) =>
   invoke<PreviewRun[]>("editor_preview_placement", { spec });

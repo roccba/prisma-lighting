@@ -19,8 +19,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use prisma_editor::{
-    next_free_address, plan, samples, Direction, EditOp, FixtureArrangement, FixtureType,
-    PatchDraft, PlacementSpec, Rotation,
+    next_free_address, plan, samples, EditOp, FixtureArrangement, FixtureType, MainOrientation,
+    PatchDraft, PlacementSpec, Rotation, StartCorner,
 };
 use prisma_engine::{Engine, EngineConfig};
 use prisma_output::sink;
@@ -55,7 +55,7 @@ fn tube_type() -> FixtureType {
     }
 }
 
-/// A placement spec: `count` tubes stepping in `x`, running `direction`, addressed from
+/// A placement spec: `count` tubes stepping in `x`, rotated 90° (pixels running down), addressed from
 /// `(universe, channel)`, into `zone`.
 fn placement(
     zone: Uuid,
@@ -66,18 +66,20 @@ fn placement(
 ) -> PlacementSpec {
     PlacementSpec {
         fixture_type: tube_type(),
-        name_prefix: "Patio Extra".into(),
         start_number: 1,
-        rotation: Rotation::R0,
+        rotation: Rotation::R90,
         count: [count, 1, 1],
-        offset: [3, 0, 0],
+        offset: [2, 0, 0],
         start_position: start,
-        direction: Direction::Down,
+        start_corner: StartCorner::TopLeft,
+        orientation: MainOrientation::Horizontal,
         snake: false,
+        snake_rotation: false,
         start_universe: universe,
         start_channel: channel,
         channel_offset: 0,
         universe_offset: 0,
+        start_channel_every_universe: false,
         fixtures_per_universe: None,
         zone,
     }

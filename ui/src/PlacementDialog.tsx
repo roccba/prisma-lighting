@@ -1,19 +1,33 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   fixtureTypes,
+  nextFixtureId,
   nextFreeAddress,
   placeFixtures,
-  type Direction,
   type EditorState,
   type FixtureType,
+  type MainOrientation,
   type Patch,
   type PlacementSpec,
+  type Rotation,
+  type StartCorner,
 } from "./api";
+import { Check } from "./Check";
+import { Dropdown } from "./Dropdown";
+import { NumberField } from "./NumberField";
 
-// The "Add fixtures" dialog: Fixture · Placement · Addressing,
-// into the ACTIVE zone (§4.1). Signal DIRECTION is separate from orientation and
-// all eight are reachable (§4.1). A schematic signal-direction preview shows the
-// routing before applying. Z and rotation exist but are inert while 2-D.
+// "Añadir instalaciones" — modelled on the classic Add Fixtures dialog (M7 spec §4.1).
+//
+// Two independent facts, kept apart exactly as professional consoles does:
+//  · ROTACIÓN — which way the pixels run INSIDE each fixture (8 directions; the 45°
+//    steps are Prisma's diagonals). The product preview draws the fixture as created
+//    in the library, turned by this rotation, with pixel 1 (the signal input) lit.
+//  · ESQUINA INICIAL + ORIENTACIÓN PRINCIPAL + SNAKE — the ORDER in which the fixtures
+//    of the grid receive their DMX addresses. The addressing preview draws that path as
+//    a fixed 5-line schematic: it shows the route of the signal, never the quantity.
+//
+// "Añadir" does not close the dialog: batches can be added one after another, and the
+// ID / universe / channel refresh to the next free values after each one.
 
 interface Props {
   patch: Patch;
@@ -22,321 +36,477 @@ interface Props {
   onClose: () => void;
 }
 
-const DIRECTIONS: { id: Direction; label: string }[] = [
-  { id: "Right", label: "→  Horizontal (L→R)" },
-  { id: "Left", label: "←  Horizontal (R→L)" },
-  { id: "Down", label: "↓  Vertical (T→B)" },
-  { id: "Up", label: "↑  Vertical (B→T)" },
-  { id: "DownRight", label: "↘  Diagonal" },
-  { id: "DownLeft", label: "↙  Diagonal" },
-  { id: "UpRight", label: "↗  Diagonal" },
-  { id: "UpLeft", label: "↖  Diagonal" },
+const ROTATIONS: { value: Rotation; label: string }[] = [
+  { value: "R0", label: "Original" },
+  { value: "R45", label: "45°" },
+  { value: "R90", label: "90°" },
+  { value: "R135", label: "135°" },
+  { value: "R180", label: "180°" },
+  { value: "R225", label: "225°" },
+  { value: "R270", label: "270°" },
+  { value: "R315", label: "315°" },
 ];
 
-/** A numeric field that can be CLEARED and typed over (a default 0 you cannot delete
- *  is what made these fields annoying). Keeps a local text draft: while it is empty the
- *  parent value is untouched, and it reverts to the last value on blur if still empty. */
-function NumField(props: {
-  label: string;
-  value: number;
-  onChange?: (n: number) => void;
-  min?: number;
-  disabled?: boolean;
-}) {
-  const [draft, setDraft] = useState(String(props.value));
-  useEffect(() => {
-    if (parseInt(draft, 10) !== props.value) setDraft(String(props.value));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.value]);
+const CORNERS: { value: StartCorner; label: string }[] = [
+  { value: "TopLeft", label: "Superior izquierda" },
+  { value: "TopRight", label: "Superior derecha" },
+  { value: "BottomLeft", label: "Inferior izquierda" },
+  { value: "BottomRight", label: "Inferior derecha" },
+];
 
-  const clampEmit = (raw: string) => {
-    const n = parseInt(raw, 10);
-    if (Number.isNaN(n)) return;
-    const c = props.min != null && n < props.min ? props.min : n;
-    props.onChange?.(c);
-  };
+const ORIENTATIONS: { value: MainOrientation; label: string }[] = [
+  { value: "Horizontal", label: "Horizontal" },
+  { value: "Vertical", label: "Vertical" },
+];
 
-  return (
-    <label className="field">
-      <span>{props.label}</span>
-      <input
-        type="number"
-        value={draft}
-        min={props.min}
-        disabled={props.disabled}
-        onChange={(e) => {
-          setDraft(e.target.value);
-          clampEmit(e.target.value);
-        }}
-        onBlur={() => {
-          // Empty (or garbage) on blur → snap back to the parent's current value.
-          if (Number.isNaN(parseInt(draft, 10))) setDraft(String(props.value));
-        }}
-      />
-    </label>
-  );
-}
+/** Per-pixel cell step of a strip at `r` — mirrors `Rotation::step` in the backend. */
+const STEP: Record<Rotation, [number, number]> = {
+  R0: [1, 0],
+  R45: [1, 1],
+  R90: [0, 1],
+  R135: [-1, 1],
+  R180: [-1, 0],
+  R225: [-1, -1],
+  R270: [0, -1],
+  R315: [1, -1],
+};
 
-/** Normalised vertices (0..1) of a SCHEMATIC signal route for a given direction + snake
- *  — a fixed-resolution illustration of *where the signal starts and which way it runs*,
- *  NOT one mark per fixture. This is the addressing-preview idea:
- *  the picture shows direction, never quantity, so a 4-pixel and a 10 000-pixel placement
- *  draw the same cheap schematic (and the dialog never chokes rendering thousands). */
-function schematicPoints(direction: Direction, snake: boolean): { x: number; y: number }[] {
-  const diagonal: Partial<Record<Direction, { x: number; y: number }[]>> = {
-    DownRight: [{ x: 0, y: 0 }, { x: 1, y: 1 }],
-    DownLeft: [{ x: 1, y: 0 }, { x: 0, y: 1 }],
-    UpRight: [{ x: 0, y: 1 }, { x: 1, y: 0 }],
-    UpLeft: [{ x: 1, y: 1 }, { x: 0, y: 0 }],
-  };
-  if (diagonal[direction]) return diagonal[direction]!;
+const componentCount = (t: FixtureType) => (t.components === "Rgbw" ? 4 : 3);
 
-  const vertical = direction === "Up" || direction === "Down";
-  const N = 4; // representative lines — fixed, so the schematic never scales with count
-  const pts: { x: number; y: number }[] = [];
-  for (let i = 0; i < N; i++) {
-    const cross = i / (N - 1); // 0..1 across the lines
-    const forward = !snake || i % 2 === 0; // snake reverses alternate lines (U-bends)
-    const a = forward ? 0 : 1;
-    const b = forward ? 1 : 0;
-    if (vertical) {
-      pts.push({ x: cross, y: a }, { x: cross, y: b });
-    } else {
-      pts.push({ x: a, y: cross }, { x: b, y: cross });
-    }
-  }
-  // Direction sign: Up flips the vertical travel, Left flips the horizontal travel.
-  const flipX = direction === "Left";
-  const flipY = direction === "Up";
-  return pts.map((p) => ({ x: flipX ? 1 - p.x : p.x, y: flipY ? 1 - p.y : p.y }));
-}
-
-/** Draws the schematic route: one blue stroke, a hollow knob at the signal start, an
- *  arrowhead at the finish (§4.1). Cheap and constant-cost — depends only on direction. */
-function DirectionPreview({ direction, snake }: { direction: Direction; snake: boolean }) {
+/** A canvas sized to its box at device-pixel resolution, redrawn when `deps` change. */
+function useCanvas(draw: (ctx: CanvasRenderingContext2D, w: number, h: number, css: CSSStyleDeclaration) => void, deps: unknown[]) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
     const dpr = window.devicePixelRatio || 1;
-    const w = canvas.clientWidth,
-      h = canvas.clientHeight;
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
     canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(h * dpr);
-    const ctx = canvas.getContext("2d")!;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const css = getComputedStyle(document.documentElement);
-    const accent = css.getPropertyValue("--accent-bright").trim() || "#1F9CFF";
-    const bg = css.getPropertyValue("--bg-input").trim() || "#000";
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, w, h);
+    draw(ctx, w, h, getComputedStyle(document.documentElement));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  return ref;
+}
 
-    const pts = schematicPoints(direction, snake);
-    const m = 22;
-    const X = (x: number) => m + x * (w - 2 * m);
-    const Y = (y: number) => m + y * (h - 2 * m);
+/** Shade a #rrggbb colour toward black (k < 0) or white (k > 0). */
+function shade(hex: string, k: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  const ch = (c: number) => Math.round(k < 0 ? c * (1 + k) : c + (255 - c) * k);
+  const r = ch((n >> 16) & 255),
+    g = ch((n >> 8) & 255),
+    b = ch(n & 255);
+  return `rgb(${r},${g},${b})`;
+}
 
-    ctx.strokeStyle = accent;
-    ctx.lineWidth = 3;
-    ctx.lineJoin = "round";
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(X(pts[0].x), Y(pts[0].y));
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(X(pts[i].x), Y(pts[i].y));
-    ctx.stroke();
+/** "Vista previa de instalación": the fixture as created, one cube per pixel along its
+ *  arrangement, turned by the rotation; pixel 1 (the signal input) in the accent colour. */
+function ProductPreview({ type, rotation }: { type: FixtureType | undefined; rotation: Rotation }) {
+  const ref = useCanvas(
+    (ctx, w, h, css) => {
+      if (!type || type.pixel_count <= 0) return;
+      const n = type.pixel_count;
+      const [dx, dy] = STEP[rotation];
+      const cols = dx !== 0 ? n : 1;
+      const rows = dy !== 0 ? n : 1;
+      const DEPTH = 0.32; // oblique depth, as a fraction of the cube size
+      const pad = 14;
+      const s = Math.min(150, (w - 2 * pad) / (cols + DEPTH), (h - 2 * pad) / (rows + DEPTH));
+      const d = s * DEPTH;
+      const gap = n === 1 ? 0 : Math.max(1, s * 0.14);
+      const face = s - gap;
+      const ox = (w - (cols * s + d)) / 2;
+      const oy = (h - (rows * s + d)) / 2 + d;
+      const fx = dx < 0 ? cols - 1 : 0;
+      const fy = dy < 0 ? rows - 1 : 0;
 
-    // Start knob — a hollow circle at the signal origin.
-    ctx.fillStyle = bg;
-    ctx.strokeStyle = "#eaf1ff";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(X(pts[0].x), Y(pts[0].y), 6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
+      const accent = css.getPropertyValue("--accent-bright").trim() || "#1F9CFF";
+      const grey = "#d9d9d9";
 
-    // Arrowhead at the finish, along the last segment.
-    const a = pts[pts.length - 1],
-      b = pts[pts.length - 2];
-    const ex = X(a.x),
-      ey = Y(a.y);
-    const dx = ex - X(b.x),
-      dy = ey - Y(b.y);
-    const len = Math.hypot(dx, dy) || 1;
-    const ux = dx / len,
-      uy = dy / len,
-      hs = 12;
-    ctx.strokeStyle = accent;
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(ex, ey);
-    ctx.lineTo(ex - ux * hs - uy * hs * 0.5, ey - uy * hs + ux * hs * 0.5);
-    ctx.moveTo(ex, ey);
-    ctx.lineTo(ex - ux * hs + uy * hs * 0.5, ey - uy * hs - ux * hs * 0.5);
-    ctx.stroke();
-  }, [direction, snake]);
-  return <canvas ref={ref} className="preview-canvas" />;
+      // Painter's order for an up-right oblique: lower rows first, then left to right.
+      const cells = Array.from({ length: n }, (_, i) => ({ i, x: fx + dx * i, y: fy + dy * i }));
+      cells.sort((a, b) => b.y - a.y || a.x - b.x);
+
+      for (const c of cells) {
+        const base = c.i === 0 ? accent : grey;
+        const x = ox + c.x * s;
+        const y = oy + c.y * s;
+        // Top face.
+        if (face > 5) {
+          ctx.fillStyle = shade(base, 0.25);
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(x + d, y - d);
+          ctx.lineTo(x + face + d, y - d);
+          ctx.lineTo(x + face, y);
+          ctx.closePath();
+          ctx.fill();
+          // Right face.
+          ctx.fillStyle = shade(base, -0.28);
+          ctx.beginPath();
+          ctx.moveTo(x + face, y);
+          ctx.lineTo(x + face + d, y - d);
+          ctx.lineTo(x + face + d, y + face - d);
+          ctx.lineTo(x + face, y + face);
+          ctx.closePath();
+          ctx.fill();
+        }
+        // Front face.
+        ctx.fillStyle = base;
+        ctx.fillRect(x, y, face, face);
+      }
+    },
+    [type, rotation],
+  );
+  return <canvas ref={ref} className="pr-place-canvas" />;
+}
+
+/** "Vista previa de direccionamiento": the route the signal takes through the grid, as a
+ *  fixed 5-line schematic — start corner + main orientation + snake, never the quantity. */
+function AddressingPreview({ corner, orientation, snake }: { corner: StartCorner; orientation: MainOrientation; snake: boolean }) {
+  const ref = useCanvas(
+    (ctx, w, h, css) => {
+      const LINES = 5;
+      const t = 9; // stroke thickness
+      const m = 22;
+      const color = css.getPropertyValue("--text-label").trim() || "#aaa";
+      const knobRing = css.getPropertyValue("--text").trim() || "#d4d4d4";
+      const left = corner === "TopLeft" || corner === "BottomLeft";
+      const top = corner === "TopLeft" || corner === "TopRight";
+      const horizontal = orientation === "Horizontal";
+
+      // Each line as [start, end] in pixels, in signal order.
+      const lines: [number, number, number, number][] = [];
+      for (let i = 0; i < LINES; i++) {
+        const k = i / (LINES - 1); // 0..1 across the lines
+        const reversed = snake && i % 2 === 1;
+        if (horizontal) {
+          const y = m + (top ? k : 1 - k) * (h - 2 * m);
+          const fwd = left !== reversed; // runs left → right
+          const x0 = fwd ? m : w - m;
+          const x1 = fwd ? w - m : m;
+          lines.push([x0, y, x1, y]);
+        } else {
+          const x = m + (left ? k : 1 - k) * (w - 2 * m);
+          const fwd = top !== reversed; // runs top → bottom
+          const y0 = fwd ? m : h - m;
+          const y1 = fwd ? h - m : m;
+          lines.push([x, y0, x, y1]);
+        }
+      }
+
+      ctx.fillStyle = color;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = t;
+      ctx.lineJoin = "miter";
+      ctx.lineCap = "butt";
+
+      if (snake) {
+        // One folded path: line, U-turn along the edge, next line...
+        ctx.beginPath();
+        ctx.moveTo(lines[0][0], lines[0][1]);
+        for (const [x0, y0, x1, y1] of lines) {
+          ctx.lineTo(x0, y0);
+          ctx.lineTo(x1, y1);
+        }
+        ctx.stroke();
+      } else {
+        // Separate lines, each tapering to a point at its end (the classic arrow-like tips).
+        for (const [x0, y0, x1, y1] of lines) {
+          const len = Math.hypot(x1 - x0, y1 - y0) || 1;
+          const ux = (x1 - x0) / len,
+            uy = (y1 - y0) / len;
+          const nx = -uy * (t / 2),
+            ny = ux * (t / 2);
+          const tip = t * 1.6;
+          ctx.beginPath();
+          ctx.moveTo(x0 + nx, y0 + ny);
+          ctx.lineTo(x1 - ux * tip + nx, y1 - uy * tip + ny);
+          ctx.lineTo(x1, y1);
+          ctx.lineTo(x1 - ux * tip - nx, y1 - uy * tip - ny);
+          ctx.lineTo(x0 - nx, y0 - ny);
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+
+      // Start knob at the signal origin.
+      const [sx, sy] = lines[0];
+      ctx.beginPath();
+      ctx.arc(sx, sy, t, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = knobRing;
+      ctx.stroke();
+    },
+    [corner, orientation, snake],
+  );
+  return <canvas ref={ref} className="pr-place-canvas" />;
+}
+
+function Group({ title, children, className }: { title: string; children: ReactNode; className?: string }) {
+  return (
+    <section className={`pr-group${className ? ` ${className}` : ""}`}>
+      <div className="pr-group-head">
+        <span>{title}</span>
+      </div>
+      <div className="pr-group-body">{children}</div>
+    </section>
+  );
+}
+
+function Row({ label, children, disabled }: { label: string; children: ReactNode; disabled?: boolean }) {
+  return (
+    <div className={`pr-place-row${disabled ? " is-off" : ""}`}>
+      <span title={label}>{label}</span>
+      <div className="pr-place-ctl">{children}</div>
+    </div>
+  );
+}
+
+/** Three console-style [value][−][+] fields for X/Y/Z. Z stays at its value and disabled
+ *  while placement is 2-D (the field exists so 3-D does not reopen the dialog). */
+function Xyz({ values, onChange, min, zLocked = true, label }: { values: [number, number, number]; onChange: (v: [number, number, number]) => void; min?: number; zLocked?: boolean; label: string }) {
+  return (
+    <div className="pr-place-xyz">
+      {(["X", "Y", "Z"] as const).map((axis, k) => (
+        <NumberField
+          key={axis}
+          variant="pm"
+          width={42}
+          value={values[k]}
+          min={min}
+          disabled={zLocked && k === 2}
+          onChange={(v) => onChange(values.map((x, i) => (i === k ? v : x)) as [number, number, number])}
+          aria-label={`${label} ${axis}`}
+        />
+      ))}
+    </div>
+  );
 }
 
 export function PlacementDialog({ patch, activeZone, onPlaced, onClose }: Props) {
   const [types, setTypes] = useState<FixtureType[]>([]);
   const [typeIndex, setTypeIndex] = useState(0);
-  const [namePrefix, setNamePrefix] = useState("Tube");
-  const [startNumber, setStartNumber] = useState(1);
-  const [countX, setCountX] = useState(4);
-  const [countY, setCountY] = useState(1);
-  const [offsetX, setOffsetX] = useState(2);
-  const [offsetY, setOffsetY] = useState(2);
-  const [startX, setStartX] = useState(0);
-  // Default the start row to a FREE band below the existing rig, so a new zone's fixtures
-  // land in empty workspace instead of stacking on top of what is already placed (the
-  // operator can still aim anywhere). Computed once from the patch when the dialog opens.
-  const [startY, setStartY] = useState(() => {
-    let maxY = -Infinity;
-    for (const f of patch.fixtures) for (const p of f.pixels) maxY = Math.max(maxY, p.position[1]);
-    return Number.isFinite(maxY) ? Math.ceil(maxY) + 2 : 0;
-  });
-  const [direction, setDirection] = useState<Direction>("Down");
+  const [startId, setStartId] = useState(1);
+  const [rotation, setRotation] = useState<Rotation>("R0");
+  const [count, setCount] = useState<[number, number, number]>([1, 1, 1]);
+  const [offset, setOffset] = useState<[number, number, number]>([0, 0, 0]);
+  // Shown 1-based like professional consoles; the spec is 0-based.
+  const [position, setPosition] = useState<[number, number, number]>([1, 1, 1]);
+  const [corner, setCorner] = useState<StartCorner>("TopLeft");
+  const [orientation, setOrientation] = useState<MainOrientation>("Horizontal");
   const [snake, setSnake] = useState(false);
+  const [snakeRotation, setSnakeRotation] = useState(false);
   const [universe, setUniverse] = useState(1);
+  const [universeOffset, setUniverseOffset] = useState(0);
   const [channel, setChannel] = useState(1);
   const [channelOffset, setChannelOffset] = useState(0);
-  const [universeOffset, setUniverseOffset] = useState(0);
-  const [perUniverse, setPerUniverse] = useState(0);
-  const [error, setError] = useState<string | null>(null);
+  const [channelEveryUniverse, setChannelEveryUniverse] = useState(false);
+  const [perUniverse, setPerUniverse] = useState<number | null>(null); // null = the maximum
+  const [status, setStatus] = useState<{ text: string; error: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
 
   const zoneName = patch.zones.find((z) => z.id === activeZone)?.name ?? "—";
+  const type = types[typeIndex] as FixtureType | undefined;
 
-  useEffect(() => {
-    fixtureTypes().then(setTypes).catch(() => setTypes([]));
+  const refreshNext = () => {
+    nextFixtureId().then(setStartId).catch(() => {});
     nextFreeAddress()
       .then(([u, c]) => {
         setUniverse(u);
         setChannel(c);
       })
       .catch(() => {});
+  };
+
+  useEffect(() => {
+    fixtureTypes().then(setTypes).catch(() => setTypes([]));
+    refreshNext();
   }, []);
 
-  const spec: PlacementSpec | null = useMemo(() => {
-    if (types.length === 0) return null;
-    return {
-      fixture_type: types[typeIndex],
-      name_prefix: namePrefix,
-      start_number: startNumber,
-      rotation: "R0",
-      count: [countX, countY, 1],
-      offset: [offsetX, offsetY, 0],
-      start_position: [startX, startY, 0],
-      direction,
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // How many fixtures of this product fit in one universe — the ceiling of
+  // "Número límite de instalaciones por universo" (professional consoles greys its + at this value).
+  const span = type ? type.pixel_count * componentCount(type) : 0;
+  const firstChannel = channelEveryUniverse ? channel : 1;
+  const maxPerUniverse = span > 0 ? Math.max(1, Math.floor((513 - firstChannel) / (span + channelOffset))) : 1;
+  const limit = Math.min(perUniverse ?? maxPerUniverse, maxPerUniverse);
+
+  const total = count[0] * count[1];
+
+  const submit = async () => {
+    if (!type || total === 0) return;
+    const spec: PlacementSpec = {
+      fixture_type: type,
+      start_number: startId,
+      rotation,
+      count: [count[0], count[1], 1],
+      offset: [offset[0], offset[1], 0],
+      start_position: [position[0] - 1, position[1] - 1, 0],
+      start_corner: corner,
+      orientation,
       snake,
+      snake_rotation: snake && snakeRotation,
       start_universe: universe,
       start_channel: channel,
       channel_offset: channelOffset,
       universe_offset: universeOffset,
-      fixtures_per_universe: perUniverse > 0 ? perUniverse : null,
+      start_channel_every_universe: channelEveryUniverse,
+      fixtures_per_universe: limit,
       zone: activeZone,
     };
-  }, [types, typeIndex, namePrefix, startNumber, countX, countY, offsetX, offsetY, startX, startY, direction, snake, universe, channel, channelOffset, universeOffset, perUniverse, activeZone]);
-
-  const submit = async () => {
-    if (!spec) return;
     setBusy(true);
-    setError(null);
+    setStatus(null);
     try {
       onPlaced(await placeFixtures(spec));
-      onClose();
+      setStatus({ text: `${total} ${total === 1 ? "instalación añadida" : "instalaciones añadidas"} a ${zoneName}`, error: false });
+      refreshNext();
     } catch (e) {
-      setError(String(e));
+      setStatus({ text: String(e), error: true });
+    } finally {
       setBusy(false);
     }
   };
 
-  const total = Math.max(0, countX) * Math.max(0, countY);
+  const typeOptions = types.map((t, i) => ({ value: String(i), label: t.name }));
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal wide" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          Add fixtures
-          <span className="modal-zone">into zone <strong>{zoneName}</strong></span>
+    <div className="pr-picker-backdrop">
+      <div className="pr-picker pr-place" role="dialog" aria-label="Añadir instalaciones">
+        <div className="pr-picker-head pr-place-title">
+          <span>Añadir instalaciones</span>
+          <span className="pr-place-zone">
+            Zona: <b>{zoneName}</b>
+          </span>
         </div>
 
-        <div className="modal-body">
-          <section>
-            <h4>Fixture</h4>
-            <label className="field">
-              <span>Type</span>
-              <select value={typeIndex} onChange={(e) => setTypeIndex(parseInt(e.target.value, 10))}>
-                {types.map((t, i) => (<option key={i} value={i}>{t.name}</option>))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Name prefix</span>
-              <input value={namePrefix} onChange={(e) => setNamePrefix(e.target.value)} />
-            </label>
-            <NumField label="Start #" value={startNumber} onChange={setStartNumber} min={0} />
-            <label className="field">
-              <span>Rotation (2-D only)</span>
-              <select disabled value="R0"><option value="R0">Original</option></select>
-            </label>
-          </section>
+        <div className="pr-place-body">
+          <div className="pr-place-col">
+            <Group title="Instalación">
+              <Row label="Protocolo:">
+                <Dropdown value="DMX" options={[{ value: "DMX", label: "DMX" }]} onChange={() => {}} aria-label="Protocolo" />
+              </Row>
+              <Row label="Producto:">
+                {types.length > 0 ? (
+                  <Dropdown value={String(typeIndex)} options={typeOptions} onChange={(v) => { setTypeIndex(Number(v)); setPerUniverse(null); }} aria-label="Producto" />
+                ) : (
+                  <span className="pr-place-dim">La biblioteca de fixtures está vacía</span>
+                )}
+              </Row>
+              <Row label="Iniciar ID de instalación:">
+                <NumberField variant="pm" width={60} value={startId} min={1} onChange={setStartId} aria-label="Iniciar ID de instalación" />
+              </Row>
+            </Group>
 
-          <section>
-            <h4>Placement</h4>
-            <div className="field-row">
-              <NumField label="Count X" value={countX} onChange={setCountX} min={0} />
-              <NumField label="Count Y" value={countY} onChange={setCountY} min={0} />
-              <NumField label="Count Z" value={1} disabled />
-            </div>
-            <div className="field-row">
-              <NumField label="Offset X" value={offsetX} onChange={setOffsetX} />
-              <NumField label="Offset Y" value={offsetY} onChange={setOffsetY} />
-              <NumField label="Offset Z" value={0} disabled />
-            </div>
-            <div className="field-row">
-              <NumField label="Start X" value={startX} onChange={setStartX} />
-              <NumField label="Start Y" value={startY} onChange={setStartY} />
-              <NumField label="Start Z" value={0} disabled />
-            </div>
-            <label className="field">
-              <span>Signal direction</span>
-              <select value={direction} onChange={(e) => setDirection(e.target.value as Direction)}>
-                {DIRECTIONS.map((d) => (<option key={d.id} value={d.id}>{d.label}</option>))}
-              </select>
-            </label>
-          </section>
+            <Group title="Emplazamiento">
+              <Row label="Rotación:">
+                <Dropdown value={rotation} options={ROTATIONS} onChange={(v) => setRotation(v as Rotation)} aria-label="Rotación" />
+              </Row>
+              <Row label="Cuenta X/Y/Z:">
+                <Xyz label="Cuenta" values={count} min={1} onChange={setCount} />
+              </Row>
+              <Row label="" disabled>
+                <Check checked={false} onChange={() => {}} disabled>
+                  Combinar instalaciones
+                </Check>
+              </Row>
+              <Row label="Desfase X/Y/Z:">
+                <Xyz label="Desfase" values={offset} onChange={setOffset} />
+              </Row>
+              <Row label="Posición inicial X/Y/Z:">
+                <Xyz label="Posición inicial" values={position} min={1} onChange={setPosition} />
+              </Row>
+            </Group>
 
-          <section>
-            <h4>Addressing</h4>
-            <div className="field-row">
-              <NumField label="Universe" value={universe} onChange={setUniverse} min={1} />
-              <NumField label="+ offset" value={universeOffset} onChange={setUniverseOffset} min={0} />
-            </div>
-            <div className="field-row">
-              <NumField label="Channel" value={channel} onChange={setChannel} min={1} />
-              <NumField label="+ offset" value={channelOffset} onChange={setChannelOffset} min={0} />
-            </div>
-            <NumField label="Fixtures / universe (0 = no limit)" value={perUniverse} onChange={setPerUniverse} min={0} />
-            <label className="check">
-              <input type="checkbox" checked={snake} onChange={(e) => setSnake(e.target.checked)} />
-              <span>Snake mode</span>
-            </label>
-          </section>
+            <Group title="Direccionamiento">
+              <Row label="Esquina inicial:">
+                <Dropdown value={corner} options={CORNERS} onChange={(v) => setCorner(v as StartCorner)} aria-label="Esquina inicial" />
+              </Row>
+              <Row label="Orientación principal:">
+                <Dropdown value={orientation} options={ORIENTATIONS} onChange={(v) => setOrientation(v as MainOrientation)} aria-label="Orientación principal" />
+              </Row>
+              <Row label="Modo Snake:">
+                <Check checked={snake} onChange={setSnake} />
+              </Row>
+              <Row label="" disabled={!snake}>
+                <Check checked={snake && snakeRotation} onChange={setSnakeRotation} disabled={!snake}>
+                  Aplicar rotación de instalación
+                </Check>
+              </Row>
+              <Row label="Orden-Z:" disabled>
+                <Dropdown value="ft" options={[{ value: "ft", label: "De adelante hacia atrás" }]} onChange={() => {}} disabled aria-label="Orden-Z" />
+              </Row>
+              <Row label="Modo Snake Z:" disabled>
+                <span className="pr-place-pair">
+                  <Check checked={false} onChange={() => {}} disabled>
+                    Voltear H
+                  </Check>
+                  <Check checked={false} onChange={() => {}} disabled>
+                    Voltear V
+                  </Check>
+                </span>
+              </Row>
+              <Row label="Universo inicial DMX:">
+                <span className="pr-place-pair">
+                  <NumberField variant="pm" width={56} value={universe} min={1} max={32768} onChange={setUniverse} aria-label="Universo inicial DMX" />
+                  <span className="pr-place-sublbl">Desfase:</span>
+                  <NumberField variant="pm" width={48} value={universeOffset} min={0} onChange={setUniverseOffset} aria-label="Desfase de universo" />
+                </span>
+              </Row>
+              <Row label="Canal inicial DMX:">
+                <span className="pr-place-pair">
+                  <NumberField variant="pm" width={56} value={channel} min={1} max={512} onChange={setChannel} aria-label="Canal inicial DMX" />
+                  <span className="pr-place-sublbl">Desfase:</span>
+                  <NumberField variant="pm" width={48} value={channelOffset} min={0} max={511} onChange={setChannelOffset} aria-label="Desfase de canal" />
+                </span>
+              </Row>
+              <Row label="">
+                <Check checked={channelEveryUniverse} onChange={setChannelEveryUniverse}>
+                  Aplicar canal inicial DMX a cada universo
+                </Check>
+              </Row>
+              <Row label="Número límite de instalaciones por universo:">
+                <NumberField variant="pm" width={56} value={limit} min={1} max={maxPerUniverse} onChange={setPerUniverse} aria-label="Número límite de instalaciones por universo" />
+              </Row>
+            </Group>
+          </div>
+
+          <div className="pr-place-col pr-place-side">
+            <Group title="Vista previa de instalación" className="pr-place-prev">
+              <ProductPreview type={type} rotation={rotation} />
+            </Group>
+            <Group title="Vista previa de direccionamiento" className="pr-place-prev">
+              <AddressingPreview corner={corner} orientation={orientation} snake={snake} />
+            </Group>
+          </div>
         </div>
 
-        <div className="preview-section">
-          <div className="preview-label">Signal direction preview</div>
-          <DirectionPreview direction={direction} snake={snake} />
-        </div>
-
-        {error && <div className="modal-error">{error}</div>}
-
-        <div className="modal-foot">
-          <span className="modal-count">{total} fixtures</span>
-          <div className="spacer" />
-          <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
-          <button className="btn primary" onClick={submit} disabled={busy || total === 0}>Add</button>
+        <div className="pr-devmgr-foot">
+          <span className={`pr-devmgr-footstatus${status?.error ? " is-error" : ""}`} title={status?.text}>
+            {status?.text ?? ""}
+          </span>
+          <button className="pr-btn is-primary" type="button" disabled={busy || !type || total === 0} onClick={submit}>
+            Añadir
+          </button>
+          <button className="pr-btn" type="button" onClick={onClose}>
+            Cerrar
+          </button>
         </div>
       </div>
     </div>

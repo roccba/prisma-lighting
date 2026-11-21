@@ -268,13 +268,13 @@ input, textarea, [contenteditable="true"] {
 .pr-dd .pr-dd-head {
   display: flex; align-items: center; justify-content: space-between;
   background: var(--bg-input); border: 1px solid var(--btn-border-dark);
-  color: var(--accent-text); height: 26px; padding: 0 4px 0 9px;
+  color: var(--accent-text); height: 26px; padding: 0 0 0 9px; overflow: hidden;
   font-size: var(--fs-small); cursor: pointer; border-radius: var(--r-sm);
 }
 .pr-dd .pr-dd-head:hover { border-color: var(--btn-border); }
 .pr-dd.is-open .pr-dd-head { border-color: var(--accent); }
 .pr-dd .pr-dd-caret {
-  width: 20px; height: 24px; display: flex; align-items: center; justify-content: center;
+  width: 20px; align-self: stretch; flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
   background: var(--btn-face); border-left: 1px solid var(--btn-border-dark);
   margin-left: 8px; font-size: 9px; color: var(--text);
 }
@@ -907,3 +907,37 @@ input.pr-field-value:focus { outline: 1px solid var(--accent); outline-offset: -
 .pr-reach.is-online { background: var(--ok); border-color: var(--ok); }
 .pr-reach.is-silent { background: var(--btn-border); border-color: var(--btn-border); }
 .pr-reach.is-lost { background: var(--danger); border-color: var(--danger); }
+
+/* ── "Añadir instalaciones" (patch editor, the classic Add Fixtures). Fixed size: nothing
+   in it may move when a dropdown or checkbox changes. Left: the three sections; right:
+   the product preview over the addressing preview. ── */
+.pr-place { width: 810px; max-width: 96vw; height: min(684px, 96vh); display: flex; flex-direction: column; }
+.pr-place-title { display: flex; align-items: center; justify-content: space-between; }
+.pr-place-zone { text-transform: none; letter-spacing: 0; color: var(--text-dim); }
+.pr-place-zone b { color: var(--text); font-weight: 600; }
+.pr-place-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 1fr 250px; gap: 8px; padding: 8px 10px; overflow: auto; }
+.pr-place-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.pr-place-side .pr-place-prev { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; }
+.pr-place-prev > .pr-group-body { flex: 1 1 auto; min-height: 0; padding: 6px; }
+.pr-place-canvas { width: 100%; height: 100%; display: block; }
+.pr-place .pr-group-body { gap: 4px; padding: 6px 10px; }
+.pr-place .pr-group-head { height: 24px; white-space: nowrap; letter-spacing: .02em; }
+.pr-place .pr-num, .pr-place .pr-dd .pr-dd-head { height: 22px; }
+.pr-place .pr-num.pr-pm button { width: 20px; font-size: 13px; }
+.pr-place-row { display: grid; grid-template-columns: 170px 1fr; align-items: center; gap: 8px; min-height: 22px; font-size: var(--fs-base); }
+.pr-place-row > span:first-child { text-align: right; color: var(--text-label); font-size: var(--fs-small); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-place-row.is-off > span:first-child { opacity: .5; }
+.pr-place-ctl { min-width: 0; display: flex; align-items: center; }
+.pr-place-ctl > .pr-dd { flex: 1 1 auto; max-width: 280px; }
+.pr-place-xyz, .pr-place-pair { display: inline-flex; align-items: center; gap: 8px; }
+.pr-place-sublbl { color: var(--text-label); font-size: var(--fs-small); margin-left: 6px; }
+.pr-place-dim { color: var(--text-dim); font-size: var(--fs-small); }
+.pr-devmgr-footstatus.is-error { color: var(--danger); }
+
+/* "Ajustes de matriz" (the classic Matrix Settings): small, fixed, same rows as Añadir. */
+.pr-matrix { width: 340px; }
+.pr-matrix-body { gap: 6px; }
+.pr-matrix .pr-place-row { grid-template-columns: 90px 1fr; }
+.pr-matrix .pr-num { height: 22px; }
+.pr-matrix .pr-num.pr-pm button { width: 20px; font-size: 13px; }
+.pr-matrix-fit { width: 100%; margin-bottom: 4px; }

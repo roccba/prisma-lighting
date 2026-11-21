@@ -265,6 +265,7 @@ export default function Editor() {
       {matrixOpen && patch.zones.find((z) => z.id === activeZone) && (
         <MatrixDialog
           zone={patch.zones.find((z) => z.id === activeZone)!}
+          patch={patch}
           onApplied={setEditor}
           onClose={() => setMatrixOpen(false)}
         />
