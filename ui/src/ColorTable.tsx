@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
+import { PanelCellContext } from "./panelCell";
 import { setPalette } from "./api";
 import { ByteBox } from "./ByteBox";
 import { ColorSwatch, type Rgb } from "./ColorPicker";
@@ -37,6 +38,7 @@ const toLin = ([r, g, b]: Rgb): Lin => ({ r: srgb255ToLinear(r), g: srgb255ToLin
 const WHITE: Lin = { r: 1, g: 1, b: 1 };
 
 export function ColorTable({ zoneId, colors, max, onChange, at, onClose }: ColorTableProps) {
+  const cell = useContext(PanelCellContext);
   const [cols, setCols] = useState<Lin[]>(() => colors.map(([r, g, b]) => ({ r, g, b })));
   const [sel, setSel] = useState<number | null>(null);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
@@ -55,7 +57,7 @@ export function ColorTable({ zoneId, colors, max, onChange, at, onClose }: Color
       frame.current = null;
       const list = (pending.current ?? []).map((c) => [c.r, c.g, c.b] as [number, number, number]);
       pending.current = null;
-      setPalette(zoneId, list).catch(() => {});
+      setPalette(zoneId, list, cell).catch(() => {});
       onChange(list);
     });
   };

@@ -123,6 +123,9 @@ struct RequiresInfo {
 struct EffectPanelInfo {
     zone_id: Uuid,
     cell_index: Option<usize>,
+    /// Whether `cell_index` is the zone's running cell — its edits drive the output live;
+    /// any other cell's edits are only stored, for when it is played.
+    active: bool,
     effect_id: Option<String>,
     effect_name: Option<String>,
     params: Vec<ParamInfo>,
@@ -2227,15 +2230,23 @@ fn main_set_cell_color(
 
 // --- Main operation window (M8 step 5): the effect parameter panel ---
 
-/// The effect work panel for a zone (§3.5): its active cell's effect and the effect's
-/// manifest-driven parameters, each merged with the cell's stored value (else the
-/// manifest default). Empty (`effect_id: None`) when the zone has no running cell.
+/// The cell the effect panel works on: the one the operator selected on the grid, else
+/// the zone's running cell. Selecting a cell never plays it (selected ≠ active).
+fn panel_cell(zs: &ZoneShow, cell: Option<usize>) -> Option<usize> {
+    cell.filter(|i| *i < zs.grid.len()).or(zs.active)
+}
+
+/// The effect work panel for a zone (§3.5): the effect of the given `cell` (the grid's
+/// selection; `None` = the zone's running cell) and the effect's manifest-driven
+/// parameters, each merged with the cell's stored value (else the manifest default).
+/// Empty (`effect_id: None`) when that cell holds no effect.
 #[tauri::command]
-fn main_effect_panel(state: State<AppState>, zone: Uuid) -> EffectPanelInfo {
+fn main_effect_panel(state: State<AppState>, zone: Uuid, cell: Option<usize>) -> EffectPanelInfo {
     let show = state.show.lock().unwrap();
-    let empty = |cell_index| EffectPanelInfo {
+    let empty = |cell_index: Option<usize>, active: bool| EffectPanelInfo {
         zone_id: zone,
         cell_index,
+        active,
         effect_id: None,
         effect_name: None,
         params: Vec::new(),
@@ -2243,12 +2254,13 @@ fn main_effect_panel(state: State<AppState>, zone: Uuid) -> EffectPanelInfo {
         palette_max: prisma_render::PALETTE_MAX,
     };
     let Some(zs) = show.zone(zone) else {
-        return empty(None);
+        return empty(None, false);
     };
-    // The active cell's single layer (M8: one effect per cell). An active-but-empty
-    // cell (cleared) has no layer, so the panel shows its empty state.
-    let effect = zs
-        .active
+    let index = panel_cell(zs, cell);
+    let active = index.is_some() && index == zs.active;
+    // The cell's single layer (M8: one effect per cell). An empty cell has no layer, so
+    // the panel shows its empty state.
+    let effect = index
         .and_then(|i| zs.grid.get(i))
         .and_then(|c| c.layers.first())
         .map(|l| match &l.source {
@@ -2259,7 +2271,7 @@ fn main_effect_panel(state: State<AppState>, zone: Uuid) -> EffectPanelInfo {
             } => (effect_id.clone(), params, palette.clone()),
         });
     let Some((effect_id, stored, stored_palette)) = effect else {
-        return empty(zs.active);
+        return empty(index, active);
     };
     let params = prisma_render::effect_params(&effect_id)
         .into_iter()
@@ -2304,7 +2316,8 @@ fn main_effect_panel(state: State<AppState>, zone: Uuid) -> EffectPanelInfo {
         .map(|defaults| stored_palette.unwrap_or_else(|| defaults.to_vec()));
     EffectPanelInfo {
         zone_id: zone,
-        cell_index: zs.active,
+        cell_index: index,
+        active,
         effect_name: effect_display_name(&effect_id),
         effect_id: Some(effect_id),
         params,
@@ -2313,26 +2326,38 @@ fn main_effect_panel(state: State<AppState>, zone: Uuid) -> EffectPanelInfo {
     }
 }
 
-/// Replace the colour table of a zone's active effect (the "Tabla de color"): persist
-/// it into the show's cell (linear-light RGB, capped at [`prisma_render::PALETTE_MAX`])
-/// and push it live to the running effect at the next frame boundary.
+/// Replace the colour table of a cell's effect (the "Tabla de color"): persist it into
+/// the show's cell (linear-light RGB, capped at [`prisma_render::PALETTE_MAX`]) and, when
+/// that cell is the zone's running one, push it live at the next frame boundary. `cell`
+/// is the grid's selection (`None` = the running cell).
 #[tauri::command]
-fn main_set_palette(state: State<AppState>, zone: Uuid, colors: Vec<[f32; 3]>) {
+fn main_set_palette(
+    state: State<AppState>,
+    zone: Uuid,
+    colors: Vec<[f32; 3]>,
+    cell: Option<usize>,
+) {
     let mut colors = colors;
     colors.truncate(prisma_render::PALETTE_MAX);
     if colors.is_empty() {
         return; // a colour table always keeps at least one colour
     }
-    {
+    let live = {
         let mut show = state.show.lock().unwrap();
-        if let Some(zs) = show.zones.iter_mut().find(|z| z.zone_id == zone) {
-            if let Some(cell) = zs.active.and_then(|i| zs.grid.get_mut(i)) {
-                if let Some(layer) = cell.layers.first_mut() {
-                    let Source::Shader { palette, .. } = &mut layer.source;
-                    *palette = Some(colors.clone());
-                }
+        let Some(zs) = show.zones.iter_mut().find(|z| z.zone_id == zone) else {
+            return;
+        };
+        let index = panel_cell(zs, cell);
+        if let Some(c) = index.and_then(|i| zs.grid.get_mut(i)) {
+            if let Some(layer) = c.layers.first_mut() {
+                let Source::Shader { palette, .. } = &mut layer.source;
+                *palette = Some(colors.clone());
             }
         }
+        index.is_some() && index == zs.active
+    };
+    if !live {
+        return; // a cell that is not playing: stored for when it is played
     }
     if let Some(slot) = zone_slot(&state, zone) {
         if let Some(engine) = state.engine.lock().unwrap().as_ref() {
@@ -2341,22 +2366,36 @@ fn main_set_palette(state: State<AppState>, zone: Uuid, colors: Vec<[f32; 3]>) {
     }
 }
 
-/// Set one parameter of a zone's active effect (§3.5). Two writes, both needed:
-/// persist the normalized value into the show (source of truth for save and for a
-/// later re-trigger), and drive it **live** on the running effect through the engine
-/// (so the preview and wire follow at once). `value` is normalized `0..=1`.
+/// Set one parameter of a cell's effect (§3.5). `cell` is the grid's selection (`None` =
+/// the zone's running cell). The normalized value is always persisted into the show
+/// (source of truth for save and for a later trigger); only when that cell is the
+/// running one is it also driven **live** through the engine (so the preview and wire
+/// follow at once) — editing a cell that is not playing never touches the output.
+/// `value` is normalized `0..=1`.
 #[tauri::command]
-fn main_set_param(state: State<AppState>, zone: Uuid, name: String, value: f32) {
-    {
+fn main_set_param(
+    state: State<AppState>,
+    zone: Uuid,
+    name: String,
+    value: f32,
+    cell: Option<usize>,
+) {
+    let live = {
         let mut show = state.show.lock().unwrap();
-        if let Some(zs) = show.zones.iter_mut().find(|z| z.zone_id == zone) {
-            if let Some(cell) = zs.active.and_then(|i| zs.grid.get_mut(i)) {
-                if let Some(layer) = cell.layers.first_mut() {
-                    let Source::Shader { params, .. } = &mut layer.source;
-                    params.set(name.as_str(), value);
-                }
+        let Some(zs) = show.zones.iter_mut().find(|z| z.zone_id == zone) else {
+            return;
+        };
+        let index = panel_cell(zs, cell);
+        if let Some(c) = index.and_then(|i| zs.grid.get_mut(i)) {
+            if let Some(layer) = c.layers.first_mut() {
+                let Source::Shader { params, .. } = &mut layer.source;
+                params.set(name.as_str(), value);
             }
         }
+        index.is_some() && index == zs.active
+    };
+    if !live {
+        return;
     }
     if let Some(engine) = state.engine.lock().unwrap().as_ref() {
         engine.set_zone_param(zone, &name, value);

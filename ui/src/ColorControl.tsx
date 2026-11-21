@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
+import { PanelCellContext } from "./panelCell";
 import { setParam, type ParamInfo } from "./api";
 import { ByteBox } from "./ByteBox";
 import { ColorSwatch, type Rgb } from "./ColorPicker";
@@ -26,6 +27,7 @@ interface ColorControlProps {
 const TINT = { r: "#e05555", g: "#5bbf5b", b: "#5b8fe0", w: "#9a9a9a", a: "#e8e8e8" };
 
 export function ColorControl({ zoneId, r, g, b }: ColorControlProps) {
+  const cell = useContext(PanelCellContext);
   const [lin, setLin] = useState({ r: r.value_norm, g: g.value_norm, b: b.value_norm });
   useEffect(() => {
     setLin({ r: r.value_norm, g: g.value_norm, b: b.value_norm });
@@ -37,15 +39,15 @@ export function ColorControl({ zoneId, r, g, b }: ColorControlProps) {
     const param = { r, g, b }[ch];
     const linv = srgb255ToLinear(v255);
     setLin((p) => ({ ...p, [ch]: linv }));
-    setParam(zoneId, param.name, linv).catch(() => {});
+    setParam(zoneId, param.name, linv, cell).catch(() => {});
   };
 
   const writeRgb = ([R, G, B]: Rgb) => {
     const next = { r: srgb255ToLinear(R), g: srgb255ToLinear(G), b: srgb255ToLinear(B) };
     setLin(next);
-    setParam(zoneId, r.name, next.r).catch(() => {});
-    setParam(zoneId, g.name, next.g).catch(() => {});
-    setParam(zoneId, b.name, next.b).catch(() => {});
+    setParam(zoneId, r.name, next.r, cell).catch(() => {});
+    setParam(zoneId, g.name, next.g, cell).catch(() => {});
+    setParam(zoneId, b.name, next.b, cell).catch(() => {});
   };
 
   const R = linearToSrgb255(lin.r);

@@ -489,11 +489,14 @@ export interface ParamInfo {
   requires?: { param: string; choice: string | null } | null;
 }
 
-/** The effect work panel for a zone: its active cell's effect + its parameters.
- *  `effect_id` is null when the zone has no running cell (empty state). */
+/** The effect work panel for a zone: one cell's effect + its parameters — the grid's
+ *  selected cell, else the zone's running cell. `effect_id` is null when that cell is
+ *  empty (or the zone has no cell to show). */
 export interface EffectPanelInfo {
   zone_id: string;
   cell_index: number | null;
+  /** Whether `cell_index` is the zone's running cell (its edits drive the output live). */
+  active: boolean;
   effect_id: string | null;
   effect_name: string | null;
   params: ParamInfo[];
@@ -503,13 +506,15 @@ export interface EffectPanelInfo {
   palette_max: number;
 }
 
-/** The active effect and its manifest-driven parameters for a zone (§3.5). */
-export const effectPanel = (zone: string) =>
-  invoke<EffectPanelInfo>("main_effect_panel", { zone });
+/** A cell's effect and its manifest-driven parameters (§3.5). `cell` is the grid's
+ *  selection; null = the zone's running cell. */
+export const effectPanel = (zone: string, cell: number | null = null) =>
+  invoke<EffectPanelInfo>("main_effect_panel", { zone, cell });
 
-/** Replace the colour table of a zone's active effect (linear-light RGB list). Live. */
-export const setPalette = (zone: string, colors: [number, number, number][]) =>
-  invoke<void>("main_set_palette", { zone, colors });
+/** Replace the colour table of a cell's effect (linear-light RGB list). Live only when
+ *  that cell is the running one; `cell` null = the running cell. */
+export const setPalette = (zone: string, colors: [number, number, number][], cell: number | null = null) =>
+  invoke<void>("main_set_palette", { zone, colors, cell });
 
 /** Fired on `window` for every `setParam`, so the effect panel keeps its copy of the
  *  values current (a control opened later — e.g. the Tabla de color — must see what was
@@ -522,9 +527,9 @@ export interface ParamWritten {
 }
 
 /** Set one parameter of a zone's active effect (normalized 0..1). Drives it live. */
-export const setParam = (zone: string, name: string, value: number) => {
+export const setParam = (zone: string, name: string, value: number, cell: number | null = null) => {
   window.dispatchEvent(new CustomEvent<ParamWritten>(PARAM_WRITTEN, { detail: { zone, name, value } }));
-  return invoke<void>("main_set_param", { zone, name, value });
+  return invoke<void>("main_set_param", { zone, name, value, cell });
 };
 
 // --- MIDI (M9 Slice 1): input device + MIDI Learn ---

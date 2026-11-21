@@ -58,6 +58,11 @@ function MainWindowBody() {
   const [gridRev, setGridRev] = useState(0);
   // Stable, so SceneGrid's `cells-changed` subscription is not torn down every render.
   const bumpGrid = useCallback(() => setGridRev((r) => r + 1), []);
+  // The SELECTED cell of each zone's grid (zone id → cell index) — a UI state, like the
+  // selected zone: it picks what the parameter panel edits and what GO plays, and never
+  // changes output by itself (selected ≠ active). A zone with no entry shows its running
+  // cell. Remembered per zone, so switching zones and back keeps the selection.
+  const [selectedCells, setSelectedCells] = useState<Record<string, number>>({});
 
   const refreshZones = () =>
     mainZones()
@@ -131,6 +136,7 @@ function MainWindowBody() {
   useEffect(() => {
     const un = listen("layout-changed", () => {
       refreshZones();
+      setSelectedCells({}); // a new show / edited rig: old cell indices mean nothing
       setGridRev((r) => r + 1);
     });
     return () => {
@@ -297,6 +303,10 @@ function MainWindowBody() {
   }, []);
 
   const selectedZone = zones.find((z) => z.id === selected) ?? null;
+  const selectedCell = selectedZone ? (selectedCells[selectedZone.id] ?? null) : null;
+  const selectCell = (index: number) => {
+    if (selectedZone) setSelectedCells((m) => ({ ...m, [selectedZone.id]: index }));
+  };
 
   const menus: MenuDef[] = [
     {
@@ -413,6 +423,9 @@ function MainWindowBody() {
                 <SceneGrid
                   zoneId={selectedZone.id}
                   slot={zones.findIndex((z) => z.id === selectedZone.id)}
+                  selectedCell={selectedCell}
+                  onSelectCell={selectCell}
+                  rev={gridRev}
                   onActiveChange={bumpGrid}
                 />
               ) : (
@@ -433,7 +446,12 @@ function MainWindowBody() {
           <div className="pr-workrow">
             <section className="pr-region pr-workrow-panel">
               {selectedZone ? (
-                <EffectParams zoneId={selectedZone.id} rev={gridRev} />
+                <EffectParams
+                  zoneId={selectedZone.id}
+                  cell={selectedCell}
+                  rev={gridRev}
+                  onGridChange={bumpGrid}
+                />
               ) : (
                 <div className="pr-placeholder-body">Seleccioná una zona</div>
               )}

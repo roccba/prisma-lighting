@@ -661,6 +661,9 @@ input, textarea, [contenteditable="true"] {
 .pr-cell.is-assigned.is-active { background: linear-gradient(var(--cell-glow), var(--cell-glow)), var(--bg-panel-2); }
 .pr-cell.is-assigned.has-color.is-active { background: linear-gradient(var(--cell-glow), var(--cell-glow)), rgb(var(--cell-rgb)); }
 .pr-cell.is-menu { border-color: var(--accent-bright); }
+/* The SELECTED cell (what the panel edits / GO plays) — an outline, distinct from the
+   running cell's accent border: a cell can be selected without playing (selected ≠ active). */
+.pr-cell.is-selected { outline: 2px solid var(--text); outline-offset: 1px; }
 .pr-cell-num { position: absolute; top: 2px; left: 4px; font-size: var(--fs-tiny); color: var(--text-dim); font-family: var(--font-mono); }
 .pr-cell.is-active .pr-cell-num { color: var(--accent-text); }
 .pr-cell.has-color .pr-cell-num { color: var(--cell-ink); opacity: .75; text-shadow: var(--cell-ink-shadow); }
@@ -700,10 +703,6 @@ input, textarea, [contenteditable="true"] {
 .pr-picker { background: var(--bg-panel); border: 1px solid var(--btn-border); border-radius: var(--r-md); min-width: 300px; max-width: 460px; box-shadow: 0 12px 30px rgba(0,0,0,.6); }
 .pr-picker-head { padding: 8px 12px; border-bottom: 1px solid var(--divider); color: var(--text-label); font-size: var(--fs-small); text-transform: uppercase; letter-spacing: .04em; }
 .pr-picker-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 12px; }
-.pr-picker-empty { color: var(--text-dim); font-size: var(--fs-small); }
-.pr-picker-cat-title { font-size: var(--fs-tiny); color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
-.pr-picker-items { display: flex; flex-wrap: wrap; gap: 5px; }
-.pr-picker-item { min-width: 76px; }
 
 /* --- Device manager (network output) --- */
 /* The Device Manager is a FIXED-size console-style window: switching tabs or toggling
@@ -841,6 +840,17 @@ body.is-picking, body.is-picking * { cursor: crosshair !important; user-select: 
 .pr-rose-btn.is-active { border-color: var(--accent); color: var(--accent-text); box-shadow: 0 0 0 1px var(--accent) inset; }
 
 /* Palette editor (Scroll de color) — a row of editable colour slots + add/remove. */
+/* Effect panel head: the selected cell, its effect (dropdown), live/idle state and GO. */
+.pr-params-head { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; }
+.pr-params-head-label { color: var(--text-label); font-size: var(--fs-small); min-width: 60px; }
+.pr-params-state { margin-left: auto; font-size: var(--fs-small); color: var(--text-dim); }
+.pr-params-state.is-live { color: var(--ok); font-weight: 700; }
+.pr-go-btn {
+  min-width: 96px; height: 30px; font-size: var(--fs-base); font-weight: 700; letter-spacing: .08em;
+  background: var(--ok); border-color: var(--ok); color: #fff;
+}
+.pr-go-btn:hover:not(:disabled) { filter: brightness(1.12); }
+.pr-go-btn:disabled { opacity: .45; cursor: default; }
 /* Effect top button row (professional consoles: [Colores] [Atenuar] above the sliders). */
 .pr-params-buttons { flex: 0 0 auto; display: flex; gap: 8px; padding-left: 160px; }
 .pr-params-btn { min-width: 110px; }

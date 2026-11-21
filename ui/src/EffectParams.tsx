@@ -1,5 +1,20 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { effectPanel, PARAM_WRITTEN, setParam, type EffectPanelInfo, type ParamInfo, type ParamWritten } from "./api";
+import { useContext, useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  assignCell,
+  assignCellSilent,
+  effectCatalogue,
+  effectPanel,
+  PARAM_WRITTEN,
+  renameCell,
+  setCellColor,
+  setParam,
+  triggerCell,
+  zoneGrid,
+  type EffectListing,
+  type EffectPanelInfo,
+  type ParamInfo,
+  type ParamWritten,
+} from "./api";
 import { ColorControl } from "./ColorControl";
 import { Dropdown } from "./Dropdown";
 import { Fader } from "./Fader";
@@ -8,19 +23,30 @@ import { DirectionMenu } from "./DirectionMenu";
 import { ParamField, ValueBox } from "./ParamField";
 import { Rose } from "./Rose";
 import { PingPong, PlayLoop } from "./icons";
+import { PanelCellContext } from "./panelCell";
 
-// The effect parameter panel for the SELECTED zone (M8-SPEC §3.5). It builds itself from
+// The effect parameter panel for the SELECTED zone's SELECTED cell (M8-SPEC §3.5). On top:
+// the cell's effect (a dropdown over the engine's catalogue — changing it reassigns the
+// cell) and GO, which plays the cell (the classic double-click / Enter). Selecting a cell
+// never plays it (selected ≠ active): a cell that is not running is edited "blind" — its
+// values are stored and take effect when it is played; the running cell's edits are live.
+//
+// Below, the panel builds itself from
 // the effect's manifest (`main_effect_panel`) and now honours each parameter's TYPE: a
 // plain scalar → a slider; a colour group → one 255-space picker (the three channels are
 // scalar params sharing a manifest colour group); a direction → the rose. Nothing is
 // hardcoded per effect (§5.3) — a new effect's controls follow from what its manifest
-// declares. Every change writes live through the engine (and persists into the show), so
-// it shows at once in the large preview beside it and on the wire.
+// declares. Every change persists into the show and, for the running cell, writes live
+// through the engine, so it shows at once in the large preview beside it and on the wire.
 
 interface EffectParamsProps {
   zoneId: string;
-  /** Bumped by the scene grid when the active cell changes, to re-fetch the panel. */
+  /** The grid's selected cell; null = the zone's running cell. */
+  cell: number | null;
+  /** Bumped when the grid changes (fire / assign / clear), to re-fetch the panel. */
   rev: number;
+  /** Called after the panel changed the grid (effect reassigned, cell played). */
+  onGridChange?: () => void;
 }
 
 // A panel item: the grouping of raw manifest params into rendered controls. Colour
@@ -113,12 +139,13 @@ function TapButton({ onBpm, disabled }: { onBpm: (bpm: number) => void; disabled
  *  so it is identical to every other control. Owns its value locally for a smooth drag
  *  while writing every change straight to the engine; the value box edits the same value. */
 function ScalarRow({ zoneId, param, disabled }: { zoneId: string; param: ParamInfo; disabled?: boolean }) {
+  const cell = useContext(PanelCellContext);
   const [value, setValue] = useState(param.value_norm);
   useEffect(() => setValue(param.value_norm), [param.value_norm]);
 
   const change = (v: number) => {
     setValue(v);
-    setParam(zoneId, param.name, v).catch(() => {});
+    setParam(zoneId, param.name, v, cell).catch(() => {});
   };
 
   const fader = <Fader value={value} onChange={change} aria-label={param.label} />;
@@ -145,6 +172,7 @@ function ScalarRow({ zoneId, param, disabled }: { zoneId: string; param: ParamIn
  *  scalar INDEX (0..steps): the normalized value maps linearly to the choice index, and
  *  picking a choice writes the index back as `i / steps`. Used by the shape/mode selectors. */
 function EnumRow({ zoneId, param, disabled }: { zoneId: string; param: ParamInfo; disabled?: boolean }) {
+  const cell = useContext(PanelCellContext);
   const choices = param.choices ?? [];
   const steps = Math.max(1, choices.length - 1);
   const idxOf = (norm: number) => Math.min(choices.length - 1, Math.max(0, Math.round(norm * steps)));
@@ -154,7 +182,7 @@ function EnumRow({ zoneId, param, disabled }: { zoneId: string; param: ParamInfo
   const change = (v: string) => {
     const i = Number(v);
     setIdx(i);
-    setParam(zoneId, param.name, i / steps).catch(() => {});
+    setParam(zoneId, param.name, i / steps, cell).catch(() => {});
   };
 
   return (
@@ -175,6 +203,7 @@ function EnumRow({ zoneId, param, disabled }: { zoneId: string; param: ParamInfo
 
 /** An on/off parameter as a latching button (the classic "Atenuar"): lit while on. */
 function ToggleButton({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
+  const cell = useContext(PanelCellContext);
   const [on, setOn] = useState(param.value_norm > 0.5);
   useEffect(() => setOn(param.value_norm > 0.5), [param.value_norm]);
   return (
@@ -184,7 +213,7 @@ function ToggleButton({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
       aria-pressed={on}
       onClick={() => {
         setOn(!on);
-        setParam(zoneId, param.name, on ? 0 : 1).catch(() => {});
+        setParam(zoneId, param.name, on ? 0 : 1, cell).catch(() => {});
       }}
     >
       {param.label}
@@ -204,6 +233,7 @@ function paletteModeGlyph(i: number, label: string) {
 /** The colour table's play mode (the classic button beside "Colores"): an icon button that
  *  drops a vertical menu of the modes. The value is the choice INDEX, like an enum. */
 function PaletteModeButton({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
+  const cell = useContext(PanelCellContext);
   const choices = param.choices ?? [];
   const steps = Math.max(1, choices.length - 1);
   const idxOf = (norm: number) => Math.min(choices.length - 1, Math.max(0, Math.round(norm * steps)));
@@ -223,7 +253,7 @@ function PaletteModeButton({ zoneId, param }: { zoneId: string; param: ParamInfo
   const pick = (i: number) => {
     setIdx(i);
     setOpen(false);
-    setParam(zoneId, param.name, i / steps).catch(() => {});
+    setParam(zoneId, param.name, i / steps, cell).catch(() => {});
   };
 
   return (
@@ -289,12 +319,80 @@ function ColorsButton({
   );
 }
 
+/** The panel's head: the cell's effect (a dropdown over the catalogue, grouped by
+ *  category) and GO. Changing the effect reassigns the cell with the new effect's
+ *  defaults, keeping the cell's label and grid colour; a running cell keeps running
+ *  (with the new effect), any other cell stays un-played. GO plays the cell. */
+function EffectHead({
+  zoneId,
+  panel,
+  onGridChange,
+}: {
+  zoneId: string;
+  panel: EffectPanelInfo;
+  onGridChange?: () => void;
+}) {
+  const [catalogue, setCatalogue] = useState<EffectListing[]>([]);
+  useEffect(() => {
+    effectCatalogue()
+      .then(setCatalogue)
+      .catch(() => setCatalogue([]));
+  }, []);
+  const index = panel.cell_index!;
+
+  const reassign = async (effectId: string) => {
+    if (effectId === panel.effect_id) return;
+    try {
+      // The cell's label and colour survive an effect change (the assign rewrites the cell).
+      const before = (await zoneGrid(zoneId))[index];
+      const assign = panel.active ? assignCell : assignCellSilent;
+      await assign(zoneId, index, effectId, null, null);
+      if (before?.name) await renameCell(zoneId, index, before.name);
+      if (before?.color) await setCellColor(zoneId, index, before.color);
+    } catch {
+      /* the grid and panel re-read below either way */
+    }
+    onGridChange?.();
+  };
+
+  const go = () => {
+    triggerCell(zoneId, index)
+      .then(() => onGridChange?.())
+      .catch(() => {});
+  };
+
+  return (
+    <div className="pr-params-head">
+      <span className="pr-params-head-label">Celda {index + 1}</span>
+      <Dropdown
+        value={panel.effect_id ?? ""}
+        options={catalogue.map((e) => ({ value: e.id, label: e.name, group: e.category }))}
+        onChange={(v) => void reassign(v)}
+        minWidth={220}
+        aria-label="Efecto de la celda"
+      />
+      <span className={`pr-params-state${panel.active ? " is-live" : ""}`}>
+        {panel.active ? "En vivo" : "Sin activar"}
+      </span>
+      <button
+        type="button"
+        className="pr-btn pr-go-btn"
+        disabled={!panel.effect_id}
+        onClick={go}
+        title="Activar la celda (doble clic o Enter en la grilla)"
+      >
+        GO
+      </button>
+    </div>
+  );
+}
+
 /** Height of one scalar row (the slider) and the vertical gap between rows, in px —
  *  must match `.pr-field-control .pr-hslider` and `.pr-params-scalars` in theme.css. */
 const ROW_H = 40;
 const ROW_GAP = 12;
 
-export function EffectParams({ zoneId, rev }: EffectParamsProps) {
+export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsProps) {
   const [panel, setPanel] = useState<EffectPanelInfo | null>(null);
   // How many slider rows fit the panel's height; the scalars fill that many rows, then
   // continue in the next column (and the column really takes its width).
@@ -312,13 +410,13 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
 
   useEffect(() => {
     let live = true;
-    effectPanel(zoneId)
+    effectPanel(zoneId, cell)
       .then((p) => live && setPanel(p))
       .catch(() => live && setPanel(null));
     return () => {
       live = false;
     };
-  }, [zoneId, rev]);
+  }, [zoneId, cell, rev]);
 
   // Keep the loaded values current with every write, so a control mounted later (the
   // Tabla de color, the Caja de Fader, a re-rendered row) starts from the real value.
@@ -334,8 +432,13 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
     return () => window.removeEventListener(PARAM_WRITTEN, onWrite);
   }, [zoneId]);
 
-  if (!panel || !panel.effect_id) {
-    return null; // an empty cell has no parameters: the panel simply stays blank
+  if (!panel || panel.cell_index == null) {
+    return null; // no cell selected and none running: the panel simply stays blank
+  }
+  const head = <EffectHead zoneId={zoneId} panel={panel} onGridChange={onGridChange} />;
+  if (!panel.effect_id) {
+    // An empty cell (cleared): pick an effect for it from the head; no parameters yet.
+    return <div className="pr-params">{head}</div>;
   }
 
   const items = buildItems(panel.params);
@@ -349,51 +452,56 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
   const palette = panel.palette;
 
   return (
-    <div className="pr-params">
-      {(palette || buttonItems.length > 0 || palModeItems.length > 0) && (
-        <div className="pr-params-buttons">
-          {palette && (
-            <ColorsButton
-              key={`${panel.effect_id}:palette`}
-              zoneId={zoneId}
-              colors={palette}
-              max={panel.palette_max}
-              onChange={(next) => setPanel((p) => (p ? { ...p, palette: next } : p))}
-            />
-          )}
-          {palModeItems.map(
-            (item) =>
-              item.kind === "palmode" && (
-                <PaletteModeButton key={`${panel.effect_id}:${item.param.name}`} zoneId={zoneId} param={item.param} />
-              ),
-          )}
-          {buttonItems.map((item) => renderButton(item, panel.effect_id!))}
-        </div>
-      )}
-      {items.length === 0 ? (
-        null
-      ) : (
-        // Two columns: the scalar sliders as a vertical list on the left, the
-        // effect-specific controls (direction rose, colour picker, …) on the right.
-        <div className="pr-params-rows" ref={rowsRef}>
-          <div className="pr-params-col pr-params-scalars" style={{ "--param-rows": rows } as CSSProperties}>
-            {scalarItems.map((item) => (
-              <ScalarRow
-                key={`${panel.effect_id}:${item.param.name}`}
+    // Keyed by cell: switching the selected cell rebuilds every control (and closes an
+    // open Tabla de color), so nothing carries one cell's local state into another.
+    <PanelCellContext.Provider value={panel.cell_index}>
+      <div className="pr-params" key={panel.cell_index}>
+        {head}
+        {(palette || buttonItems.length > 0 || palModeItems.length > 0) && (
+          <div className="pr-params-buttons">
+            {palette && (
+              <ColorsButton
+                key={`${panel.effect_id}:palette`}
                 zoneId={zoneId}
-                param={item.param}
-                disabled={!enabledOf(item.param, panel.params)}
+                colors={palette}
+                max={panel.palette_max}
+                onChange={(next) => setPanel((p) => (p ? { ...p, palette: next } : p))}
               />
-            ))}
+            )}
+            {palModeItems.map(
+              (item) =>
+                item.kind === "palmode" && (
+                  <PaletteModeButton key={`${panel.effect_id}:${item.param.name}`} zoneId={zoneId} param={item.param} />
+                ),
+            )}
+            {buttonItems.map((item) => renderButton(item, panel.effect_id!))}
           </div>
-          {controlItems.length > 0 && (
-            <div className="pr-params-col pr-params-controls">
-              {controlItems.map((item) => renderControl(item, panel.effect_id!))}
+        )}
+        {items.length === 0 ? (
+          null
+        ) : (
+          // Two columns: the scalar sliders as a vertical list on the left, the
+          // effect-specific controls (direction rose, colour picker, …) on the right.
+          <div className="pr-params-rows" ref={rowsRef}>
+            <div className="pr-params-col pr-params-scalars" style={{ "--param-rows": rows } as CSSProperties}>
+              {scalarItems.map((item) => (
+                <ScalarRow
+                  key={`${panel.effect_id}:${item.param.name}`}
+                  zoneId={zoneId}
+                  param={item.param}
+                  disabled={!enabledOf(item.param, panel.params)}
+                />
+              ))}
             </div>
-          )}
-        </div>
-      )}
-    </div>
+            {controlItems.length > 0 && (
+              <div className="pr-params-col pr-params-controls">
+                {controlItems.map((item) => renderControl(item, panel.effect_id!))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </PanelCellContext.Provider>
   );
 
   // A button of the top row: an on/off toggle ("Colores" is drawn separately).

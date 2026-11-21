@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
+import { PanelCellContext } from "./panelCell";
 import { setParam, type ParamInfo } from "./api";
 
 // The 8-direction rose (M8-SPEC §3.5), reusing the editor's eight signal
@@ -28,13 +29,14 @@ const DIRS = [
 ];
 
 export function Rose({ zoneId, param }: RoseProps) {
+  const cell = useContext(PanelCellContext);
   const toIndex = (norm: number) => Math.round(norm * (DIRS.length - 1));
   const [index, setIndex] = useState(toIndex(param.value_norm));
   useEffect(() => setIndex(toIndex(param.value_norm)), [param.value_norm]);
 
   const pick = (i: number) => {
     setIndex(i);
-    setParam(zoneId, param.name, i / (DIRS.length - 1)).catch(() => {});
+    setParam(zoneId, param.name, i / (DIRS.length - 1), cell).catch(() => {});
   };
 
   // Just the 3×3 rose grid; the label is provided by the enclosing ParamField.

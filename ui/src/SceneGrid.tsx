@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
 import {
-  assignCell,
   assignCellSilent,
   clearCell,
   renameCell,
@@ -12,15 +11,19 @@ import {
   type CellInfo,
 } from "./api";
 import { ColorPicker, type Rgb } from "./ColorPicker";
-import { EffectPicker } from "./EffectPicker";
 import { LearnTarget } from "./midiLearn";
 
 // The scene grid of the SELECTED zone (M8-SPEC §3.3): a grid of assignable cells (the
-// zone's "scenes"). Empty cells open the effect picker; assigned cells trigger — which
-// makes that cell the zone's active content, enqueued through the frame-boundary queue
-// (step 2), so the change shows in the zone's mini-preview and on the wire. The active
-// cell is marked with the accent. Per zone, not cross-zone (the product's thesis): this
-// is the selected zone's own grid; switching the selected zone swaps to its cells.
+// zone's "scenes"). the classic model — select, then play:
+//  · a click SELECTS a cell (its effect and parameters show in the panel below) and never
+//    changes output (selected ≠ active). An empty cell is first readied with a black
+//    Color effect, silently (assigned, not played), so it has something to edit.
+//  · a double click, Enter, or the panel's GO plays the cell — it becomes the zone's
+//    active content, enqueued through the frame-boundary queue (step 2), so the change
+//    shows in the zone's mini-preview and on the wire.
+// The active cell is marked with the accent; the selected one with an outline. Per zone,
+// not cross-zone (the product's thesis): this is the selected zone's own grid; switching
+// the selected zone swaps to its cells.
 //
 // Each cell carries an operator label and a grid colour (UI only — never light on the
 // rig). Right-click opens the cell menu: rename in place, colour, copy / paste, clear.
@@ -30,10 +33,22 @@ interface SceneGridProps {
   zoneId: string;
   /** The zone's position in the show — what a MIDI pad maps to (`zone_slot`). */
   slot: number;
-  /** Called after the zone's active cell changes (fire / assign / clear), so the
-   *  effect parameter panel can re-fetch the now-active effect. */
+  /** The selected cell (what the parameter panel edits); null = none chosen, so the
+   *  running cell counts as the selection. */
+  selectedCell: number | null;
+  /** Select a cell (a click). Selection only — never plays it. */
+  onSelectCell: (index: number) => void;
+  /** Bumped when something else changed the grid (the panel reassigned or played a
+   *  cell), so the grid re-reads its cells. */
+  rev?: number;
+  /** Called after the grid changed (fire / assign / clear), so the effect parameter
+   *  panel can re-fetch. */
   onActiveChange?: () => void;
 }
+
+/** The effect an empty cell is readied with when it is selected: black Color (the
+ *  `solid` effect's defaults are black), assigned silently so nothing lights up. */
+const EMPTY_CELL_EFFECT = "solid";
 
 /** Quick colours offered above the colour selector — fixed by design. */
 const QUICK_CELL_COLORS: { label: string; rgb: Rgb }[] = [
@@ -78,9 +93,8 @@ interface ColorState {
   value: Rgb;
 }
 
-export function SceneGrid({ zoneId, slot, onActiveChange }: SceneGridProps) {
+export function SceneGrid({ zoneId, slot, selectedCell, onSelectCell, rev, onActiveChange }: SceneGridProps) {
   const [cells, setCells] = useState<CellInfo[]>([]);
-  const [pickerFor, setPickerFor] = useState<number | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [editing, setEditing] = useState<number | null>(null);
   const [color, setColor] = useState<ColorState | null>(null);
@@ -92,11 +106,19 @@ export function SceneGrid({ zoneId, slot, onActiveChange }: SceneGridProps) {
     zoneGrid(zoneId)
       .then(setCells)
       .catch(() => setCells([]));
-    setPickerFor(null);
     setMenu(null);
     setEditing(null);
     setColor(null);
   }, [zoneId]);
+
+  // Another region changed the grid (the panel's effect dropdown / GO): re-read it.
+  useEffect(() => {
+    if (rev === undefined) return;
+    zoneGrid(zoneId)
+      .then(setCells)
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rev]);
 
   // The running cell changes asynchronously (M9): a click, a pad, or a flash releasing all
   // go through the engine's cell controller, which reports back per zone. Re-read then.
@@ -113,26 +135,30 @@ export function SceneGrid({ zoneId, slot, onActiveChange }: SceneGridProps) {
     };
   }, [zoneId, onActiveChange]);
 
+  // A click selects. An empty cell is readied first (black Color, assigned silently —
+  // never played), then selected, so the panel has an effect to show and edit.
   const onCellPointerDown = (e: React.PointerEvent, cell: CellInfo) => {
-    if (e.button !== 0) return; // right button opens the cell menu, never fires
+    if (e.button !== 0) return; // right button opens the cell menu, never selects
     if (editing === cell.index) return;
     if (cell.effect_id) {
-      triggerCell(zoneId, cell.index)
-        .then((c) => {
-          setCells(c);
-          onActiveChange?.();
-        })
-        .catch(() => {});
-    } else {
-      setPickerFor(cell.index);
+      onSelectCell(cell.index);
+      return;
     }
+    assignCellSilent(zoneId, cell.index, EMPTY_CELL_EFFECT, null, null)
+      .then((c) => {
+        setCells(c);
+        onSelectCell(cell.index);
+        onActiveChange?.();
+      })
+      .catch(() => {});
   };
 
-  const onPick = (effectId: string) => {
-    const idx = pickerFor;
-    setPickerFor(null);
-    if (idx === null) return;
-    assignCell(zoneId, idx, effectId)
+  // Play a cell (double click / Enter / the panel's GO): it becomes the zone's running
+  // content. The running cell updates asynchronously and arrives as `cells-changed`.
+  const fire = (index: number) => {
+    if (!cells[index]?.effect_id) return;
+    onSelectCell(index);
+    triggerCell(zoneId, index)
       .then((c) => {
         setCells(c);
         onActiveChange?.();
@@ -156,7 +182,6 @@ export function SceneGrid({ zoneId, slot, onActiveChange }: SceneGridProps) {
   };
 
   const openMenu = (index: number, x: number, y: number) => {
-    setPickerFor(null);
     setMenu({ index, x, y });
   };
 
@@ -167,6 +192,9 @@ export function SceneGrid({ zoneId, slot, onActiveChange }: SceneGridProps) {
       e.preventDefault();
       const r = e.currentTarget.getBoundingClientRect();
       openMenu(cell.index, r.left + 8, r.top + 8);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      fire(cell.index); // professional consoles: Enter plays the cell
     }
   };
 
@@ -240,6 +268,8 @@ export function SceneGrid({ zoneId, slot, onActiveChange }: SceneGridProps) {
   };
 
   const menuCell = menu ? cells[menu.index] : undefined;
+  // With no explicit selection the running cell is what the panel shows — mark it so.
+  const shownSelected = selectedCell ?? cells.find((c) => c.active)?.index ?? null;
 
   return (
     <div className="pr-grid-wrap">
@@ -265,9 +295,12 @@ export function SceneGrid({ zoneId, slot, onActiveChange }: SceneGridProps) {
                 }}
                 className={`pr-cell ${assigned ? "is-assigned" : "is-empty"}${cell.active ? " is-active" : ""}${
                   assigned && cell.color ? ` has-color${isLightCell(cell.color, cell.active) ? " is-light" : ""}` : ""
-                }${menu?.index === cell.index ? " is-menu" : ""}`}
+                }${menu?.index === cell.index ? " is-menu" : ""}${shownSelected === cell.index ? " is-selected" : ""}`}
                 style={assigned ? style : undefined}
                 onPointerDown={(e) => onCellPointerDown(e, cell)}
+                onDoubleClick={() => {
+                  if (editing !== cell.index) fire(cell.index);
+                }}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   openMenu(cell.index, e.clientX, e.clientY);
@@ -275,7 +308,12 @@ export function SceneGrid({ zoneId, slot, onActiveChange }: SceneGridProps) {
                 onKeyDown={(e) => onCellKeyDown(e, cell)}
                 role="button"
                 tabIndex={0}
-                title={assigned ? `${title}${cell.name ? ` — ${cell.effect_name ?? ""}` : ""}` : "Vacío — asignar un efecto"}
+                aria-pressed={shownSelected === cell.index}
+                title={
+                  assigned
+                    ? `${title}${cell.name ? ` — ${cell.effect_name ?? ""}` : ""} (doble clic o Enter para activar)`
+                    : "Vacío — clic para preparar la celda"
+                }
               >
                 <span className="pr-cell-num">{cell.index + 1}</span>
                 {assigned &&
@@ -309,7 +347,6 @@ export function SceneGrid({ zoneId, slot, onActiveChange }: SceneGridProps) {
           );
         })}
       </div>
-      {pickerFor !== null && <EffectPicker onPick={onPick} onClose={() => setPickerFor(null)} />}
       {menu && menuCell && (
         <CellMenu
           key={`${menu.index}:${menu.x}:${menu.y}`}
