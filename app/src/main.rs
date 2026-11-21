@@ -24,7 +24,7 @@ use prisma_engine::{
     CellEffect, CellHost, ControlMode, ControllerMappings, DiscoveredNode, Engine, EngineConfig,
     EngineHandle, HostInterface, InterfaceResolution, Layer, LedStyle, MapTarget, MidiMapping,
     MidiNotice, MidiRuntime, NodeMonitor, NodeOrigin, NodeStatus, ParamSet, ScanError, Show,
-    ShowNetwork, Source, ZoneLiveReadout, ZoneShow,
+    ShowNetwork, Source, Takeover, ZoneLiveReadout, ZoneShow,
 };
 use prisma_midi::io::{input_port_names, MidiInputLink, MidiIoError, MidiOutputLink};
 use prisma_midi::{DeviceProfile, APC40_KEYWORDS};
@@ -1827,6 +1827,23 @@ fn midi_configure(
     Ok(profile.mappings)
 }
 
+/// Change how a mapped fader / knob takes over its value — soft takeover ("pickup",
+/// the default) or "jump" — persist the profile, and return the mappings.
+#[tauri::command]
+fn midi_set_takeover(
+    app: AppHandle,
+    target: MapTarget,
+    takeover: Takeover,
+) -> Result<Vec<MidiMapping>, String> {
+    let state = app.state::<AppState>();
+    let profile = state
+        .midi
+        .set_takeover(&target, takeover)
+        .ok_or("that control is not mapped")?;
+    persist_mappings(&app, &profile)?;
+    Ok(profile.mappings)
+}
+
 fn persist_mappings(app: &AppHandle, profile: &ControllerMappings) -> Result<(), String> {
     let json = save_mappings(profile).map_err(|e| e.to_string())?;
     let path = app
@@ -2488,6 +2505,7 @@ fn main() {
             midi_learn_cancel,
             midi_unmap,
             midi_configure,
+            midi_set_takeover,
             close_splash,
             show_main,
         ])

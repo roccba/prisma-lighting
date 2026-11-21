@@ -6,7 +6,7 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use prisma_core::show::Show;
-use prisma_core::{load_mappings, save_mappings, MapTarget, ZoneSub};
+use prisma_core::{load_mappings, save_mappings, MapTarget, Takeover, ZoneSub};
 use prisma_engine::{Engine, EngineConfig};
 use prisma_output::sink;
 use prisma_patch::{BlendMode, Patch, Zone};
@@ -55,12 +55,20 @@ fn learned_fader_drives_live_dimmers_and_survives_a_recompile() {
     let zone_a_before = engine.live().zone(0).dimmer.read_real();
 
     // Learn: zone slot 1's dimmer ← APC40 track-2 fader (CC 7, ch 1); master ← CC 14.
-    midi.arm_learn(MapTarget::ZoneSlot {
+    let zone_b_dimmer = MapTarget::ZoneSlot {
         slot: 1,
         sub: ZoneSub::Dimmer,
-    });
+    };
+    let master = MapTarget::Path("/master/dimmer".into());
+    midi.arm_learn(zone_b_dimmer.clone());
     midi.feed(&[0xB1, 7, 127]);
-    midi.arm_learn(MapTarget::Path("/master/dimmer".into()));
+    midi.arm_learn(master.clone());
+    midi.feed(&[0xB0, 14, 0]);
+    // This test is about binding across a recompile, not soft takeover (tests/takeover.rs
+    // in prisma-midi): let every fader position apply at once.
+    midi.set_takeover(&zone_b_dimmer, Takeover::Jump).unwrap();
+    midi.set_takeover(&master, Takeover::Jump).unwrap();
+    midi.feed(&[0xB1, 7, 127]);
     midi.feed(&[0xB0, 14, 0]);
 
     // The live handles the output stage reads follow the hardware.

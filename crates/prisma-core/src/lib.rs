@@ -45,7 +45,8 @@ pub use deck::{DeckChange, ZoneDeck};
 pub use descriptor::{Curve, ParamDescriptor, ParamKind, RealRange};
 pub use mappings::{
     load_mappings, save_mappings, ControlKind, ControlMode, ControllerMappings, LedAnimation,
-    LedRate, LedStyle, MapTarget, MappingsError, MidiControl, MidiMapping, ResponseCurve, ZoneSub,
+    LedRate, LedStyle, MapTarget, MappingsError, MidiControl, MidiMapping, ResponseCurve, Takeover,
+    ZoneSub,
 };
 pub use notify::{Filter, Subscription, SubscriptionCloser};
 pub use overlap::{OverlapSnapshot, NO_CELL, NO_ZONE};

@@ -35,7 +35,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use prisma_core::{
     ControlMode, ControllerMappings, MapTarget, MidiControl, MidiMapping, ParameterTree,
-    ResponseCurve,
+    ResponseCurve, Takeover,
 };
 use uuid::Uuid;
 
@@ -119,9 +119,16 @@ impl State {
             }
         }
         self.lit = now;
+        // Continuous controls the device can display (knob rings) get their value too.
+        let values = binding
+            .value_targets()
+            .into_iter()
+            .filter(|v| self.device.shows_value(v.control))
+            .collect();
         self.feedback = Feedback::start(
             tree,
             targets,
+            values,
             Arc::clone(&self.device),
             Arc::clone(&self.zone_colours),
             out,
@@ -228,6 +235,24 @@ impl MidiRuntime {
         Some(s.profile.clone())
     }
 
+    /// Set how a mapped continuous control takes over its value (pickup / jump). Returns
+    /// the updated profile to persist, or `None` if `target` is not mapped.
+    pub fn set_takeover(
+        &self,
+        target: &MapTarget,
+        takeover: Takeover,
+    ) -> Option<ControllerMappings> {
+        let mut s = self.state.lock();
+        let mapping = s
+            .profile
+            .mappings
+            .iter_mut()
+            .find(|m| &m.target == target)?;
+        mapping.takeover = takeover;
+        s.rebuild();
+        Some(s.profile.clone())
+    }
+
     /// The connected device's profile.
     pub fn device(&self) -> DeviceProfile {
         (*self.state.lock().device).clone()
@@ -308,7 +333,7 @@ impl MidiRuntime {
             reaffirm_on_release(&s, &event);
             match learn_capture(&mut s, &event) {
                 Some(notice) => Some(notice),
-                None => s.binding.as_ref().and_then(|b| {
+                None => s.binding.as_mut().and_then(|b| {
                     let accepted = b.apply(&event)? == prisma_core::WriteOutcome::Accepted;
                     let control = event.control().filter(|_| accepted)?;
                     Some(MidiNotice::Applied {
@@ -369,8 +394,10 @@ fn reaffirm_on_release(s: &State, event: &MidiEvent) {
 }
 
 /// If Learn is armed and `event` is a capturable gesture, bind it, rebuild, apply
-/// the event (so the fader that was just touched takes effect at once) and return
-/// the notice. Note-offs are never captured: releasing the pad that armed nothing
+/// the event (so a pad that was just pressed takes effect at once) and return the
+/// notice. A continuous control learns under soft takeover like any other message: if
+/// the fader was touched far from the value it does NOT jump it there — it picks the
+/// value up as soon as it meets it. Note-offs are never captured: releasing the pad that armed nothing
 /// must not bind, and a note's key is already taken on its note-on.
 fn learn_capture(s: &mut State, event: &MidiEvent) -> Option<MidiNotice> {
     let capturable = matches!(event.kind, EventKind::NoteOn { .. } | EventKind::Cc { .. });
@@ -384,10 +411,11 @@ fn learn_capture(s: &mut State, event: &MidiEvent) -> Option<MidiNotice> {
         mode: learn_mode(s, &target),
         target,
         curve: ResponseCurve::Linear,
+        takeover: Takeover::Pickup,
     };
     s.profile.bind(mapping.clone());
     s.rebuild();
-    if let Some(b) = s.binding.as_ref() {
+    if let Some(b) = s.binding.as_mut() {
         b.apply(event);
     }
     Some(MidiNotice::Learned {

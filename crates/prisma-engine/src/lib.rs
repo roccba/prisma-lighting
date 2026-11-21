@@ -62,7 +62,7 @@ pub use prisma_core::show::NetworkConfig as ShowNetwork;
 // The MIDI transport (M9) and its document types, re-exported for the app shell.
 pub use prisma_core::mappings::{
     load_mappings, save_mappings, ControlMode, ControllerMappings, LedAnimation, LedRate, LedStyle,
-    MapTarget, MidiControl, MidiMapping, ZoneSub,
+    MapTarget, MidiControl, MidiMapping, Takeover, ZoneSub,
 };
 pub use prisma_midi::{MidiNotice, MidiRuntime};
 pub use zone_content::{

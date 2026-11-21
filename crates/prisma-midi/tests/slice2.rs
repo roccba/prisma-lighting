@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use prisma_core::{
     priority, ControlKind, ControlMode, ControllerMappings, Curve, ManualClock, MapTarget,
-    MidiControl, MidiMapping, ParamDescriptor, ParameterTree, RealRange, SourceId, TreeConfig,
-    ZoneSub,
+    MidiControl, MidiMapping, ParamDescriptor, ParameterTree, RealRange, SourceId, Takeover,
+    TreeConfig, ZoneSub,
 };
 use prisma_midi::{DeviceProfile, MidiOut, MidiRuntime};
 use uuid::Uuid;
@@ -160,6 +160,7 @@ fn rgb_grid_pads_light_in_the_profile_colour() {
         target: solo(0),
         mode: ControlMode::Toggle,
         curve: Default::default(),
+        takeover: Takeover::Jump,
     });
     let rt = MidiRuntime::new(profile);
     rt.set_device(DeviceProfile::apc40_mk2());
@@ -278,6 +279,7 @@ fn the_mode_handshake_goes_out_before_any_led() {
         target: solo(0),
         mode: ControlMode::Toggle,
         curve: Default::default(),
+        takeover: Takeover::Jump,
     });
     let rt = MidiRuntime::new(profile);
     rt.bind(Arc::clone(&tree), zones.to_vec());

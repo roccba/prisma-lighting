@@ -12,16 +12,27 @@
 //! async fan-out (§4.5): never polling, never on render/output, newest-wins by
 //! construction (the mailbox coalesces per parameter). It never takes the runtime's
 //! state lock, so stopping it (close + join) from under that lock cannot deadlock.
-//! Motorized-fader value echo is deliberately out of scope: CCs have no feedback.
+//!
+//! # Value feedback
+//!
+//! The same thread also follows the continuous controls the device can DISPLAY (knob
+//! LED rings, [`LedSpec::value_rings`](crate::profile::LedSpec::value_rings)): it sends
+//! each one its parameter's value as a CC — on connect and on every change. A ring then
+//! shows Prisma's value, and since the knob continues from what it shows, turning it
+//! picks the value up at once (soft takeover, see [`crate::resolver`]). Plain faders
+//! cannot show anything and get nothing.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use prisma_core::{Filter, ParamHandle, ParamId, ParamKind, ParameterTree, SubscriptionCloser};
+use prisma_core::{
+    ControlKind, Filter, ParamHandle, ParamId, ParamKind, ParameterTree, SubscriptionCloser,
+};
 
+use crate::message::cc_bytes;
 use crate::profile::{DeviceProfile, LedLevel};
-use crate::resolver::FeedbackTarget;
+use crate::resolver::{FeedbackTarget, ValueTarget};
 
 /// Where MIDI-out bytes go: the `midir` output connection in the app, a collector in
 /// tests. The injectable output seam, mirroring [`MidiRuntime::feed`](crate::MidiRuntime::feed)
@@ -68,6 +79,23 @@ pub fn send_led(
     }
 }
 
+/// Send a continuous control its parameter's current value (a knob's LED ring).
+pub fn send_value(out: &MidiOut, target: &ValueTarget) {
+    let ControlKind::Cc(cc) = target.control.kind else {
+        return;
+    };
+    if let Some(position) = target.position() {
+        out(&cc_bytes(target.control.channel, cc, position));
+    }
+}
+
+/// What one feedback target is.
+#[derive(Clone, Copy)]
+enum Shown {
+    Led(usize),
+    Value(usize),
+}
+
 /// A running feedback thread. Dropping it stops the thread and waits for it.
 pub struct Feedback {
     closer: SubscriptionCloser,
@@ -75,31 +103,45 @@ pub struct Feedback {
 }
 
 impl Feedback {
-    /// Start feedback for `targets`: paint every LED from current state once, then
-    /// follow changes. `None` when there is nothing to show.
+    /// Start feedback for `targets` (LEDs) and `values` (controls that display a value):
+    /// paint every one from current state once, then follow changes. `None` when there
+    /// is nothing to show.
     pub fn start(
         tree: &ParameterTree,
         targets: Vec<FeedbackTarget>,
+        values: Vec<ValueTarget>,
         device: Arc<DeviceProfile>,
         zone_colours: Arc<Vec<[u8; 3]>>,
         out: MidiOut,
     ) -> Option<Feedback> {
-        if targets.is_empty() {
+        if targets.is_empty() && values.is_empty() {
             return None;
+        }
+        let mut by_param: HashMap<ParamId, Vec<Shown>> = HashMap::new();
+        for (i, t) in targets.iter().enumerate() {
+            by_param
+                .entry(t.handle.id())
+                .or_default()
+                .push(Shown::Led(i));
+        }
+        for (i, v) in values.iter().enumerate() {
+            by_param
+                .entry(v.handle.id())
+                .or_default()
+                .push(Shown::Value(i));
         }
         // Subscribe BEFORE the initial paint reads state, so a change landing in
         // between is delivered rather than lost.
-        let sub = tree.subscribe(Filter::Ids(targets.iter().map(|t| t.handle.id()).collect()));
+        let sub = tree.subscribe(Filter::Ids(by_param.keys().copied().collect()));
         let closer = sub.closer();
-        let mut by_param: HashMap<ParamId, Vec<usize>> = HashMap::new();
-        for (i, t) in targets.iter().enumerate() {
-            by_param.entry(t.handle.id()).or_default().push(i);
-        }
         let thread = std::thread::Builder::new()
             .name("prisma-midi-feedback".into())
             .spawn(move || {
                 for target in &targets {
                     send_led(&out, &device, target, &zone_colours);
+                }
+                for value in &values {
+                    send_value(&out, value);
                 }
                 loop {
                     let changed = sub.recv();
@@ -107,8 +149,13 @@ impl Feedback {
                         break; // closed: rebinding, unbinding, or the tree is gone
                     }
                     for handle in &changed {
-                        for &i in by_param.get(&handle.id()).into_iter().flatten() {
-                            send_led(&out, &device, &targets[i], &zone_colours);
+                        for shown in by_param.get(&handle.id()).into_iter().flatten() {
+                            match *shown {
+                                Shown::Led(i) => {
+                                    send_led(&out, &device, &targets[i], &zone_colours)
+                                }
+                                Shown::Value(i) => send_value(&out, &values[i]),
+                            }
                         }
                     }
                 }

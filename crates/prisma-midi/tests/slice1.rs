@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use prisma_core::{
     load_mappings, priority, save_mappings, ControlKind, ControllerMappings, Curve, ManualClock,
     MapTarget, MidiControl, MidiMapping, ParamDescriptor, ParameterTree, RealRange, ResponseCurve,
-    SourceId, TreeConfig, WriteOutcome, ZoneSub,
+    SourceId, Takeover, TreeConfig, WriteOutcome, ZoneSub,
 };
 use prisma_midi::{MidiNotice, MidiRuntime};
 use uuid::Uuid;
@@ -98,13 +98,18 @@ fn learn_binds_the_next_fader_and_it_drives_the_dimmer() {
     rt.feed(&[0x80, 3, 0]);
     assert!(rt.learning().is_some());
 
-    // APC40 track-2 fader: CC 7 on channel 1. The capturing move also applies.
+    // APC40 track-2 fader: CC 7 on channel 1. Learned under soft takeover (the
+    // default): touched at half travel while the dimmer is at 0, it binds but does NOT
+    // jump the dimmer there…
     rt.feed(&[0xB1, 7, 64]);
     assert!(rt.learning().is_none());
     let path = format!("/zone/{}/dimmer", zones[1]);
-    assert!((real(&tree, &path) - 64.0 / 127.0).abs() < 1e-5);
+    assert_eq!(real(&tree, &path), 0.0);
+    // …it picks the value up when it passes through it (64 → 0 crosses 0)…
+    rt.feed(&[0xB1, 7, 0]);
+    assert_eq!(real(&tree, &path), 0.0);
 
-    // The fader keeps driving it, end to end.
+    // …and from then on keeps driving it, end to end.
     rt.feed(&[0xB1, 7, 127]);
     assert_eq!(real(&tree, &path), 1.0);
     rt.feed(&[0xB1, 7, 0]);
@@ -131,6 +136,7 @@ fn a_persisted_profile_follows_zone_slots_into_another_show() {
         target: zone_dimmer(0),
         mode: Default::default(),
         curve: ResponseCurve::Linear,
+        takeover: Takeover::Jump,
     });
     profile.bind(MidiMapping {
         led: None,
@@ -138,6 +144,7 @@ fn a_persisted_profile_follows_zone_slots_into_another_show() {
         target: MapTarget::Path("/master/dimmer".into()),
         mode: Default::default(),
         curve: ResponseCurve::Linear,
+        takeover: Takeover::Jump,
     });
     let rt = MidiRuntime::new(load_mappings(&save_mappings(&profile).unwrap()).unwrap());
 
@@ -188,7 +195,12 @@ fn midi_takes_a_ui_held_parameter_and_holds_it_against_the_ui() {
 
     // The UI is dragging the fader…
     assert_eq!(tree.write(&handle, 0.2, ui), WriteOutcome::Accepted);
-    // …and the physical fader takes it immediately (MIDI > UI).
+    let ui_real = real(&tree, &path);
+    // …a physical fader somewhere else is ignored until it meets the value (pickup)…
+    rt.feed(&[0xB0, 7, 127]);
+    assert_eq!(real(&tree, &path), ui_real);
+    // …and once it does, it takes the parameter (MIDI > UI).
+    rt.feed(&[0xB0, 7, (ui_real * 127.0).round() as u8]);
     rt.feed(&[0xB0, 7, 127]);
     assert_eq!(real(&tree, &path), 1.0);
     // The UI cannot fight it back while the hardware is active.
@@ -213,6 +225,7 @@ fn absolute_semantics_curves_toggles_and_triggers() {
         target: MapTarget::Path("/master/dimmer".into()),
         mode: Default::default(),
         curve: ResponseCurve::Exponential { gamma: 2.0 },
+        takeover: Takeover::Jump,
     });
     let pad = |note| MidiControl {
         channel: 0,
@@ -227,6 +240,7 @@ fn absolute_semantics_curves_toggles_and_triggers() {
         },
         mode: Default::default(),
         curve: ResponseCurve::Linear,
+        takeover: Takeover::Jump,
     });
     profile.bind(MidiMapping {
         led: None,
@@ -234,6 +248,7 @@ fn absolute_semantics_curves_toggles_and_triggers() {
         target: MapTarget::Path("/clock/tap".into()),
         mode: Default::default(),
         curve: ResponseCurve::Linear,
+        takeover: Takeover::Jump,
     });
 
     let applied = Arc::new(AtomicUsize::new(0));
@@ -286,6 +301,7 @@ fn unmap_and_cancel_learn() {
     assert!(rt.profile().mappings.is_empty());
 
     rt.arm_learn(zone_dimmer(0));
+    rt.feed(&[0xB0, 7, 0]); // learned at the dimmer's value (0): picked up at once
     rt.feed(&[0xB0, 7, 127]);
     let updated = rt.unmap(&zone_dimmer(0)).expect("was mapped");
     assert!(updated.mappings.is_empty());
@@ -337,10 +353,14 @@ fn speed_fader_centre_snaps_to_static() {
     let path = format!("/zone/{}/speed", zones[0]);
     let rt = MidiRuntime::new(ControllerMappings::new("t"));
     rt.bind(Arc::clone(&tree), zones.to_vec());
-    rt.arm_learn(MapTarget::ZoneSlot {
+    let speed = MapTarget::ZoneSlot {
         slot: 0,
         sub: ZoneSub::Speed,
-    });
+    };
+    rt.arm_learn(speed.clone());
+    rt.feed(&[0xB0, 8, 64]);
+    // This test is about the detent arithmetic, not takeover: every message applies.
+    rt.set_takeover(&speed, Takeover::Jump).unwrap();
 
     for value in [62u8, 63, 64, 65] {
         rt.feed(&[0xB0, 8, value]);
@@ -375,6 +395,7 @@ fn applied_notice_names_the_zone_the_control_drives() {
             target,
             mode: Default::default(),
             curve: ResponseCurve::Linear,
+            takeover: Takeover::Jump,
         });
     }
     let rt = MidiRuntime::new(profile);

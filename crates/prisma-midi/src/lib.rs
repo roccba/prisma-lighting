@@ -35,5 +35,5 @@ pub use ports::{find_port_by_keywords, APC40_KEYWORDS};
 pub use profile::{
     load_device_profile, nearest_palette_index, DeviceProfile, LedLevel, APC40_MK2_PALETTE,
 };
-pub use resolver::{source_for, Binding, FeedbackTarget};
+pub use resolver::{source_for, Binding, FeedbackTarget, ValueTarget, PICKUP_STEPS};
 pub use runtime::{MidiListener, MidiNotice, MidiRuntime};

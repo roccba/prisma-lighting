@@ -575,7 +575,12 @@ export interface MidiMapping {
   mode: ControlMode;
   curve: unknown;
   led?: LedStyle | null;
+  /** How a fader / knob takes over a value it does not match: "pickup" waits until the
+   *  control meets it (the default), "jump" applies every position at once. */
+  takeover?: Takeover;
 }
+
+export type Takeover = "pickup" | "jump";
 
 export interface MidiStatus {
   ports: string[];
@@ -602,6 +607,9 @@ export const midiLearnCancel = () => invoke<void>("midi_learn_cancel");
 export const midiUnmap = (target: MapTarget) => invoke<MidiMapping[]>("midi_unmap", { target });
 export const midiConfigure = (target: MapTarget, mode: ControlMode, led: LedStyle | null) =>
   invoke<MidiMapping[]>("midi_configure", { target, mode, led });
+
+export const midiSetTakeover = (target: MapTarget, takeover: Takeover) =>
+  invoke<MidiMapping[]>("midi_set_takeover", { target, takeover });
 
 /** Structural equality of two targets (they are small plain objects). */
 export const sameTarget = (a: MapTarget, b: MapTarget) => JSON.stringify(a) === JSON.stringify(b);

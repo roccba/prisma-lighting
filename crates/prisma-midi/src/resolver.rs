@@ -4,13 +4,25 @@
 //! Targets resolve to [`ParamHandle`]s **once**, when a [`Binding`] is compiled —
 //! at mapping load, on a Learn, or when the zone set changes — never per message.
 //! Per message the input path is a hash lookup on the control and one tree write.
+//!
+//! # Soft takeover
+//!
+//! A continuous control (fader / knob, `Absolute` mode, on a level parameter) under
+//! [`Takeover::Pickup`] is ignored until it meets the parameter's current value: within
+//! [`PICKUP_STEPS`] MIDI steps, or by passing through it between two messages. Until then
+//! its messages are dropped, so a controller that reports every position on connect (the
+//! APC40 entering Ableton mode), or a fader left somewhere else while the UI moved the
+//! value, never makes the rig jump. Once engaged the control follows; if anything else
+//! changes the value afterwards (the UI, a show load, another control), it lets go and
+//! must pick the value up again. The state lives in the [`Binding`], so a rebind (a
+//! recompile, a Learn) starts every control disengaged — the values may have changed.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use prisma_core::{
     priority, ControlKind, ControlMode, ControllerMappings, LedStyle, MapTarget, MidiControl,
-    ParamHandle, ParamKind, ParameterTree, ResponseCurve, SourceId, WriteOutcome,
+    ParamHandle, ParamKind, ParameterTree, ResponseCurve, SourceId, Takeover, WriteOutcome,
 };
 use uuid::Uuid;
 
@@ -26,6 +38,7 @@ struct Resolved {
     led: Option<LedStyle>,
     mode: ControlMode,
     curve: ResponseCurve,
+    takeover: Takeover,
     /// The zone slot this target belongs to, if any — resolved once here so the host
     /// can follow a control to its zone (UI focus) without re-parsing per message.
     zone: Option<u16>,
@@ -44,10 +57,78 @@ pub struct FeedbackTarget {
     pub zone: Option<u16>,
 }
 
+/// One continuous control whose position the device can display (a knob's LED ring),
+/// as the value-feedback engine needs it.
+#[derive(Clone)]
+pub struct ValueTarget {
+    pub control: MidiControl,
+    /// The parameter whose value the control shows.
+    pub handle: ParamHandle,
+    /// The mapping's curve: feedback sends the position that produces the value.
+    pub curve: ResponseCurve,
+}
+
+impl ValueTarget {
+    /// The 7-bit position that shows the parameter's current value, if it can be read.
+    pub fn position(&self) -> Option<u8> {
+        let d = self.handle.descriptor();
+        let span = d.range.max - d.range.min;
+        if span <= 0.0 {
+            return None;
+        }
+        let real = self.handle.read_real()?;
+        let pos = self.curve.invert((real - d.range.min) / span);
+        Some((pos * 127.0).round().clamp(0.0, 127.0) as u8)
+    }
+}
+
+/// How close (in MIDI steps of the control) a disengaged control must come to the
+/// current value to pick it up without crossing it. A step and a half absorbs the
+/// rounding between the 7-bit position and a value set elsewhere (the UI, a show).
+pub const PICKUP_STEPS: f32 = 1.5;
+
+/// One control's soft-takeover state.
+#[derive(Debug, Default, Clone, Copy)]
+struct Pickup {
+    /// The control drives the value (it met it, and nothing else moved it since).
+    engaged: bool,
+    /// The real value the control's previous message stood for, engaged or not — two
+    /// consecutive positions on either side of the value mean the control crossed it.
+    last_pos: Option<f32>,
+    /// The real value this control last wrote; the parameter no longer holding it means
+    /// something else changed it, and the control lets go.
+    last_written: Option<f32>,
+}
+
+impl Pickup {
+    /// Whether a message standing for `real` may write a parameter currently at `cur`
+    /// (range `span`). Updates the state either way.
+    fn allows(&mut self, real: f32, cur: f32, span: f32) -> bool {
+        // Float round-trips through the tree's normalized storage: far below a MIDI step.
+        let moved_elsewhere = self
+            .last_written
+            .is_none_or(|w| (w - cur).abs() > span * 1e-3);
+        if self.engaged && moved_elsewhere {
+            self.engaged = false;
+        }
+        if !self.engaged {
+            let near = (real - cur).abs() <= span * PICKUP_STEPS / 127.0;
+            let crossed = self
+                .last_pos
+                .is_some_and(|prev| (prev - cur) * (real - cur) <= 0.0);
+            self.engaged = near || crossed;
+        }
+        self.last_pos = Some(real);
+        self.engaged
+    }
+}
+
 /// A profile compiled against a specific tree and zone order.
 pub struct Binding {
     tree: Arc<ParameterTree>,
     table: HashMap<MidiControl, Resolved>,
+    /// Soft-takeover state per continuous control (see the module docs).
+    pickup: HashMap<MidiControl, Pickup>,
 }
 
 /// The arbitration identity of a control: MIDI priority, and a tag that encodes the
@@ -108,11 +189,16 @@ impl Binding {
                     handle,
                     mode: m.mode,
                     curve: m.curve,
+                    takeover: m.takeover,
                     zone: zone_slot_of(&m.target, zone_ids),
                 },
             );
         }
-        Binding { tree, table }
+        Binding {
+            tree,
+            table,
+            pickup: HashMap::new(),
+        }
     }
 
     /// The zone slot `control` drives, if it is mapped to a zone's parameter.
@@ -191,14 +277,33 @@ impl Binding {
         })
     }
 
+    /// The mapped continuous controls (CC in `Absolute` mode on a level parameter), for
+    /// value feedback — the host keeps the ones its device can display (knob rings).
+    pub fn value_targets(&self) -> Vec<ValueTarget> {
+        self.table
+            .iter()
+            .filter(|(c, r)| {
+                matches!(c.kind, ControlKind::Cc(_))
+                    && r.mode == ControlMode::Absolute
+                    && r.handle.kind() == ParamKind::Level
+            })
+            .map(|(c, r)| ValueTarget {
+                control: *c,
+                handle: r.handle.clone(),
+                curve: r.curve,
+            })
+            .collect()
+    }
+
     /// How many mappings resolved against this tree.
     pub fn resolved_count(&self) -> usize {
         self.table.len()
     }
 
-    /// Apply one event. `None` when nothing is mapped to its control or the event
-    /// carries no value in the mapping's mode (e.g. a note-off under `Absolute`).
-    pub fn apply(&self, event: &MidiEvent) -> Option<WriteOutcome> {
+    /// Apply one event. `None` when nothing is mapped to its control, the event
+    /// carries no value in the mapping's mode (e.g. a note-off under `Absolute`), or a
+    /// continuous control has not picked up its value yet (soft takeover).
+    pub fn apply(&mut self, event: &MidiEvent) -> Option<WriteOutcome> {
         let control = event.control()?;
         let r = self.table.get(&control)?;
         let raw = match (r.mode, event.kind) {
@@ -233,13 +338,29 @@ impl Binding {
             // physical fader did almost nothing. Any shaping is the mapping's `curve`.
             ParamKind::Level | ParamKind::Toggle => {
                 let d = r.handle.descriptor();
-                let mut real = d.range.min + position * (d.range.max - d.range.min);
+                let span = d.range.max - d.range.min;
+                let mut real = d.range.min + position * span;
                 // 7-bit has no exact centre (63 → -0.08, 64 → +0.08 on a ±10 speed), so a
                 // bipolar parameter's detent is what makes "fader in the middle" static.
                 if d.centre_detent.is_some_and(|w| real.abs() < w) {
                     real = 0.0;
                 }
-                self.tree.write_real(&r.handle, real, src)
+                // Soft takeover: a level waits until the control meets its value.
+                let pickup = r.takeover == Takeover::Pickup && r.handle.kind() == ParamKind::Level;
+                if pickup {
+                    let cur = r.handle.read_real().unwrap_or(real);
+                    let state = self.pickup.entry(control).or_default();
+                    if !state.allows(real, cur, span) {
+                        return None;
+                    }
+                }
+                let outcome = self.tree.write_real(&r.handle, real, src);
+                if pickup {
+                    let state = self.pickup.entry(control).or_default();
+                    // A refused write (another source owns the value) means it is not ours.
+                    state.last_written = (outcome == WriteOutcome::Accepted).then_some(real);
+                }
+                outcome
             }
         })
     }

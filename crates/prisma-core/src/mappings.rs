@@ -45,7 +45,9 @@ pub const MAPPINGS_FORMAT_ID: &str = "prisma.controller-mappings";
 /// - **v3** — M9 Slice 3: grid cells as targets (`ZoneSub::Cell`), `latch` /
 ///   `trigger` / `momentary` modes, zone strobe targets, and a per-mapping LED style.
 ///   Additive again.
-pub const MAPPINGS_SCHEMA_VERSION: u32 = 3;
+/// - **v4** — soft takeover: a per-mapping [`Takeover`] (`pickup` / `jump`). Additive: a
+///   file without it reads as `pickup`, the new default for every continuous control.
+pub const MAPPINGS_SCHEMA_VERSION: u32 = 4;
 
 /// A per-operator/machine controller profile (CLAUDE.md §4.6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -81,6 +83,29 @@ pub struct MidiMapping {
     /// the device profile's defaults (a cell lights in its zone's colour).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub led: Option<LedStyle>,
+    /// How a continuous control (fader / knob in `Absolute` mode) takes over a
+    /// parameter whose value it does not match. Ignored by buttons and pads.
+    #[serde(default)]
+    pub takeover: Takeover,
+}
+
+/// Soft takeover for continuous controls (Ableton's "Takeover Mode").
+///
+/// A physical fader or knob and the value it drives can disagree: the controller was
+/// just connected (the APC40 sends every position when it enters Ableton mode), the UI
+/// moved the value, a show was loaded. With `Jump` the next message from the control
+/// slams the parameter to the control's position — a visible jump on the rig. With
+/// `Pickup` the control is ignored until it reaches the parameter's current value
+/// (within a step) or passes through it; from then on it follows. If something else
+/// changes the value afterwards, the control lets go and must pick it up again.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Takeover {
+    /// Wait until the control meets the current value (the default).
+    #[default]
+    Pickup,
+    /// The control's position always wins at once.
+    Jump,
 }
 
 /// An operator-chosen LED look for one control (M9 Slice 3). Colours are indices
@@ -290,6 +315,18 @@ pub enum ResponseCurve {
 }
 
 impl ResponseCurve {
+    /// The control position that produces `y` — the inverse of [`apply`](Self::apply),
+    /// so feedback can show a parameter's value on a control (a knob's LED ring).
+    pub fn invert(self, y: f32) -> f32 {
+        let y = y.clamp(0.0, 1.0);
+        match self {
+            ResponseCurve::Linear => y,
+            ResponseCurve::Exponential { gamma } if gamma > 0.0 => y.powf(1.0 / gamma),
+            ResponseCurve::Logarithmic { gamma } if gamma > 0.0 => y.powf(gamma),
+            _ => y,
+        }
+    }
+
     /// Apply the curve to a normalized value (clamped to `0..=1`).
     pub fn apply(self, x: f32) -> f32 {
         let x = x.clamp(0.0, 1.0);
@@ -441,6 +478,7 @@ mod tests {
             mode: ControlMode::Absolute,
             curve: ResponseCurve::Linear,
             led: None,
+            takeover: Takeover::Pickup,
         }
     }
 
@@ -580,6 +618,7 @@ mod tests {
                 idle: Some(7),
                 animation: LedAnimation::Blink(LedRate::N8),
             }),
+            takeover: Takeover::Pickup,
         });
         let json = save_mappings(&m).unwrap();
         assert!(json.contains("\"blink\": \"n8\""), "{json}");

@@ -4,6 +4,7 @@ import {
   controlLabel,
   midiConfigure,
   midiLearnArm,
+  midiSetTakeover,
   midiLearnCancel,
   midiStatus,
   midiUnmap,
@@ -14,6 +15,7 @@ import {
   type LedStyle,
   type MapTarget,
   type MidiMapping,
+  type Takeover,
 } from "./api";
 
 // MIDI Learn (M9-SPEC §7). A window-wide *learn mode* (Ctrl+M, like the consoles and VJ
@@ -129,6 +131,11 @@ export function MidiLearnProvider({ children }: { children: ReactNode }) {
           palette={palette}
           onChange={(mode, led) =>
             midiConfigure(config.target, mode, led)
+              .then(setMappings)
+              .catch(() => {})
+          }
+          onTakeover={(takeover) =>
+            midiSetTakeover(config.target, takeover)
               .then(setMappings)
               .catch(() => {})
           }
@@ -249,12 +256,22 @@ interface MappingMenuProps {
   mapping: MidiMapping;
   palette: string[];
   onChange: (mode: ControlMode, led: LedStyle | null) => void;
+  onTakeover: (takeover: Takeover) => void;
   onUnmap: () => void;
   onClose: () => void;
 }
 
-function MappingMenu({ at, mapping, palette, onChange, onUnmap, onClose }: MappingMenuProps) {
+const TAKEOVER_HINT: Record<Takeover, string> = {
+  pickup:
+    "El control no mueve el valor hasta alcanzarlo: al conectar el controlador o si la pantalla lo cambió, no salta.",
+  jump: "La posición del control se aplica siempre, de inmediato (puede saltar).",
+};
+
+function MappingMenu({ at, mapping, palette, onChange, onTakeover, onUnmap, onClose }: MappingMenuProps) {
   const modes = modesFor(at.target);
+  // A fader / knob driving a continuous value (no button styles apply to it).
+  const isContinuous = modes.length === 0 && "cc" in mapping.control.kind && mapping.mode === "absolute";
+  const takeover: Takeover = mapping.takeover ?? "pickup";
   const isCell = "zone_slot" in at.target && typeof at.target.zone_slot.sub === "object";
   const isNote = "note" in mapping.control.kind;
   const led: LedStyle = mapping.led ?? {};
@@ -318,6 +335,24 @@ function MappingMenu({ at, mapping, palette, onChange, onUnmap, onClose }: Mappi
             ))}
           </div>
           <div className="pr-midimenu-hint">{MODE_HINT[mapping.mode]}</div>
+        </div>
+      )}
+
+      {isContinuous && (
+        <div className="pr-midimenu-section">
+          <div className="pr-midimenu-label">Toma de control</div>
+          <div className="pr-midimenu-seg">
+            {(["pickup", "jump"] as const).map((t) => (
+              <button
+                key={t}
+                className={`pr-btn${takeover === t ? " is-active" : ""}`}
+                onClick={() => onTakeover(t)}
+              >
+                {t === "pickup" ? "Pickup" : "Salto directo"}
+              </button>
+            ))}
+          </div>
+          <div className="pr-midimenu-hint">{TAKEOVER_HINT[takeover]}</div>
         </div>
       )}
 

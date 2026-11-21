@@ -100,6 +100,26 @@ pub struct LedSpec {
     /// on the physical release, whatever the host last sent (makai `middleware.js`).
     #[serde(default)]
     pub reaffirm_on_release: bool,
+    /// CC controls that DISPLAY a value sent back to them — knobs with an LED ring, or
+    /// motorized faders. Prisma sends each mapped one its parameter's value on connect
+    /// and on every change, so the control shows (and continues from) Prisma's value.
+    /// Plain faders are left out: they cannot show anything. Empty = none.
+    #[serde(default)]
+    pub value_rings: Vec<CcRange>,
+}
+
+/// A run of CC numbers on one channel.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct CcRange {
+    pub channel: u8,
+    pub first_cc: u8,
+    pub last_cc: u8,
+}
+
+impl CcRange {
+    fn contains(&self, channel: u8, cc: u8) -> bool {
+        channel == self.channel && (self.first_cc..=self.last_cc).contains(&cc)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
@@ -185,7 +205,20 @@ impl DeviceProfile {
                 pulse_channels: Vec::new(),
                 blink_channels: Vec::new(),
                 reaffirm_on_release: false,
+                value_rings: Vec::new(),
             },
+        }
+    }
+
+    /// Whether `control` displays a value sent back to it (see [`LedSpec::value_rings`]).
+    pub fn shows_value(&self, control: MidiControl) -> bool {
+        match control.kind {
+            ControlKind::Cc(cc) => self
+                .leds
+                .value_rings
+                .iter()
+                .any(|r| r.contains(control.channel, cc)),
+            ControlKind::Note(_) => false,
         }
     }
 
