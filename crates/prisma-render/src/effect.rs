@@ -49,18 +49,6 @@ pub enum ParamRole {
     /// directions). No built-in effect declares one yet; the control is wired and
     /// lights up the day an effect's manifest asks for it.
     Direction,
-    /// One channel of palette slot `index` (0-based). Like [`ParamRole::Color`] the
-    /// value stays a linear-light scalar in the tree/uniform — a palette is just a
-    /// fixed block of colour channels plus a [`ParamRole::PaletteCount`] param. The UI
-    /// collects every `Palette` param, groups them by `index`, and draws ONE palette
-    /// editor (swatches + add/remove) whose active length is the count param. The
-    /// engine packs the channels flat like any other scalar; the shader reassembles the
-    /// colours into a local array and gates the loop by count.
-    Palette { index: u8, channel: ColorChannel },
-    /// The active length of a palette (how many of the fixed slots are live). A plain
-    /// scalar in the tree; tagged so the palette editor can find it and so the shader
-    /// reads it to gate its slot loop.
-    PaletteCount,
     /// A discrete choice → a dropdown. The value is a scalar INDEX in
     /// `0..=choices.len()-1`, carried like any other scalar (the descriptor's real range
     /// is `0.0 ..= (len-1)` so the real value the shader receives is the index itself,
@@ -144,35 +132,6 @@ impl ParamSpec {
         }
     }
 
-    /// One channel of palette slot `index`. The panel collects a palette's channels
-    /// into a single editor (see [`ParamRole::Palette`]).
-    pub fn palette(
-        name: &'static str,
-        descriptor: ParamDescriptor,
-        index: u8,
-        channel: ColorChannel,
-    ) -> Self {
-        Self {
-            name,
-            descriptor,
-            role: ParamRole::Palette { index, channel },
-            requires: None,
-        }
-    }
-
-    /// The active-length parameter of a palette (see [`ParamRole::PaletteCount`]).
-    pub fn palette_count(name: &'static str, descriptor: ParamDescriptor) -> Self {
-        Self {
-            name,
-            descriptor,
-            role: ParamRole::PaletteCount,
-            requires: None,
-        }
-    }
-
-    /// A discrete choice — the panel draws a dropdown of `choices`. The descriptor's
-    /// real range must be `0.0 ..= (choices.len()-1)` with [`Curve::Linear`](prisma_core::Curve)
-    /// so the shader receives the selected index directly (`i32(round(u.<name>))`).
     /// An on/off switch — the panel draws a latching button. Descriptor `0..1`.
     pub fn toggle(name: &'static str, descriptor: ParamDescriptor) -> Self {
         Self {
@@ -234,10 +193,22 @@ impl ParamSpec {
 pub struct EffectManifest {
     pub effect_id: &'static str,
     pub params: Vec<ParamSpec>,
+    /// A colour palette the effect reads (the classic colour table), with its factory
+    /// colours (linear light). `Some` gives the shader a second uniform at group 0
+    /// binding 1 — `struct { len: f32, _pad: vec3<f32>, colors: array<vec4<f32>, 255> }`
+    /// — filled from the cell's own colour list ([`EffectInstance::set_palette`]). A
+    /// palette is a LIST stored with the cell, not one tree parameter per colour, so
+    /// it can be long (up to [`PALETTE_MAX`]) without bloating the Parameter Tree.
+    pub palette: Option<&'static [[f32; 3]]>,
     /// WGSL with a `Uniforms` block following the shared convention: `time`,
     /// `_pad0`, `resolution`, then one `f32` per param in `params` order.
     pub shader_source: &'static str,
 }
+
+/// Most colours a palette holds (the shader's array length).
+pub const PALETTE_MAX: usize = 255;
+/// Palette uniform size in f32: a vec4 header (`len`) + PALETTE_MAX vec4 colours.
+const PALETTE_F32: usize = 4 + PALETTE_MAX * 4;
 
 /// Number of `f32` globals prepended to every effect's uniform buffer:
 /// `[time, _pad0, resolution.x, resolution.y]`. Keep in lockstep with the
@@ -254,6 +225,8 @@ pub struct EffectInstance {
     /// zones running the same effect and across recompiles.
     pipeline: std::sync::Arc<crate::cache::CachedRender>,
     uniform_buf: wgpu::Buffer,
+    /// The colour-list uniform (binding 1) for effects that declare a palette.
+    palette_buf: Option<wgpu::Buffer>,
     bind_group: wgpu::BindGroup,
     /// Scratch reused each frame to pack uniforms without allocating.
     scratch: Vec<f32>,
@@ -302,19 +275,26 @@ impl EffectInstance {
                 label: Some(manifest.effect_id),
                 source: wgpu::ShaderSource::Wgsl(manifest.shader_source.into()),
             });
+            let uniform_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+                binding,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            };
+            // Binding 1 (the palette) only for effects that declare one. A UNIFORM, not
+            // a storage buffer, so it also works on the GLES fallback backend.
+            let mut entries = vec![uniform_entry(0)];
+            if manifest.palette.is_some() {
+                entries.push(uniform_entry(1));
+            }
             let bind_group_layout =
                 device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                     label: Some("effect-bgl"),
-                    entries: &[wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    }],
+                    entries: &entries,
                 });
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("effect-pl"),
@@ -351,23 +331,67 @@ impl EffectInstance {
                 bind_group_layout,
             }
         });
+        let palette_buf = manifest.palette.map(|_| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("effect-palette"),
+                size: (PALETTE_F32 * 4) as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
+        let mut entries = vec![wgpu::BindGroupEntry {
+            binding: 0,
+            resource: uniform_buf.as_entire_binding(),
+        }];
+        if let Some(buf) = &palette_buf {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 1,
+                resource: buf.as_entire_binding(),
+            });
+        }
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("effect-bg"),
             layout: &pipeline.bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buf.as_entire_binding(),
-            }],
+            entries: &entries,
         });
 
-        EffectInstance {
+        let inst = EffectInstance {
             handles,
             pipeline,
             uniform_buf,
+            palette_buf,
             bind_group,
             scratch: vec![0.0; uniform_f32_len],
             uniform_f32_len,
+        };
+        if let Some(defaults) = manifest.palette {
+            inst.set_palette(gpu, defaults);
         }
+        inst
+    }
+
+    /// Whether this effect reads a colour palette (binding 1).
+    pub fn has_palette(&self) -> bool {
+        self.palette_buf.is_some()
+    }
+
+    /// Upload the palette (linear-light RGB, at most [`PALETTE_MAX`] colours; extra
+    /// ones are ignored). A no-op for an effect without a palette. One `write_buffer`
+    /// of 4 KB from a stack array — no heap allocation — so it is cheap enough to run
+    /// at the render loop's frame boundary when a colour is edited live.
+    pub fn set_palette(&self, gpu: &crate::Gpu, colors: &[[f32; 3]]) {
+        let Some(buf) = &self.palette_buf else {
+            return;
+        };
+        let n = colors.len().min(PALETTE_MAX);
+        let mut data = [0.0f32; PALETTE_F32];
+        data[0] = n as f32;
+        for (i, c) in colors.iter().take(n).enumerate() {
+            let o = 4 + i * 4;
+            data[o..o + 3].copy_from_slice(c);
+            data[o + 3] = 1.0;
+        }
+        gpu.queue.write_buffer(buf, 0, bytemuck::cast_slice(&data));
     }
 
     /// Pack the current parameter values (read wait-free from the tree) plus the

@@ -25,29 +25,17 @@ interface EffectParamsProps {
 // A panel item: the grouping of raw manifest params into rendered controls. Colour
 // channels sharing a group collapse into one colour item (placed where the group's first
 // channel appears); everything else stays one-to-one.
-type PaletteSlot = { index: number; r?: ParamInfo; g?: ParamInfo; b?: ParamInfo };
 type PanelItem =
   | { kind: "scalar"; param: ParamInfo }
   | { kind: "direction"; param: ParamInfo }
   | { kind: "enum"; param: ParamInfo }
   | { kind: "toggle"; param: ParamInfo }
   | { kind: "dirmenu"; param: ParamInfo }
-  | { kind: "color"; group: string; r?: ParamInfo; g?: ParamInfo; b?: ParamInfo }
-  | { kind: "palette"; slots: Map<number, PaletteSlot>; count?: ParamInfo };
+  | { kind: "color"; group: string; r?: ParamInfo; g?: ParamInfo; b?: ParamInfo };
 
 function buildItems(params: ParamInfo[]): PanelItem[] {
   const items: PanelItem[] = [];
   const colorItems = new Map<string, Extract<PanelItem, { kind: "color" }>>();
-  // A single palette per effect (the only shape today); created where its count or its
-  // first channel appears, and filled as the remaining palette params stream past.
-  let palette: Extract<PanelItem, { kind: "palette" }> | undefined;
-  const ensurePalette = () => {
-    if (!palette) {
-      palette = { kind: "palette", slots: new Map() };
-      items.push(palette);
-    }
-    return palette;
-  };
   for (const p of params) {
     if (p.role === "color" && p.group) {
       let item = colorItems.get(p.group);
@@ -59,19 +47,6 @@ function buildItems(params: ParamInfo[]): PanelItem[] {
       if (p.channel === "r") item.r = p;
       else if (p.channel === "g") item.g = p;
       else if (p.channel === "b") item.b = p;
-    } else if (p.role === "palette_count") {
-      ensurePalette().count = p;
-    } else if (p.role === "palette" && p.group !== null) {
-      const item = ensurePalette();
-      const idx = parseInt(p.group, 10);
-      let slot = item.slots.get(idx);
-      if (!slot) {
-        slot = { index: idx };
-        item.slots.set(idx, slot);
-      }
-      if (p.channel === "r") slot.r = p;
-      else if (p.channel === "g") slot.g = p;
-      else if (p.channel === "b") slot.b = p;
     } else if (p.role === "direction") {
       items.push({ kind: "direction", param: p });
     } else if (p.role === "enum") {
@@ -211,12 +186,14 @@ function ToggleButton({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
 /** "Colores": opens the "Tabla de color" where the click happened. */
 function ColorsButton({
   zoneId,
-  slots,
-  count,
+  colors,
+  max,
+  onChange,
 }: {
   zoneId: string;
-  slots: { index: number; r: ParamInfo; g: ParamInfo; b: ParamInfo }[];
-  count: ParamInfo;
+  colors: [number, number, number][];
+  max: number;
+  onChange: (colors: [number, number, number][]) => void;
 }) {
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
   return (
@@ -231,7 +208,7 @@ function ColorsButton({
       >
         Colores
       </button>
-      {at && <ColorTable zoneId={zoneId} slots={slots} count={count} at={at} onClose={() => setAt(null)} />}
+      {at && <ColorTable zoneId={zoneId} colors={colors} max={max} onChange={onChange} at={at} onClose={() => setAt(null)} />}
     </>
   );
 }
@@ -289,13 +266,25 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
   const scalarItems = items.filter((i): i is Extract<PanelItem, { kind: "scalar" }> => i.kind === "scalar");
   // Buttons row on top (professional consoles: [Colores] [Atenuar] above the sliders): the palette's
   // "Colores" and every on/off toggle. The rest: sliders left, other controls right.
-  const buttonItems = items.filter((i) => i.kind === "palette" || i.kind === "toggle");
-  const controlItems = items.filter((i) => i.kind !== "scalar" && i.kind !== "palette" && i.kind !== "toggle");
+  const buttonItems = items.filter((i) => i.kind === "toggle");
+  const controlItems = items.filter((i) => i.kind !== "scalar" && i.kind !== "toggle");
+  const palette = panel.palette;
 
   return (
     <div className="pr-params">
-      {buttonItems.length > 0 && (
-        <div className="pr-params-buttons">{buttonItems.map((item) => renderButton(item, panel.effect_id!))}</div>
+      {(palette || buttonItems.length > 0) && (
+        <div className="pr-params-buttons">
+          {palette && (
+            <ColorsButton
+              key={`${panel.effect_id}:palette`}
+              zoneId={zoneId}
+              colors={palette}
+              max={panel.palette_max}
+              onChange={(next) => setPanel((p) => (p ? { ...p, palette: next } : p))}
+            />
+          )}
+          {buttonItems.map((item) => renderButton(item, panel.effect_id!))}
+        </div>
       )}
       {items.length === 0 ? (
         null
@@ -323,21 +312,10 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
     </div>
   );
 
-  // A button of the top row: the palette's "Colores" (opens the Tabla de color) or an
-  // on/off toggle. A malformed palette (missing channels / count) is simply not offered.
+  // A button of the top row: an on/off toggle ("Colores" is drawn separately).
   function renderButton(item: PanelItem, effectId: string) {
     if (item.kind === "toggle") {
       return <ToggleButton key={`${effectId}:${item.param.name}`} zoneId={zoneId} param={item.param} />;
-    }
-    if (item.kind === "palette") {
-      const slots = [...item.slots.values()]
-        .filter(
-          (s): s is { index: number; r: ParamInfo; g: ParamInfo; b: ParamInfo } =>
-            !!(s.r && s.g && s.b),
-        )
-        .sort((a, b) => a.index - b.index);
-      if (!item.count || slots.length === 0) return null;
-      return <ColorsButton key={`${effectId}:palette`} zoneId={zoneId} slots={slots} count={item.count} />;
     }
     return null;
   }

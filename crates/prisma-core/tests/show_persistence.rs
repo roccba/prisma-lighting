@@ -351,3 +351,27 @@ fn a_unicast_node_without_ip_has_no_destination() {
     n.unicast = false;
     assert!(n.has_destination(), "broadcast needs no IP");
 }
+
+#[test]
+fn a_cells_colour_table_round_trips_and_older_files_load_without_one() {
+    use prisma_core::show::Source;
+    let mut show = populated_show();
+    // A long table (well past the old 8 fixed slots) stored as a list on the layer.
+    let table: Vec<[f32; 3]> = (0..40).map(|i| [i as f32 / 40.0, 0.5, 1.0]).collect();
+    let layer = &mut show.zones[0].grid[0].layers[0];
+    let Source::Shader { palette, .. } = &mut layer.source;
+    *palette = Some(table.clone());
+
+    let back = load_show(&save_show(&show).unwrap()).unwrap();
+    assert_eq!(back, show);
+    let Source::Shader { palette, .. } = &back.zones[0].grid[0].layers[0].source;
+    assert_eq!(palette.as_deref(), Some(&table[..]));
+
+    // A layer without a table is written without the field, and reads back as None
+    // (the effect's factory colours) — older files carry no such field at all.
+    let json = save_show(&populated_show()).unwrap();
+    assert!(!json.contains("\"palette\""));
+    let old = load_show(&json).unwrap();
+    let Source::Shader { palette, .. } = &old.zones[0].grid[0].layers[0].source;
+    assert!(palette.is_none());
+}

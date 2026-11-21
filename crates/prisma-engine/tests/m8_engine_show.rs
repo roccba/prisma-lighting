@@ -164,7 +164,7 @@ fn engine_runs_a_show_and_lights_the_wire() {
     // pixel 3 rises (each still x0.5 by the zone fader). Proof the swap reached the
     // wire, off the render thread.
     let zone_id = Uuid::from_u128(0x1); // the single zone in build_patch
-    assert!(engine.trigger_zone_effect(0, zone_id, "gradient", &ParamSet::new()));
+    assert!(engine.trigger_zone_effect(0, zone_id, "gradient", &ParamSet::new(), None));
     wait_for("the triggered gradient reaches the wire", || {
         let snap = dev_sink.snapshot();
         match snap.universes.get(&1) {

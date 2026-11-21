@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { setParam, type ParamInfo } from "./api";
+import { useEffect, useRef, useState } from "react";
+import { setPalette } from "./api";
 import { ByteBox } from "./ByteBox";
 import { ColorSwatch, type Rgb } from "./ColorPicker";
 import { FaderBox } from "./FaderBox";
@@ -14,21 +14,19 @@ import { linearToSrgb255, srgb255ToLinear } from "./srgb";
 //  · drag a row by its # to move it, or select it and use ▲ / ▼;
 //  · + adds a colour (white, or a copy of the selected one), − removes the selected one,
 //    ⧉ duplicates it, the faders button opens the Caja de Fader for it.
-// The palette is a fixed block of slots plus a "count" param (the number of rows); every
-// value is a plain linear-light scalar in the tree (§2.3), so it persists and MIDI-maps
-// like any other parameter. Presentation is sRGB 0–255.
-
-export interface PaletteSlot {
-  index: number;
-  r: ParamInfo;
-  g: ParamInfo;
-  b: ParamInfo;
-}
+// The table is a LIST stored with the cell (up to 255 colours), not one parameter per
+// colour; every edit sends the whole list (at most once per frame) and it lands on the
+// running effect at the next frame boundary. Presentation is sRGB 0–255.
 
 interface ColorTableProps {
   zoneId: string;
-  slots: PaletteSlot[];
-  count: ParamInfo;
+  /** The current colour table (linear-light RGB). */
+  colors: [number, number, number][];
+  /** Most colours allowed (255). */
+  max: number;
+  /** Called with every new table (already sent to the engine), so the panel's copy
+   *  stays current. */
+  onChange: (colors: [number, number, number][]) => void;
   at?: { x: number; y: number };
   onClose: () => void;
 }
@@ -38,42 +36,41 @@ const toRgb = (c: Lin): Rgb => [linearToSrgb255(c.r), linearToSrgb255(c.g), line
 const toLin = ([r, g, b]: Rgb): Lin => ({ r: srgb255ToLinear(r), g: srgb255ToLinear(g), b: srgb255ToLinear(b) });
 const WHITE: Lin = { r: 1, g: 1, b: 1 };
 
-export function ColorTable({ zoneId, slots, count, at, onClose }: ColorTableProps) {
-  const max = slots.length;
-  const countOf = (norm: number) => Math.round(count.min + norm * (count.max - count.min));
-
-  const seed = useMemo<Lin[]>(() => slots.map((s) => ({ r: s.r.value_norm, g: s.g.value_norm, b: s.b.value_norm })), [slots]);
-  const [cols, setCols] = useState<Lin[]>(seed);
-  const [len, setLen] = useState(countOf(count.value_norm));
+export function ColorTable({ zoneId, colors, max, onChange, at, onClose }: ColorTableProps) {
+  const [cols, setCols] = useState<Lin[]>(() => colors.map(([r, g, b]) => ({ r, g, b })));
   const [sel, setSel] = useState<number | null>(null);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dropAt, setDropAt] = useState<number | null>(null);
   const [faderAt, setFaderAt] = useState<{ x: number; y: number } | null>(null);
-  useEffect(() => setCols(seed), [seed]);
-  useEffect(() => setLen(countOf(count.value_norm)), [count.value_norm]);
+  const len = cols.length;
 
-  const writeSlot = (i: number, c: Lin) => {
-    setParam(zoneId, slots[i].r.name, c.r).catch(() => {});
-    setParam(zoneId, slots[i].g.name, c.g).catch(() => {});
-    setParam(zoneId, slots[i].b.name, c.b).catch(() => {});
+  // Send the whole table, at most once per animation frame (a dragged value box or
+  // fader produces many edits; only the latest table needs to reach the engine).
+  const pending = useRef<Lin[] | null>(null);
+  const frame = useRef<number | null>(null);
+  const send = (next: Lin[]) => {
+    pending.current = next;
+    if (frame.current != null) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = null;
+      const list = (pending.current ?? []).map((c) => [c.r, c.g, c.b] as [number, number, number]);
+      pending.current = null;
+      setPalette(zoneId, list).catch(() => {});
+      onChange(list);
+    });
   };
-  const writeLen = (n: number) => {
-    setParam(zoneId, count.name, (n - count.min) / (count.max - count.min)).catch(() => {});
-  };
+  useEffect(() => () => {
+    if (frame.current != null) cancelAnimationFrame(frame.current);
+  }, []);
 
-  /** Rewrite the whole slot block + length (add/remove/reorder share this path). */
-  const commit = (next: Lin[], n: number) => {
+  const commit = (next: Lin[]) => {
     setCols(next);
-    setLen(n);
-    for (let i = 0; i < max; i++) writeSlot(i, next[i]);
-    writeLen(n);
+    send(next);
   };
-
   const setColor = (i: number, c: Lin) => {
     const next = cols.slice();
     next[i] = c;
-    setCols(next);
-    writeSlot(i, c);
+    commit(next);
   };
   const setChannel = (i: number, ch: 0 | 1 | 2, v: number) => {
     const rgb = toRgb(cols[i]);
@@ -85,29 +82,26 @@ export function ColorTable({ zoneId, slots, count, at, onClose }: ColorTableProp
   const insert = (c: Lin, after: number | null) => {
     if (len >= max) return;
     const at2 = after == null ? len : after + 1;
-    const active = cols.slice(0, len);
-    active.splice(at2, 0, c);
-    const next = active.concat(cols.slice(len)).slice(0, max);
-    commit(next, len + 1);
+    const next = cols.slice();
+    next.splice(at2, 0, { ...c });
+    commit(next);
     setSel(at2);
   };
   const add = () => insert(sel != null ? cols[sel] : WHITE, sel);
   const duplicate = () => sel != null && insert(cols[sel], sel);
   const remove = () => {
     if (sel == null || len <= 1) return;
-    const active = cols.slice(0, len);
-    const [gone] = active.splice(sel, 1);
-    // Keep the block full-length: the removed colour goes past the live end.
-    const next = active.concat(cols.slice(len), [gone]).slice(0, max);
-    commit(next, len - 1);
-    setSel(Math.min(sel, len - 2));
+    const next = cols.slice();
+    next.splice(sel, 1);
+    commit(next);
+    setSel(Math.min(sel, next.length - 1));
   };
   const move = (from: number, to: number) => {
     if (from === to || to < 0 || to >= len) return;
     const next = cols.slice();
     const [m] = next.splice(from, 1);
     next.splice(to, 0, m);
-    commit(next, len);
+    commit(next);
     setSel(to);
   };
 

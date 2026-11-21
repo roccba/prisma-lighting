@@ -443,11 +443,10 @@ export interface ParamInfo {
    *  colour picker, the direction rose, a channel of a palette slot, a palette's
    *  active-length, or a discrete choice → a dropdown. Value model is scalar regardless
    *  (an `enum` is an index 0..max). */
-  role: "scalar" | "color" | "direction" | "palette" | "palette_count" | "enum" | "toggle" | "bpm" | "direction_menu";
-  /** A grouping key: the colour group id for `role === "color"`, or the palette slot
-   *  index (as a string) for `role === "palette"`. Null otherwise. */
+  role: "scalar" | "color" | "direction" | "enum" | "toggle" | "bpm" | "direction_menu";
+  /** A grouping key: the colour group id for `role === "color"`. Null otherwise. */
   group: string | null;
-  /** Colour channel — set for `role === "color"` or `"palette"`. */
+  /** Colour channel — set for `role === "color"`. */
   channel: "r" | "g" | "b" | null;
   /** The named options for `role === "enum"` — the dropdown labels, in index order.
    *  Absent for every other role (the shape effects that declare enums land in a later
@@ -466,11 +465,19 @@ export interface EffectPanelInfo {
   effect_id: string | null;
   effect_name: string | null;
   params: ParamInfo[];
+  /** The colour table (linear-light RGB) for an effect that reads one, else null. */
+  palette: [number, number, number][] | null;
+  /** Most colours a table may hold (255). */
+  palette_max: number;
 }
 
 /** The active effect and its manifest-driven parameters for a zone (§3.5). */
 export const effectPanel = (zone: string) =>
   invoke<EffectPanelInfo>("main_effect_panel", { zone });
+
+/** Replace the colour table of a zone's active effect (linear-light RGB list). Live. */
+export const setPalette = (zone: string, colors: [number, number, number][]) =>
+  invoke<void>("main_set_palette", { zone, colors });
 
 /** Fired on `window` for every `setParam`, so the effect panel keeps its copy of the
  *  values current (a control opened later — e.g. the Tabla de color — must see what was

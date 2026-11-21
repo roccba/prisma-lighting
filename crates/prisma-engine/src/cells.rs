@@ -48,10 +48,19 @@ pub const CELL_ASSIGNED: f32 = 1.0;
 /// `state` value of the zone's running cell.
 pub const CELL_RUNNING: f32 = 2.0;
 
+/// What a cell plays: its effect, the effect's stored parameter values and, for an
+/// effect with a palette, the cell's colour table (`None` = the factory colours).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CellEffect {
+    pub effect_id: String,
+    pub params: ParamSet,
+    pub palette: Option<Vec<[f32; 3]>>,
+}
+
 /// The owner of the Show document, as the cell controller sees it.
 pub trait CellHost: Send + Sync {
     /// The effect in `zone`'s cell `cell`, or `None` if it is empty.
-    fn cell_effect(&self, zone: Uuid, cell: usize) -> Option<(String, ParamSet)>;
+    fn cell_effect(&self, zone: Uuid, cell: usize) -> Option<CellEffect>;
     /// `zone`'s running cell changed (a pad, a UI click, a release returning).
     fn active_changed(&self, zone: Uuid, active: Option<usize>);
 }
@@ -128,6 +137,7 @@ pub fn fire_zone_effect(
     zone: Uuid,
     effect_id: &str,
     params: &ParamSet,
+    palette: Option<&[[f32; 3]]>,
     src: SourceId,
 ) -> bool {
     let Some(manifest) = manifest_by_id(effect_id) else {
@@ -137,6 +147,10 @@ pub fn fire_zone_effect(
     let effect = EffectInstance::new(gpu, tree, &prefix, &manifest);
     for (name, value) in params.iter() {
         tree.write_path(&format!("{prefix}/param/{name}"), value, src);
+    }
+    // Uploaded here, on the caller's thread, before the swap is queued.
+    if let Some(colors) = palette {
+        effect.set_palette(gpu, colors);
     }
     sender.set_zone_effect(slot, Some(effect))
 }
@@ -307,7 +321,11 @@ impl Controller {
         let zone = self.zones[slot].zone;
         let effect = cell.and_then(|c| self.host.cell_effect(zone, c));
         match effect {
-            Some((effect_id, params)) => {
+            Some(CellEffect {
+                effect_id,
+                params,
+                palette,
+            }) => {
                 fire_zone_effect(
                     &self.gpu,
                     &self.tree,
@@ -316,6 +334,7 @@ impl Controller {
                     zone,
                     &effect_id,
                     &params,
+                    palette.as_deref(),
                     // The cell's stored values are a load, not a performance: written at
                     // UI tier so the panel (or a controller) takes them over at once. At
                     // the engine's tier they would lock every control out for the

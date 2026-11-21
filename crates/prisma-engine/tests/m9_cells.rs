@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 
 use prisma_core::show::{Cell, Layer, ParamSet, Show};
 use prisma_core::{priority, SourceId};
-use prisma_engine::{CellHost, Engine, EngineConfig, CELL_ASSIGNED, CELL_EMPTY, CELL_RUNNING};
+use prisma_engine::{
+    CellEffect, CellHost, Engine, EngineConfig, CELL_ASSIGNED, CELL_EMPTY, CELL_RUNNING,
+};
 use prisma_output::sink;
 use prisma_patch::{
     BlendMode, ColorOrder, ComponentSet, Fixture, FixtureProfile, GammaCalibration, Patch, Pixel,
@@ -88,11 +90,19 @@ fn show() -> Show {
 struct Host(Mutex<Show>);
 
 impl CellHost for Host {
-    fn cell_effect(&self, zone: Uuid, cell: usize) -> Option<(String, ParamSet)> {
+    fn cell_effect(&self, zone: Uuid, cell: usize) -> Option<CellEffect> {
         let show = self.0.lock().unwrap();
         let layer = show.zone(zone)?.grid.get(cell)?.layers.first()?.clone();
         match layer.source {
-            prisma_core::show::Source::Shader { effect_id, params } => Some((effect_id, params)),
+            prisma_core::show::Source::Shader {
+                effect_id,
+                params,
+                palette,
+            } => Some(CellEffect {
+                effect_id,
+                params,
+                palette,
+            }),
         }
     }
     fn active_changed(&self, zone: Uuid, active: Option<usize>) {

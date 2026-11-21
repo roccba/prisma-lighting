@@ -13,7 +13,7 @@
 //
 // Uniform convention: globals (time, _pad0, resolution) then one f32 per manifest
 // param in order — bpm, step, color_width, cross_width, displacement, disp_speed,
-// disp_dist, cross_axes, mode, count, c0r..c7b, fade.
+// disp_dist, cross_axes, mode, fade. The colours come from the `palette` uniform.
 struct Uniforms {
     time: f32,
     _pad0: f32,
@@ -27,19 +27,20 @@ struct Uniforms {
     disp_dist: f32,
     cross_axes: f32,
     mode: f32,
-    count: f32,
-    c0r: f32, c0g: f32, c0b: f32,
-    c1r: f32, c1g: f32, c1b: f32,
-    c2r: f32, c2g: f32, c2b: f32,
-    c3r: f32, c3g: f32, c3b: f32,
-    c4r: f32, c4g: f32, c4b: f32,
-    c5r: f32, c5g: f32, c5b: f32,
-    c6r: f32, c6g: f32, c6b: f32,
-    c7r: f32, c7g: f32, c7b: f32,
     fade: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
+
+// The cell's colour table (a list, not parameters): `len` live colours, up to 255.
+struct Palette {
+    len: f32,
+    _p0: f32,
+    _p1: f32,
+    _p2: f32,
+    colors: array<vec4<f32>, 255>,
+};
+@group(0) @binding(1) var<uniform> palette: Palette;
 
 @vertex
 fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
@@ -181,17 +182,7 @@ fn fs(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
         s = s + amount * wave * distribution(clamp(i32(round(u.disp_dist)), 0, 3), t01);
     }
 
-    var pal = array<vec3<f32>, 8>(
-        vec3<f32>(u.c0r, u.c0g, u.c0b),
-        vec3<f32>(u.c1r, u.c1g, u.c1b),
-        vec3<f32>(u.c2r, u.c2g, u.c2b),
-        vec3<f32>(u.c3r, u.c3g, u.c3b),
-        vec3<f32>(u.c4r, u.c4g, u.c4b),
-        vec3<f32>(u.c5r, u.c5g, u.c5b),
-        vec3<f32>(u.c6r, u.c6g, u.c6b),
-        vec3<f32>(u.c7r, u.c7g, u.c7b),
-    );
-    let count = clamp(i32(round(u.count)), 1, 8);
+    let count = clamp(i32(round(palette.len)), 1, 255);
 
     // Bands of `color_width`% of L, cycling through the live palette. "Atenuar" (fade)
     // blends each band into the next; off = hard cuts (professional consoles default).
@@ -201,5 +192,5 @@ fn fs(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let i0 = ((band % count) + count) % count;
     let i1 = (i0 + 1) % count;
     let frac = select(0.0, fract(f), u.fade > 0.5);
-    return vec4<f32>(mix(pal[i0], pal[i1], frac), 1.0);
+    return vec4<f32>(mix(palette.colors[i0].rgb, palette.colors[i1].rgb, frac), 1.0);
 }

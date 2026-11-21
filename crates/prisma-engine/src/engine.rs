@@ -740,6 +740,7 @@ impl EngineHandle {
         zone_id: Uuid,
         effect_id: &str,
         params: &ParamSet,
+        palette: Option<&[[f32; 3]]>,
     ) -> bool {
         let Some(sender) = self.zone_commands.as_ref() else {
             return false;
@@ -755,8 +756,19 @@ impl EngineHandle {
             zone_id,
             effect_id,
             params,
+            palette,
             ui_control_source(),
         )
+    }
+
+    /// Replace the colour table of a zone's running effect (the Tabla de color, live).
+    /// Lands at the next frame boundary; a no-op if no show is running or the effect
+    /// has no palette.
+    pub fn set_zone_palette(&self, slot: usize, colors: Vec<[f32; 3]>) -> bool {
+        match self.zone_commands.as_ref() {
+            Some(sender) => sender.set_zone_palette(slot, colors),
+            None => false,
+        }
     }
 
     /// Hand the engine the Show's owner and start playing grid cells from the tree:

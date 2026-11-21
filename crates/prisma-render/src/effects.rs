@@ -24,63 +24,17 @@ const METABALLS_WGSL: &str = include_str!("../../../shaders/metaballs.wgsl");
 const DROPS_WGSL: &str = include_str!("../../../shaders/drops.wgsl");
 const EXPLOSIONS_WGSL: &str = include_str!("../../../shaders/explosions.wgsl");
 
-/// The fixed number of palette slots a palette effect carries. Slots beyond the live
-/// `count` are packed but unread by the shader. Raising this means more uniform slots
-/// and more shader lines — deliberately capped for a first cut (8 is generous for a
-/// scroll). Kept in lockstep with `color_scroll.wgsl`'s `pal` array and `PALETTE_SLOTS`.
-const PALETTE_SLOTS: usize = 8;
-
-/// Static per-slot channel names (`c{i}r/g/b`) — the trailing path segments and the
-/// uniform fields, in the order `color_scroll.wgsl` reads them. `&'static` so a
-/// [`ParamSpec`] can borrow them without leaking.
-const PALETTE_CHANNELS: [[&str; 3]; PALETTE_SLOTS] = [
-    ["c0r", "c0g", "c0b"],
-    ["c1r", "c1g", "c1b"],
-    ["c2r", "c2g", "c2b"],
-    ["c3r", "c3g", "c3b"],
-    ["c4r", "c4g", "c4b"],
-    ["c5r", "c5g", "c5b"],
-    ["c6r", "c6g", "c6b"],
-    ["c7r", "c7g", "c7b"],
+/// The factory colour table of "Scroll de color" (the classic defaults: red, yellow,
+/// green, cyan, blue, magenta). LINEAR light — for fully saturated sRGB primaries the
+/// curve maps 0→0 and 255→1 unchanged, so these read the same in both spaces.
+pub const SCROLL_PALETTE: &[[f32; 3]] = &[
+    [1.0, 0.0, 0.0],
+    [1.0, 1.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, 1.0, 1.0],
+    [0.0, 0.0, 1.0],
+    [1.0, 0.0, 1.0],
 ];
-
-/// The default colour-scroll palette: the saturated rainbow. Values are
-/// LINEAR-light `0..1` — for fully-saturated sRGB primaries the sRGB curve maps 0→0
-/// and 255→1 unchanged, so these read the same in both spaces. The trailing two slots
-/// are inactive at the default `count` (6) but seeded so raising the count yields a
-/// usable colour rather than black.
-const PALETTE_DEFAULTS: [[f32; 3]; PALETTE_SLOTS] = [
-    [1.0, 0.0, 0.0], // red
-    [1.0, 1.0, 0.0], // yellow
-    [0.0, 1.0, 0.0], // green
-    [0.0, 1.0, 1.0], // cyan
-    [0.0, 0.0, 1.0], // blue
-    [1.0, 0.0, 1.0], // magenta
-    [1.0, 1.0, 1.0], // white (inactive at default count)
-    [1.0, 0.0, 0.0], // red   (inactive at default count)
-];
-
-/// The 24 palette colour-channel params (8 slots × r/g/b), tagged with their slot index
-/// and channel so the panel collects them into one palette editor. Seeded with the
-/// Rainbow defaults; the value model is plain linear-light scalars (§2.3), so a
-/// palette persists and MIDI-maps like any other parameter.
-fn palette_color_params() -> Vec<ParamSpec> {
-    let mut out = Vec::with_capacity(PALETTE_SLOTS * 3);
-    for slot in 0..PALETTE_SLOTS {
-        let channels = [ColorChannel::R, ColorChannel::G, ColorChannel::B];
-        for (ch_idx, channel) in channels.into_iter().enumerate() {
-            let name = PALETTE_CHANNELS[slot][ch_idx];
-            let default = PALETTE_DEFAULTS[slot][ch_idx];
-            out.push(ParamSpec::palette(
-                name,
-                ParamDescriptor::unit_level(name, default),
-                slot as u8,
-                channel,
-            ));
-        }
-    }
-    out
-}
 
 /// The movement modes of "Scroll de color", in INDEX order (the shader switches on the
 /// index — keep `color_scroll.wgsl`'s `mode_*` tables in lockstep). `"Group|Label"`, the
@@ -156,9 +110,9 @@ fn norm_of(v: f32, min: f32, max: f32) -> f32 {
 /// moves, % of the matrix, 0.01), `color_width` (width of one colour, %, 10),
 /// `cross_width` (only in Cross mode, %, 50), `displacement` (distortion amount 0–100)
 /// with its `disp_speed` and `disp_dist`ribution, `cross_axes` (Cross mode), `mode` (the
-/// direction / movement, see [`SCROLL_MODES`]), the palette (`count`, `c0..c7`) and
-/// `fade` ("Atenuar": blend instead of hard cuts). Param order here **is** the uniform
-/// layout the shader reads.
+/// direction / movement, see [`SCROLL_MODES`]) and `fade` ("Atenuar": blend instead of hard cuts). Param order here **is** the uniform
+/// layout the shader reads. The colours are the cell's colour TABLE (a list, up to
+/// [`crate::effect::PALETTE_MAX`]), not parameters — see [`EffectManifest::palette`].
 pub fn color_scroll() -> EffectManifest {
     let cruz = Requires::Choice {
         param: "mode",
@@ -283,21 +237,7 @@ pub fn color_scroll() -> EffectManifest {
             ),
             SCROLL_MODES,
         ),
-        ParamSpec::palette_count(
-            "count",
-            ParamDescriptor::level(
-                "effect.color_scroll.count",
-                RealRange {
-                    min: 1.0,
-                    max: PALETTE_SLOTS as f32,
-                },
-                Curve::Linear,
-                // Default 6 live colours (the rainbow): (6-1)/(8-1).
-                5.0 / 7.0,
-            ),
-        ),
     ];
-    params.extend(palette_color_params());
     // "Atenuar": OFF = hard cuts between colours (the classic default), ON = each colour
     // fades into the next.
     params.push(ParamSpec::toggle(
@@ -307,6 +247,7 @@ pub fn color_scroll() -> EffectManifest {
     EffectManifest {
         effect_id: "color_scroll",
         params,
+        palette: Some(SCROLL_PALETTE),
         shader_source: COLOR_SCROLL_WGSL,
     }
 }
@@ -340,6 +281,7 @@ pub fn plasma() -> EffectManifest {
                 ),
             ),
         ],
+        palette: None,
         shader_source: PLASMA_WGSL,
     }
 }
@@ -374,6 +316,7 @@ pub fn wave() -> EffectManifest {
                 ),
             ),
         ],
+        palette: None,
         shader_source: WAVE_WGSL,
     }
 }
@@ -407,6 +350,7 @@ pub fn noise() -> EffectManifest {
                 ),
             ),
         ],
+        palette: None,
         shader_source: NOISE_WGSL,
     }
 }
@@ -439,6 +383,7 @@ pub fn fire() -> EffectManifest {
                 ),
             ),
         ],
+        palette: None,
         shader_source: FIRE_WGSL,
     }
 }
@@ -472,6 +417,7 @@ pub fn radial() -> EffectManifest {
                 ),
             ),
         ],
+        palette: None,
         shader_source: RADIAL_WGSL,
     }
 }
@@ -504,6 +450,7 @@ pub fn sparkle() -> EffectManifest {
                 ),
             ),
         ],
+        palette: None,
         shader_source: SPARKLE_WGSL,
     }
 }
@@ -588,6 +535,7 @@ pub fn simple_shape() -> EffectManifest {
     EffectManifest {
         effect_id: "simple_shape",
         params,
+        palette: None,
         shader_source: SIMPLE_SHAPE_WGSL,
     }
 }
@@ -635,6 +583,7 @@ pub fn metaballs() -> EffectManifest {
     EffectManifest {
         effect_id: "metaballs",
         params,
+        palette: None,
         shader_source: METABALLS_WGSL,
     }
 }
@@ -690,6 +639,7 @@ pub fn drops() -> EffectManifest {
     EffectManifest {
         effect_id: "drops",
         params,
+        palette: None,
         shader_source: DROPS_WGSL,
     }
 }
@@ -744,6 +694,7 @@ pub fn explosions() -> EffectManifest {
     EffectManifest {
         effect_id: "explosions",
         params,
+        palette: None,
         shader_source: EXPLOSIONS_WGSL,
     }
 }
@@ -777,6 +728,7 @@ pub fn solid() -> EffectManifest {
                 ColorChannel::B,
             ),
         ],
+        palette: None,
         shader_source: SOLID_WGSL,
     }
 }
@@ -800,6 +752,7 @@ pub fn gradient() -> EffectManifest {
                 ParamDescriptor::unit_level("effect.gradient.end", 1.0),
             ),
         ],
+        palette: None,
         shader_source: GRADIENT_WGSL,
     }
 }

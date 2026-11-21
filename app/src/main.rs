@@ -21,10 +21,10 @@ use prisma_editor::{
 };
 use prisma_engine::{
     host_interfaces, load_mappings, load_show, save_mappings, save_show, ArtNetNode, Cell,
-    CellHost, ControlMode, ControllerMappings, DiscoveredNode, Engine, EngineConfig, EngineHandle,
-    HostInterface, InterfaceResolution, Layer, LedStyle, MapTarget, MidiMapping, MidiNotice,
-    MidiRuntime, NodeMonitor, NodeOrigin, NodeStatus, ParamSet, ScanError, Show, ShowNetwork,
-    Source, ZoneLiveReadout, ZoneShow,
+    CellEffect, CellHost, ControlMode, ControllerMappings, DiscoveredNode, Engine, EngineConfig,
+    EngineHandle, HostInterface, InterfaceResolution, Layer, LedStyle, MapTarget, MidiMapping,
+    MidiNotice, MidiRuntime, NodeMonitor, NodeOrigin, NodeStatus, ParamSet, ScanError, Show,
+    ShowNetwork, Source, ZoneLiveReadout, ZoneShow,
 };
 use prisma_midi::io::{input_port_names, MidiInputLink, MidiIoError, MidiOutputLink};
 use prisma_midi::{DeviceProfile, APC40_KEYWORDS};
@@ -84,15 +84,13 @@ struct ParamInfo {
     max: f32,
     value_norm: f32,
     /// Presentation hint the panel switches on (§3.5): `"scalar"` (a slider), `"color"`
-    /// (a channel of the `group` colour picker), `"direction"` (the rose), `"palette"`
-    /// (a channel of palette slot `group`, collected into the palette editor) or
-    /// `"palette_count"` (the palette's active length).
+    /// (a channel of the `group` colour picker), `"direction"` (the rose), `"enum"`,
+    /// `"toggle"`, `"bpm"` or `"direction_menu"`. A palette is not a parameter: it travels
+    /// as `EffectPanelInfo::palette`.
     role: &'static str,
-    /// A grouping key: for `role == "color"` the colour group id; for `role ==
-    /// "palette"` the slot index as a string. `Some` only for those roles.
+    /// A grouping key: for `role == "color"` the colour group id. `Some` only then.
     group: Option<String>,
-    /// The colour channel (`"r"`/`"g"`/`"b"`), `Some` for `role == "color"` or
-    /// `"palette"`.
+    /// The colour channel (`"r"`/`"g"`/`"b"`), `Some` for `role == "color"`.
     channel: Option<&'static str>,
     /// Dropdown labels for `role == "enum"` (or `"Group|Label"` for `"direction_menu"`),
     /// in index order; `None` for every other role.
@@ -119,6 +117,10 @@ struct EffectPanelInfo {
     effect_id: Option<String>,
     effect_name: Option<String>,
     params: Vec<ParamInfo>,
+    /// The colour table (linear RGB) for an effect that reads one; `None` otherwise.
+    palette: Option<Vec<[f32; 3]>>,
+    /// Most colours a table may hold.
+    palette_max: usize,
 }
 
 /// A display label from a manifest parameter key: capitalise the first letter, leaving
@@ -166,13 +168,6 @@ fn role_dto(role: &ParamRole) -> (&'static str, Option<String>, Option<&'static 
         ParamRole::Color { group, channel } => {
             ("color", Some((*group).to_string()), Some(ch_str(channel)))
         }
-        // A palette slot reuses `group` to carry its slot index as a string; the panel
-        // collects all `palette` params by that index into one editor. `palette_count`
-        // is the plain length param the editor reads for the active number of slots.
-        ParamRole::Palette { index, channel } => {
-            ("palette", Some(index.to_string()), Some(ch_str(channel)))
-        }
-        ParamRole::PaletteCount => ("palette_count", None, None),
         // The labels travel in `ParamInfo::choices`, computed at the call site; the
         // group/channel slots are unused for an enum.
         ParamRole::Enum { .. } => ("enum", None, None),
@@ -1112,12 +1107,20 @@ struct AppCellHost {
 }
 
 impl CellHost for AppCellHost {
-    fn cell_effect(&self, zone: Uuid, cell: usize) -> Option<(String, ParamSet)> {
+    fn cell_effect(&self, zone: Uuid, cell: usize) -> Option<CellEffect> {
         let state = self.app.try_state::<AppState>()?;
         let show = state.show.lock().unwrap();
         let layer = show.zone(zone)?.grid.get(cell)?.layers.first()?;
         match &layer.source {
-            Source::Shader { effect_id, params } => Some((effect_id.clone(), params.clone())),
+            Source::Shader {
+                effect_id,
+                params,
+                palette,
+            } => Some(CellEffect {
+                effect_id: effect_id.clone(),
+                params: params.clone(),
+                palette: palette.clone(),
+            }),
         }
     }
 
@@ -2100,6 +2103,8 @@ fn main_effect_panel(state: State<AppState>, zone: Uuid) -> EffectPanelInfo {
         effect_id: None,
         effect_name: None,
         params: Vec::new(),
+        palette: None,
+        palette_max: prisma_render::PALETTE_MAX,
     };
     let Some(zs) = show.zone(zone) else {
         return empty(None);
@@ -2111,9 +2116,13 @@ fn main_effect_panel(state: State<AppState>, zone: Uuid) -> EffectPanelInfo {
         .and_then(|i| zs.grid.get(i))
         .and_then(|c| c.layers.first())
         .map(|l| match &l.source {
-            Source::Shader { effect_id, params } => (effect_id.clone(), params),
+            Source::Shader {
+                effect_id,
+                params,
+                palette,
+            } => (effect_id.clone(), params, palette.clone()),
         });
-    let Some((effect_id, stored)) = effect else {
+    let Some((effect_id, stored, stored_palette)) = effect else {
         return empty(zs.active);
     };
     let params = prisma_render::effect_params(&effect_id)
@@ -2150,12 +2159,47 @@ fn main_effect_panel(state: State<AppState>, zone: Uuid) -> EffectPanelInfo {
             }
         })
         .collect();
+    // The colour table, for an effect that reads one: the cell's own list, else the
+    // effect's factory colours.
+    let palette = prisma_render::manifest_by_id(&effect_id)
+        .and_then(|m| m.palette)
+        .map(|defaults| stored_palette.unwrap_or_else(|| defaults.to_vec()));
     EffectPanelInfo {
         zone_id: zone,
         cell_index: zs.active,
         effect_name: effect_display_name(&effect_id),
         effect_id: Some(effect_id),
         params,
+        palette,
+        palette_max: prisma_render::PALETTE_MAX,
+    }
+}
+
+/// Replace the colour table of a zone's active effect (the "Tabla de color"): persist
+/// it into the show's cell (linear-light RGB, capped at [`prisma_render::PALETTE_MAX`])
+/// and push it live to the running effect at the next frame boundary.
+#[tauri::command]
+fn main_set_palette(state: State<AppState>, zone: Uuid, colors: Vec<[f32; 3]>) {
+    let mut colors = colors;
+    colors.truncate(prisma_render::PALETTE_MAX);
+    if colors.is_empty() {
+        return; // a colour table always keeps at least one colour
+    }
+    {
+        let mut show = state.show.lock().unwrap();
+        if let Some(zs) = show.zones.iter_mut().find(|z| z.zone_id == zone) {
+            if let Some(cell) = zs.active.and_then(|i| zs.grid.get_mut(i)) {
+                if let Some(layer) = cell.layers.first_mut() {
+                    let Source::Shader { palette, .. } = &mut layer.source;
+                    *palette = Some(colors.clone());
+                }
+            }
+        }
+    }
+    if let Some(slot) = zone_slot(&state, zone) {
+        if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+            engine.set_zone_palette(slot, colors);
+        }
     }
 }
 
@@ -2253,6 +2297,7 @@ fn main() {
             main_clear_cell,
             main_effect_panel,
             main_set_param,
+            main_set_palette,
             midi_status,
             midi_set_input,
             midi_reconnect,
@@ -2536,7 +2581,9 @@ mod tests {
         assert_eq!(zs.active, Some(0));
         assert_eq!(zs.grid.len(), GRID_CELLS);
         match &zs.grid[0].layers[0].source {
-            Source::Shader { effect_id, params } => {
+            Source::Shader {
+                effect_id, params, ..
+            } => {
                 assert_eq!(effect_id, "solid");
                 assert!(params.iter().next().is_none(), "manifest defaults: R=G=B=0");
             }

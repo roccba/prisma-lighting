@@ -78,14 +78,21 @@ pub fn build_zone_effects(
             let zs = show.zone(zone.id)?;
             let cell = zs.grid.get(zs.active?)?;
             let layer = cell.layers.first()?;
-            let (effect_id, params) = match &layer.source {
-                Source::Shader { effect_id, params } => (effect_id, params),
+            let (effect_id, params, palette) = match &layer.source {
+                Source::Shader {
+                    effect_id,
+                    params,
+                    palette,
+                } => (effect_id, params, palette),
             };
             let manifest = manifest_by_id(effect_id)?;
             let prefix = format!("/zone/{}/layer/0", zone.id);
             let inst = EffectInstance::new(gpu, tree, &prefix, &manifest);
             for (name, value) in params.iter() {
                 tree.write_path(&format!("{prefix}/param/{name}"), value, src);
+            }
+            if let Some(colors) = palette {
+                inst.set_palette(gpu, colors);
             }
             Some(inst)
         })
@@ -137,6 +144,10 @@ pub enum ZoneCommand {
     /// Rewind a zone's animation phase to its start, so its effect plays from the
     /// beginning (a pad in trigger mode, M9).
     Restart { slot: usize },
+    /// Replace the colour table of a zone's running effect (the Tabla de color edited
+    /// live). The list is built by the sender; the render thread only uploads it — one
+    /// 4 KB `write_buffer` — at the frame boundary.
+    SetPalette { slot: usize, colors: Vec<[f32; 3]> },
 }
 
 /// The producer end of the frame-boundary command queue. Cloneable and `Send`, so
@@ -159,6 +170,14 @@ impl ZoneCommandSender {
     /// Queue a phase rewind for `slot` (applied after any swap queued before it).
     pub fn restart_zone(&self, slot: usize) -> bool {
         self.tx.send(ZoneCommand::Restart { slot }).is_ok()
+    }
+
+    /// Queue a new colour table for `slot`'s running effect (applied after any swap
+    /// queued before it, so it lands on the effect that will actually be running).
+    pub fn set_zone_palette(&self, slot: usize, colors: Vec<[f32; 3]>) -> bool {
+        self.tx
+            .send(ZoneCommand::SetPalette { slot, colors })
+            .is_ok()
     }
 }
 
@@ -309,7 +328,7 @@ impl ZoneCompositor {
     /// structural changes land at the frame boundary and the frame is then rendered
     /// wholly under the post-swap state — never a half-and-half frame. Non-blocking
     /// (`try_recv`); the render thread never waits on a producer.
-    fn drain_commands(&mut self) {
+    fn drain_commands(&mut self, gpu: &Gpu) {
         while let Ok(cmd) = self.commands_rx.try_recv() {
             match cmd {
                 ZoneCommand::SetEffect { slot, effect } => {
@@ -320,6 +339,11 @@ impl ZoneCompositor {
                 ZoneCommand::Restart { slot } => {
                     if let Some(phase) = self.zone_phase_ns.get_mut(slot) {
                         *phase = PHASE_BIAS_NS;
+                    }
+                }
+                ZoneCommand::SetPalette { slot, colors } => {
+                    if let Some(effect) = self.slots.get(slot).and_then(|z| z.effect.as_ref()) {
+                        effect.set_palette(gpu, &colors);
                     }
                 }
             }
@@ -365,7 +389,7 @@ impl FrameContent for ZoneCompositor {
         //    BEFORE any rendering this frame. This is the atomic-swap point — the
         //    whole frame below is rendered under one consistent set of effects, so a
         //    swap can never split a frame into old-half / new-half (M8-PARTA §3).
-        self.drain_commands();
+        self.drain_commands(gpu);
 
         // 0b. Advance every zone's animation phase by its signed speed over the
         //     master's show-time delta. Integrating (rather than scaling absolute time)

@@ -91,7 +91,16 @@ pub enum Source {
     /// A procedural GPU effect from the built-in library. `effect_id` matches an
     /// `EffectManifest::effect_id` (e.g. `"plasma"`); `params` are its normalized
     /// values.
-    Shader { effect_id: String, params: ParamSet },
+    Shader {
+        effect_id: String,
+        params: ParamSet,
+        /// The cell's colour TABLE for effects that read a palette (the classic "Tabla de
+        /// color"), linear-light RGB in order. A list, not parameters, so it can be long
+        /// (the renderer caps it at 255). `None` = the effect's factory colours. Absent
+        /// in older files, which keeps them loading unchanged.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        palette: Option<Vec<[f32; 3]>>,
+    },
 }
 
 /// One layer of a cell's stack (CLAUDE.md §4.2).
@@ -120,6 +129,7 @@ impl Layer {
             source: Source::Shader {
                 effect_id: effect_id.into(),
                 params,
+                palette: None,
             },
             blend_mode: BlendMode::Normal,
             opacity: 1.0,

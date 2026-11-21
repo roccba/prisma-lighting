@@ -297,13 +297,7 @@ fn color_scroll_bands_come_from_the_palette_with_hard_cuts() {
     set("bpm", 0.0);
     set("color_width", 50.0);
     set("mode", scroll_mode("|Derecha"));
-    set("count", 2.0);
-    set("c0r", 1.0);
-    set("c0g", 0.0);
-    set("c0b", 0.0); // red
-    set("c1r", 0.0);
-    set("c1g", 0.0);
-    set("c1b", 1.0); // blue
+    cs.set_palette(gpu, &[[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]); // red, blue
 
     let f = render_2d(gpu, &mut cs, &clock_at(0.0), 8, 1);
     let reds = f.iter().filter(|p| p[0] > 0.99 && p[2] < 0.01).count();
@@ -316,6 +310,39 @@ fn color_scroll_bands_come_from_the_palette_with_hard_cuts() {
     assert!(
         g.iter().any(|p| p[0] > 0.05 && p[2] > 0.05),
         "with Atenuar the bands blend: {g:?}"
+    );
+}
+
+#[test]
+fn color_scroll_palette_is_a_list_of_up_to_255_colours() {
+    // 255 distinct greys, each band 1 % of a 255-px row: the row shows many different
+    // colours — the table is not capped at the old 8 slots.
+    let gpu = software_gpu();
+    let tree = ParameterTree::with_defaults();
+    let mut cs = EffectInstance::new(gpu, &tree, "/fx/cs4", &effects::color_scroll());
+    assert!(cs.has_palette());
+    let set = |p: &str, v: f32| {
+        let h = tree.resolve(&format!("/fx/cs4/param/{p}")).unwrap();
+        tree.write_real(&h, v, ui());
+    };
+    set("bpm", 0.0);
+    set("color_width", 1.0 / 2.55); // ~1 px per colour at 255 px
+    set("mode", scroll_mode("|Derecha"));
+    let colours: Vec<[f32; 3]> = (0..prisma_render::PALETTE_MAX)
+        .map(|i| {
+            let v = i as f32 / 254.0;
+            [v, v, v]
+        })
+        .collect();
+    cs.set_palette(gpu, &colours);
+    let f = render_2d(gpu, &mut cs, &clock_at(0.0), 255, 1);
+    let mut distinct: Vec<u32> = f.iter().map(|p| (p[0] * 1000.0) as u32).collect();
+    distinct.sort_unstable();
+    distinct.dedup();
+    assert!(
+        distinct.len() > 100,
+        "only {} distinct colours",
+        distinct.len()
     );
 }
 

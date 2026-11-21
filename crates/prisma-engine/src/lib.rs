@@ -37,7 +37,7 @@ pub mod content;
 pub mod engine;
 pub mod zone_content;
 
-pub use cells::{CellHost, CELL_ASSIGNED, CELL_EMPTY, CELL_RUNNING};
+pub use cells::{CellEffect, CellHost, CELL_ASSIGNED, CELL_EMPTY, CELL_RUNNING};
 pub use config::EngineConfig;
 pub use content::IdleContent;
 pub use engine::{
