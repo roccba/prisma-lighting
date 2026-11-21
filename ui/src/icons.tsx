@@ -35,6 +35,16 @@ export function Bolt({ size = 13 }: IconProps) {
   );
 }
 
+/** Three vertical faders — opens the "Caja de Fader". */
+export function Sliders(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M6 4v16M12 4v16M18 4v16" />
+      <path d="M4 14h4M10 8h4M16 12h4" strokeWidth={3} />
+    </Svg>
+  );
+}
+
 /** Open a file — folder with a lifted flap. */
 export function FolderOpen(p: IconProps) {
   return (

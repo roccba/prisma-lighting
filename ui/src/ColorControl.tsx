@@ -1,13 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { setParam, type ParamInfo } from "./api";
-import { scrubHandler } from "./scrub";
-import { linearToHex, linearToSrgb255, srgb255ToLinear } from "./srgb";
+import { ByteBox } from "./ByteBox";
+import { ColorSwatch, type Rgb } from "./ColorPicker";
+import { FaderBox } from "./FaderBox";
+import { Sliders } from "./icons";
+import { linearToSrgb255, srgb255ToLinear } from "./srgb";
 
-// The effect colour control, console-style: a swatch square that opens a VERTICAL preset
-// palette, plus three 0–255 R/G/B boxes for manual entry. The colour's three channels
-// are three scalar params sharing a manifest colour group (§3.5); this drives all three
-// at once. Presentation is 255-space sRGB; every write converts to linear-light 0..1
-// (§2.3) so the engine's value model is untouched.
+// The effect colour control, console-style: [swatch] [R] [G] [B] [W] [A] [fader box].
+//  · the swatch opens the "Selector de color" (press, hold and drag; release to keep);
+//  · R/G/B are 0–255 boxes (type, or drag up/down);
+//  · W and A are shown like professional consoles but DISABLED: the effects' colours are RGB today
+//    (no white channel, no alpha) — the boxes are ready for when they exist;
+//  · the fader button opens the "Caja de Fader" with one fader per channel.
+// The colour's three channels are three scalar params sharing a manifest colour group
+// (§3.5). Presentation is 255-space sRGB; every write converts to linear light 0..1 (§2.3)
+// so the engine's value model is untouched.
 
 interface ColorControlProps {
   zoneId: string;
@@ -16,56 +23,7 @@ interface ColorControlProps {
   b: ParamInfo;
 }
 
-// A compact preset palette (sRGB hex), shown vertically when the swatch is clicked.
-const PRESETS = [
-  "#ffffff", "#ffbf80", "#ff0000", "#ff7f00", "#ffff00", "#7fff00",
-  "#00ff00", "#00ff7f", "#00ffff", "#007fff", "#0000ff", "#7f00ff",
-  "#ff00ff", "#ff007f", "#808080", "#000000",
-];
-
-/** One 0–255 channel box. Only digits are accepted and the value is clamped to 255 as you
- *  type (no leading zeros, no letters). It can be cleared to type over; an empty box
- *  reverts on blur. Drag up/down on it to scrub the value like a fader. */
-function ChannelBox({
-  label,
-  v255,
-  tint,
-  onChange,
-}: {
-  label: string;
-  v255: number;
-  tint: string;
-  onChange: (v: number) => void;
-}) {
-  const [draft, setDraft] = useState(String(v255));
-  useEffect(() => setDraft(String(v255)), [v255]);
-
-  return (
-    <label className="pr-color-box" style={{ borderTopColor: tint }} title={`${label} 0–255`}>
-      <input
-        value={draft}
-        inputMode="numeric"
-        maxLength={3}
-        onChange={(e) => {
-          const digits = e.target.value.replace(/\D/g, "");
-          if (digits === "") {
-            setDraft("");
-            return;
-          }
-          const v = Math.min(255, parseInt(digits, 10));
-          setDraft(String(v));
-          onChange(v);
-        }}
-        onBlur={() => setDraft(String(v255))}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-        }}
-        onPointerDown={scrubHandler(() => ({ get: () => v255, set: onChange, min: 0, max: 255, perPixel: 1, step: 1 }))}
-        aria-label={label}
-      />
-    </label>
-  );
-}
+const TINT = { r: "#e05555", g: "#5bbf5b", b: "#5b8fe0", w: "#9a9a9a", a: "#e8e8e8" };
 
 export function ColorControl({ zoneId, r, g, b }: ColorControlProps) {
   const [lin, setLin] = useState({ r: r.value_norm, g: g.value_norm, b: b.value_norm });
@@ -73,29 +31,16 @@ export function ColorControl({ zoneId, r, g, b }: ColorControlProps) {
     setLin({ r: r.value_norm, g: g.value_norm, b: b.value_norm });
   }, [r.value_norm, g.value_norm, b.value_norm]);
 
-  // The preset palette popover; closes on an outside click.
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    window.addEventListener("mousedown", onDown);
-    return () => window.removeEventListener("mousedown", onDown);
-  }, [open]);
+    const [faderBoxAt, setFaderBoxAt] = useState<{ x: number; y: number } | null>(null);
 
-  const writeChannel = (ch: "r" | "g" | "b", param: ParamInfo, v255: number) => {
+  const writeChannel = (ch: "r" | "g" | "b", v255: number) => {
+    const param = { r, g, b }[ch];
     const linv = srgb255ToLinear(v255);
     setLin((p) => ({ ...p, [ch]: linv }));
     setParam(zoneId, param.name, linv).catch(() => {});
   };
 
-  const setHex = (hex: string) => {
-    const h = hex.replace("#", "");
-    const R = parseInt(h.slice(0, 2), 16);
-    const G = parseInt(h.slice(2, 4), 16);
-    const B = parseInt(h.slice(4, 6), 16);
+  const writeRgb = ([R, G, B]: Rgb) => {
     const next = { r: srgb255ToLinear(R), g: srgb255ToLinear(G), b: srgb255ToLinear(B) };
     setLin(next);
     setParam(zoneId, r.name, next.r).catch(() => {});
@@ -103,40 +48,45 @@ export function ColorControl({ zoneId, r, g, b }: ColorControlProps) {
     setParam(zoneId, b.name, next.b).catch(() => {});
   };
 
-  const hex = linearToHex(lin.r, lin.g, lin.b);
   const R = linearToSrgb255(lin.r);
   const G = linearToSrgb255(lin.g);
   const B = linearToSrgb255(lin.b);
 
   return (
-    <div className="pr-color" ref={ref}>
+    <div className="pr-color">
       <div className="pr-color-fields">
+        <ColorSwatch className="pr-color-swatch-btn" value={[R, G, B]} onChange={writeRgb} />
+        <ByteBox label="R" value={R} tint={TINT.r} onChange={(v) => writeChannel("r", v)} />
+        <ByteBox label="G" value={G} tint={TINT.g} onChange={(v) => writeChannel("g", v)} />
+        <ByteBox label="B" value={B} tint={TINT.b} onChange={(v) => writeChannel("b", v)} />
+        <ByteBox label="W" value={0} tint={TINT.w} disabled />
+        <ByteBox label="A" value={0} tint={TINT.a} disabled />
         <button
-          className="pr-color-swatch-btn"
-          style={{ background: hex }}
-          onClick={() => setOpen((o) => !o)}
-          title="Abrir paleta"
-          aria-label="Abrir paleta"
-        />
-        <ChannelBox label="R" v255={R} tint="#e05555" onChange={(v) => writeChannel("r", r, v)} />
-        <ChannelBox label="G" v255={G} tint="#5bbf5b" onChange={(v) => writeChannel("g", g, v)} />
-        <ChannelBox label="B" v255={B} tint="#5b8fe0" onChange={(v) => writeChannel("b", b, v)} />
+          type="button"
+          className={`pr-btn pr-color-faderbtn${faderBoxAt ? " is-active" : ""}`}
+          onClick={(e) => {
+            const at = { x: e.clientX, y: e.clientY };
+            setFaderBoxAt((cur) => (cur ? null : at));
+          }}
+          title="Caja de Fader"
+          aria-label="Caja de Fader"
+        >
+          <Sliders size={16} />
+        </button>
       </div>
-      {open && (
-        <div className="pr-color-palette" role="listbox">
-          {PRESETS.map((p) => (
-            <button
-              key={p}
-              className="pr-color-preset"
-              style={{ background: p }}
-              title={p}
-              onClick={() => {
-                setHex(p);
-                setOpen(false);
-              }}
-            />
-          ))}
-        </div>
+      {faderBoxAt && (
+        <FaderBox
+          channels={[
+            { label: "R", chip: "#ff0000", value: R, onChange: (v) => writeChannel("r", v) },
+            { label: "G", chip: "#00c000", value: G, onChange: (v) => writeChannel("g", v) },
+            { label: "B", chip: "#0040ff", value: B, onChange: (v) => writeChannel("b", v) },
+            { label: "W", chip: "#000000", value: 0, disabled: true },
+            { label: "A", chip: "#ffffff", value: 0, disabled: true },
+          ]}
+          preview={<ColorSwatch className="pr-faderbox-swatch" value={[R, G, B]} onChange={writeRgb} />}
+          at={faderBoxAt}
+          onClose={() => setFaderBoxAt(null)}
+        />
       )}
     </div>
   );

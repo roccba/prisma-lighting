@@ -738,13 +738,57 @@ input.pr-field-value:focus { outline: 1px solid var(--accent); outline-offset: -
    0–255 R/G/B boxes for manual entry. Values stay linear in the model (§2.3). */
 .pr-color { position: relative; display: flex; flex-direction: column; gap: 4px; }
 .pr-color-fields { display: flex; align-items: stretch; gap: 5px; }
-.pr-color-swatch-btn { width: 40px; height: 34px; border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); cursor: pointer; padding: 0; box-shadow: inset 0 0 0 1px rgba(0,0,0,.35); }
+.pr-color-swatch-btn { width: 52px; height: 34px; box-sizing: border-box; border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); cursor: pointer; padding: 0; box-shadow: inset 0 0 0 1px rgba(0,0,0,.35); }
 .pr-color-box { display: flex; width: 52px; height: 34px; border: 1px solid var(--btn-border-dark); border-top-width: 3px; border-radius: var(--r-sm); background: var(--bg-input); overflow: hidden; }
 .pr-color-box input { width: 100%; border: none; background: transparent; color: var(--text); font: inherit; font-size: var(--fs-base); text-align: center; -moz-appearance: textfield; appearance: textfield; }
 .pr-color-box input::-webkit-outer-spin-button, .pr-color-box input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-.pr-color-palette { position: absolute; top: 100%; left: 0; margin-top: 4px; z-index: 20; display: flex; flex-direction: column; gap: 3px; max-height: 236px; overflow-y: auto; padding: 5px; background: var(--bg-panel-2); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); box-shadow: 0 8px 24px rgba(0,0,0,.5); }
-.pr-color-preset { width: 58px; height: 18px; border: 1px solid rgba(0,0,0,.4); border-radius: var(--r-sm); cursor: pointer; padding: 0; }
-.pr-color-preset:hover { outline: 2px solid var(--accent); outline-offset: -1px; }
+.pr-color-box.is-off { opacity: .45; }
+.pr-color-faderbtn { width: 40px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+
+/* "Selector de color" (professional consoles colour picker): quick colours / grey strip + hue field +
+   now/was / favourites. Press and drag inside the field or the grey strip. */
+.pr-cpick { position: fixed; z-index: 130; width: 640px; height: 330px; display: grid; grid-template-rows: 44px 1fr 40px; background: #000; border: 1px solid var(--btn-border-dark); box-shadow: 0 10px 28px rgba(0,0,0,.6); user-select: none; }
+.pr-swatch-pick { cursor: pointer; touch-action: none; }
+.pr-cpick-quick > div, .pr-cpick-favs > div, .pr-cpick-compare > div { min-width: 0; }
+.pr-cpick-favs > div { display: flex; align-items: center; justify-content: center; }
+.pr-cpick-add.is-hover { box-shadow: inset 0 0 0 2px var(--accent-bright); }
+/* While the selector is held open, the whole page picks: crosshair, no text selection. */
+body.is-picking, body.is-picking * { cursor: crosshair !important; user-select: none !important; }
+.pr-cpick-quick { display: grid; grid-template-columns: repeat(14, 1fr); }
+.pr-cpick-mid { display: grid; grid-template-columns: 44px 1fr 44px; min-height: 0; }
+.pr-cpick-grey { background: linear-gradient(#fff, #000); cursor: crosshair; touch-action: none; }
+.pr-cpick-field {
+  position: relative; cursor: crosshair; touch-action: none; overflow: hidden;
+  background:
+    linear-gradient(to bottom, #fff 0%, rgba(255,255,255,0) 40%, rgba(0,0,0,0) 60%, #000 100%),
+    linear-gradient(to right, #f00 0%, #ff0 16.667%, #0f0 33.333%, #0ff 50%, #00f 66.667%, #f0f 83.333%, #f00 100%);
+}
+.pr-cpick-line { position: absolute; left: 0; right: 0; height: 1px; background: rgba(0,0,0,.75); pointer-events: none; }
+.pr-cpick-marker { position: absolute; width: 40px; height: 40px; margin: -20px 0 0 -20px; border: 2px solid #000; border-radius: 50%; box-shadow: 0 0 0 1px rgba(255,255,255,.5); pointer-events: none; }
+.pr-cpick-compare { display: grid; grid-template-rows: 1fr 1fr; }
+.pr-cpick-favs { display: grid; grid-template-columns: repeat(13, 1fr); }
+.pr-cpick-favs > div { font-family: var(--font-ui); font-size: var(--fs-base); font-weight: 600; }
+
+/* Floating tool windows (FloatWindow: Caja de Fader, Tabla de color): fixed size,
+   non-blocking, draggable by the title bar. */
+.pr-float { position: fixed; z-index: 120; background: var(--bg-panel); border: 1px solid var(--btn-border); border-radius: var(--r-md); box-shadow: 0 14px 36px rgba(0,0,0,.65); display: flex; flex-direction: column; }
+.pr-float-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; height: 30px; padding: 0 4px 0 12px; background: var(--header-bg); border-bottom: 1px solid var(--btn-border-dark); color: var(--text); font-size: var(--fs-base); cursor: move; user-select: none; }
+.pr-float-x { width: 26px; height: 24px; background: transparent; border: none; color: var(--text); font-size: 18px; cursor: pointer; border-radius: var(--r-sm); }
+.pr-float-x:hover { background: var(--danger); color: #fff; }
+/* "Caja de Fader" (professional consoles Fader Box). */
+.pr-faderbox { width: 330px; }
+.pr-faderbox-body { display: flex; flex-direction: column; align-items: stretch; gap: 10px; padding: 10px 12px 12px; }
+.pr-faderbox-chans { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.pr-faderbox-chan { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.pr-faderbox-chan.is-off { opacity: .45; }
+.pr-faderbox-chan.is-off .pr-faderbox-fader { pointer-events: none; }
+.pr-faderbox-lbl { font-size: var(--fs-base); font-weight: 600; color: var(--text-label); }
+.pr-faderbox-fader .pr-fader { height: 230px; }
+.pr-faderbox-chip { width: 100%; height: 12px; border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); }
+.pr-faderbox-chan .pr-faderbox-val { width: 100%; height: 28px; border-top-width: 1px; }
+.pr-faderbox-preview { height: 30px; }
+.pr-faderbox-swatch { width: 100%; height: 100%; border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); }
+.pr-faderbox-close { align-self: center; min-width: 120px; }
 
 /* Direction rose: a 3×3 compass of the editor's eight signal directions (centre empty). */
 .pr-rose { display: grid; grid-template-columns: repeat(3, 30px); grid-template-rows: repeat(3, 28px); gap: 3px; }
