@@ -68,6 +68,53 @@ function MainWindowBody() {
       })
       .catch((e) => setError(String(e)));
 
+  // Boot handover (see `show_main` in main.rs): the window is shown — behind the splash —
+  // only when everything is loaded, and the window manager then brings it to its final
+  // (maximized) size over a few frames. The console stays invisible until that size has
+  // settled, so the operator never sees it laid out at an intermediate size; then it
+  // appears and tells the splash to go (`prisma://shown`). A timeout reveals it anyway.
+  const [revealed, setRevealed] = useState(false);
+  useEffect(() => {
+    let done = false;
+    let raf = 0;
+    let last = "";
+    let stableFrames = 0;
+    const reveal = () => {
+      if (done) return;
+      done = true;
+      cancelAnimationFrame(raf);
+      setRevealed(true);
+      // Next frame, so the revealed console has been painted before the splash leaves.
+      requestAnimationFrame(() => emit("prisma://shown").catch(() => {}));
+    };
+    // rAF does not run while the window is hidden, so this starts counting on show.
+    const tick = () => {
+      const size = `${window.innerWidth}x${window.innerHeight}`;
+      stableFrames = size === last && window.innerWidth > 0 ? stableFrames + 1 : 0;
+      last = size;
+      if (stableFrames >= 3) {
+        getCurrentWindow()
+          .isMaximized()
+          .then((max) => {
+            if (max) reveal();
+            else raf = requestAnimationFrame(tick);
+          })
+          .catch(reveal);
+        return;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    // Fallback: a window manager that never maximizes (or a tiling one) must not leave
+    // the console invisible — once shown, reveal after a short grace period regardless.
+    const un = listen("prisma://show-main", () => setTimeout(reveal, 1200));
+    return () => {
+      done = true;
+      cancelAnimationFrame(raf);
+      un.then((f) => f()).catch(() => {});
+    };
+  }, []);
+
   useEffect(() => {
     // Once the first zone load resolves the operation window is ready to be shown, so tell
     // the boot splash it can hand over (`prisma://ready` → the splash fades and calls
@@ -333,7 +380,7 @@ function MainWindowBody() {
 
   return (
     <PreviewStreamProvider>
-      <div className="pr-mainwin">
+      <div className="pr-mainwin" style={revealed ? undefined : { visibility: "hidden" }}>
         <MenuBar
           menus={menus}
           right={

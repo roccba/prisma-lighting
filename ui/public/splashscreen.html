@@ -12,7 +12,9 @@
          Animation: the P lights LED-by-LED (a left→right scan), then "RISMA / LIGHTING
          CONTROL" slides out from BEHIND the P (revealed by an overflow clip whose left edge
          is the P's right edge). A loading line + indeterminate bar run until the engine and
-         UI report ready (`prisma://ready`), then the splash fades and closes. */
+         UI report ready (`prisma://ready`); the console is then shown behind the splash and,
+         once it reports it is laid out at its final size (`prisma://shown`), the splash fades
+         and closes. */
       :root {
         --accent: #007acc;
         --accent-bright: #1f9cff;
@@ -206,42 +208,54 @@
       if (brandEl) brandEl.style.animationDelay = pFinish + 40 + "ms";
       if (subEl) subEl.style.animationDelay = pFinish + 160 + "ms";
 
-      // --- Close handshake ---------------------------------------------------------
-      // Close only when BOTH the engine/UI are ready AND a minimum on-screen time has
-      // passed (so the animation is always seen). A hard cap closes it regardless, so a
-      // frontend that never signals cannot strand the splash.
+      // --- Handover ----------------------------------------------------------------
+      // 1. When BOTH the engine/UI are ready AND a minimum on-screen time has passed (so
+      //    the animation is always seen), ask Rust to show the console BEHIND this splash
+      //    (`show_main`) — it reaches its final size while still covered.
+      // 2. When the console reports it is laid out at that size (`prisma://shown`), fade
+      //    out and close (`close_splash`).
+      // Caps: if the console never reports, hand over anyway; if nothing ever signals
+      // ready, the hard cap does both — the splash can never strand the app.
       const MIN_MS = 2800; // hold after the intro completes so the mark is enjoyed
+      const SHOWN_CAP_MS = 2500; // after show_main, wait this long for "shown" at most
       const MAX_MS = 15000; // safety cap
       const start = performance.now();
+      const T = window.__TAURI__;
+      const invoke = (cmd) => (T && T.core && T.core.invoke ? T.core.invoke(cmd).catch(() => {}) : Promise.resolve());
       let ready = false,
+        showing = false,
         closed = false;
 
       function close() {
         if (closed) return;
         closed = true;
         document.body.classList.add("done");
-        const T = window.__TAURI__;
-        // Wait out the fade, then ask Rust to swap splash → main.
-        setTimeout(() => {
-          if (T && T.core && T.core.invoke) T.core.invoke("close_splash").catch(() => {});
-        }, 380);
+        // Wait out the fade, then drop the splash.
+        setTimeout(() => invoke("close_splash"), 380);
       }
-      function maybeClose() {
+      function showMain() {
+        if (showing) return;
+        showing = true;
+        invoke("show_main");
+        setTimeout(close, SHOWN_CAP_MS);
+      }
+      function maybeShow() {
         if (!ready) return;
         const wait = Math.max(0, MIN_MS - (performance.now() - start));
-        setTimeout(close, wait);
+        setTimeout(showMain, wait);
       }
 
-      const T = window.__TAURI__;
       if (T && T.event && T.event.listen) {
         T.event.listen("prisma://ready", () => {
           ready = true;
-          maybeClose();
+          maybeShow();
         });
+        T.event.listen("prisma://shown", close);
       }
-      // Safety cap: force the swap even if `prisma://ready` never arrives.
+      // Safety cap: force the handover even if `prisma://ready` never arrives.
       setTimeout(() => {
         ready = true;
+        showMain();
         close();
       }, MAX_MS);
     </script>

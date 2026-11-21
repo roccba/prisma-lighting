@@ -1884,19 +1884,42 @@ fn main_set_master_strobe_rate(state: State<AppState>, rate: f32) {
 /// Highlight works, §7), and on **close** the editor's edits are applied to the running
 /// show and it resumes on the new layout ([`apply_editor_draft`]). A second open focuses
 /// the existing window.
-/// Swap the boot splash for the main window. Called by the splash webview once the engine
-/// and UI have signalled readiness (`prisma://ready`), or by the splash's own safety cap.
-/// Shows the (initially hidden) main window and closes the splash. Idempotent: a missing
-/// splash or an already-visible main window is fine, so a double-call cannot misbehave.
+/// Boot handover, step 1: show the console BEHIND the splash. Called by the splash once
+/// the engine and UI are ready and its minimum on-screen time has passed. The splash is
+/// always-on-top, so the operator still sees only the splash while the window manager
+/// brings the console to its final (maximized) size — on Linux a hidden window ignores
+/// size, position and "maximized" until it is shown, so it cannot be sized beforehand.
+/// The console keeps its content invisible until that size has settled, then emits
+/// `prisma://shown` and the splash fades and calls [`close_splash`].
+#[tauri::command]
+fn show_main(app: AppHandle) {
+    if let Some(main) = app.get_webview_window("main") {
+        reveal_main(&main);
+    }
+    let _ = app.emit("prisma://show-main", ());
+}
+
+/// Boot handover, step 2: drop the splash and focus the console. Also reveals the console
+/// itself if step 1 never happened (the splash's safety cap), so the app can never be
+/// left with nothing on screen. Idempotent.
 #[tauri::command]
 fn close_splash(app: AppHandle) {
     if let Some(main) = app.get_webview_window("main") {
-        let _ = main.show();
+        reveal_main(&main);
         let _ = main.set_focus();
     }
     if let Some(splash) = app.get_webview_window("splash") {
         let _ = splash.close();
     }
+}
+
+/// Show and maximize the console. No-op once visible.
+fn reveal_main(main: &tauri::WebviewWindow) {
+    if main.is_visible().unwrap_or(false) {
+        return;
+    }
+    let _ = main.show();
+    let _ = main.maximize();
 }
 
 /// The patch-editor window, opened to MATCH the main window: on its monitor, fullscreen
@@ -2306,6 +2329,7 @@ fn main() {
             midi_unmap,
             midi_configure,
             close_splash,
+            show_main,
         ])
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -2465,23 +2489,20 @@ fn main() {
             // PC) just leaves it off; the Scan retries and explains.
             let _ = ensure_artnet_monitor(app.handle());
 
-            // Boot splash safety net: the splash webview normally reveals the main window
-            // (via `close_splash`) once the UI signals `prisma://ready`, and it has its own
-            // hard cap. This is the backstop for the case where the splash webview itself
-            // never runs its JS — after a generous timeout, reveal the main window and drop
-            // the splash so the app can never boot to nothing on screen. No-op if the main
-            // window is already visible (the normal path got there first).
+            // Boot splash safety net: the splash webview normally reveals the console (via
+            // `close_splash`) once the UI signals `prisma://ready`, and it has its own hard
+            // cap. This is the backstop for a splash whose JS never runs: after a generous
+            // timeout, reveal the console the same way and drop the splash, so the app can
+            // never boot to nothing on screen. No-op if the normal path got there first.
             let boot = app.handle().clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(20));
                 if let Some(main) = boot.get_webview_window("main") {
-                    if !main.is_visible().unwrap_or(true) {
-                        let _ = main.show();
-                        let _ = main.set_focus();
-                        if let Some(splash) = boot.get_webview_window("splash") {
-                            let _ = splash.close();
-                        }
-                    }
+                    reveal_main(&main);
+                    let _ = main.set_focus();
+                }
+                if let Some(splash) = boot.get_webview_window("splash") {
+                    let _ = splash.close();
                 }
             });
             Ok(())
