@@ -150,6 +150,14 @@ pub struct Cell {
     /// Transition into this cell, driven by the master clock.
     #[serde(default)]
     pub fade_time: Duration,
+    /// The operator's label for this cell, shown on the grid. `None` = unnamed (the
+    /// grid falls back to the effect's name). Older files without it load unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_name: Option<String>,
+    /// The cell's own colour on the grid, sRGB 0–255 (what the operator sees — a UI
+    /// label, never light on the rig). `None` = the default panel grey.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_color: Option<[u8; 3]>,
 }
 
 impl Cell {
@@ -158,6 +166,8 @@ impl Cell {
         Cell {
             layers: Vec::new(),
             fade_time: Duration::ZERO,
+            cell_name: None,
+            cell_color: None,
         }
     }
 
@@ -166,6 +176,8 @@ impl Cell {
         Cell {
             layers: vec![layer],
             fade_time: Duration::ZERO,
+            cell_name: None,
+            cell_color: None,
         }
     }
 

@@ -402,6 +402,14 @@ export interface CellInfo {
   effect_id: string | null;
   effect_name: string | null;
   active: boolean;
+  /** The operator's label for the cell (null = unnamed: show the effect's name). */
+  name: string | null;
+  /** The cell's grid colour, sRGB 0–255 (null = default panel grey). */
+  color: [number, number, number] | null;
+  /** The effect's stored parameter overrides (normalized), null for an empty cell. */
+  params: Record<string, number> | null;
+  /** The effect's own colour table (linear light), if it has one. */
+  palette: [number, number, number][] | null;
 }
 
 /** One entry the effect picker offers. */
@@ -417,9 +425,33 @@ export const effectCatalogue = () => invoke<EffectListing[]>("main_effect_catalo
 /** The scene grid of a zone (its cells + which is running). */
 export const zoneGrid = (zone: string) => invoke<CellInfo[]>("main_zone_grid", { zone });
 
-/** Assign an effect to a cell AND fire it (picking plays it). Returns the new grid. */
-export const assignCell = (zone: string, index: number, effectId: string) =>
-  invoke<CellInfo[]>("main_assign_cell", { zone, index, effectId });
+/** Assign an effect to a cell AND fire it (picking plays it). Returns the new grid.
+ *  `params` / `palette` default to the effect's own. */
+export const assignCell = (
+  zone: string,
+  index: number,
+  effectId: string,
+  params: Record<string, number> | null = null,
+  palette: [number, number, number][] | null = null,
+) => invoke<CellInfo[]>("main_assign_cell", { zone, index, effectId, params, palette });
+
+/** Assign an effect (with its stored params / colour table) to a cell WITHOUT firing it
+ *  — the grid's paste. The zone's running cell does not change. Returns the new grid. */
+export const assignCellSilent = (
+  zone: string,
+  index: number,
+  effectId: string,
+  params: Record<string, number> | null,
+  palette: [number, number, number][] | null,
+) => invoke<CellInfo[]>("main_assign_cell_silent", { zone, index, effectId, params, palette });
+
+/** Label a cell on the grid (blank clears the label). Returns the new grid. */
+export const renameCell = (zone: string, index: number, name: string) =>
+  invoke<CellInfo[]>("main_rename_cell", { zone, index, name });
+
+/** Give a cell its own grid colour (sRGB 0–255). Returns the new grid. */
+export const setCellColor = (zone: string, index: number, color: [number, number, number]) =>
+  invoke<CellInfo[]>("main_set_cell_color", { zone, index, color });
 
 /** Trigger an already-assigned cell (make it the zone's active content). */
 export const triggerCell = (zone: string, index: number) =>

@@ -62,6 +62,15 @@ struct CellInfo {
     effect_id: Option<String>,
     effect_name: Option<String>,
     active: bool,
+    /// The operator's label for the cell (`None` = unnamed).
+    name: Option<String>,
+    /// The cell's grid colour, sRGB 0–255 (`None` = default panel grey).
+    color: Option<[u8; 3]>,
+    /// The effect's stored parameter overrides — carried so the grid's copy/paste can
+    /// duplicate a cell whole (effect + parameters + colour table + label).
+    params: Option<ParamSet>,
+    /// The effect's stored colour table (linear light), if it has its own.
+    palette: Option<Vec<[f32; 3]>>,
 }
 
 /// One entry the effect picker offers, catalogue-driven (§5.3).
@@ -197,15 +206,27 @@ fn grid_dto(zs: &ZoneShow) -> Vec<CellInfo> {
         .iter()
         .enumerate()
         .map(|(i, cell)| {
-            let effect_id = cell.layers.first().map(|l| match &l.source {
-                Source::Shader { effect_id, .. } => effect_id.clone(),
+            let shader = cell.layers.first().map(|l| match &l.source {
+                Source::Shader {
+                    effect_id,
+                    params,
+                    palette,
+                } => (effect_id.clone(), params.clone(), palette.clone()),
             });
+            let (effect_id, params, palette) = match shader {
+                Some((id, params, palette)) => (Some(id), Some(params), palette),
+                None => (None, None, None),
+            };
             let effect_name = effect_id.as_deref().and_then(effect_display_name);
             CellInfo {
                 index: i,
                 effect_id,
                 effect_name,
                 active: zs.active == Some(i),
+                name: cell.cell_name.clone(),
+                color: cell.cell_color,
+                params,
+                palette,
             }
         })
         .collect()
@@ -2027,36 +2048,83 @@ fn main_zone_grid(state: State<AppState>, zone: Uuid) -> Vec<CellInfo> {
     show.zone(zone).map(grid_dto).unwrap_or_default()
 }
 
+/// Write an effect (with optional stored `params` / colour table) into a zone's cell,
+/// replacing whatever it held. Show state only — firing is the caller's choice. `None`
+/// when the zone does not exist; an out-of-range index leaves the grid unchanged.
+fn write_cell(
+    state: &AppState,
+    zone: Uuid,
+    index: usize,
+    effect_id: String,
+    params: Option<ParamSet>,
+    palette: Option<Vec<[f32; 3]>>,
+) -> Option<Vec<CellInfo>> {
+    let mut show = state.show.lock().unwrap();
+    let zs = show.zones.iter_mut().find(|z| z.zone_id == zone)?;
+    if index < zs.grid.len() {
+        let mut layer = Layer::shader(effect_id, params.unwrap_or_default());
+        let Source::Shader { palette: p, .. } = &mut layer.source;
+        *p = palette
+            .map(|mut p| {
+                p.truncate(prisma_render::PALETTE_MAX);
+                p
+            })
+            .filter(|p| !p.is_empty());
+        zs.grid[index] = Cell::single(layer);
+    }
+    Some(grid_dto(zs))
+}
+
 /// Assign an effect to a cell AND fire it (picking an effect for a cell plays it):
 /// fill the cell's layer, make it the zone's active cell, and trigger it live through
 /// the frame-boundary queue. Returns the updated grid.
+///
+/// `params` / `palette` are optional: the effect picker sends neither (manifest
+/// defaults).
 #[tauri::command]
 fn main_assign_cell(
     state: State<AppState>,
     zone: Uuid,
     index: usize,
     effect_id: String,
+    params: Option<ParamSet>,
+    palette: Option<Vec<[f32; 3]>>,
 ) -> Vec<CellInfo> {
     let Some(slot) = zone_slot(&state, zone) else {
         return Vec::new();
     };
-    let params = ParamSet::new(); // default params in step 4; parameter editing is step 5
-    let dto = {
-        let mut show = state.show.lock().unwrap();
-        let Some(zs) = show.zones.iter_mut().find(|z| z.zone_id == zone) else {
-            return Vec::new();
-        };
-        if index >= zs.grid.len() {
-            return grid_dto(zs);
-        }
-        zs.grid[index] = Cell::single(Layer::shader(effect_id.clone(), params.clone()));
-        grid_dto(zs)
+    let Some(dto) = write_cell(&state, zone, index, effect_id, params, palette) else {
+        return Vec::new();
     };
     // Play it through the cell's `trigger` target (restart: the cell may already be the
     // running one, now with a different effect). The controller reads the new content
     // from the show, runs it and reports the running cell back (`cells-changed`).
     if let Some(engine) = state.engine.lock().unwrap().as_ref() {
         engine.trigger_cell(slot, index);
+    }
+    dto
+}
+
+/// Assign an effect to a cell WITHOUT firing it — the grid's paste: the operator readies
+/// a cell and plays it later. The zone's active cell does not change; only the pads are
+/// refreshed so a mapped pad shows the cell as assigned. Returns the updated grid.
+#[tauri::command]
+fn main_assign_cell_silent(
+    state: State<AppState>,
+    zone: Uuid,
+    index: usize,
+    effect_id: String,
+    params: Option<ParamSet>,
+    palette: Option<Vec<[f32; 3]>>,
+) -> Vec<CellInfo> {
+    let Some(slot) = zone_slot(&state, zone) else {
+        return Vec::new();
+    };
+    let Some(dto) = write_cell(&state, zone, index, effect_id, params, palette) else {
+        return Vec::new();
+    };
+    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        engine.refresh_cells(slot);
     }
     dto
 }
@@ -2110,6 +2178,46 @@ fn main_clear_cell(state: State<AppState>, zone: Uuid, index: usize) -> Vec<Cell
         }
     }
     dto
+}
+
+/// Label a cell on the grid. Blank (after trimming) clears the label, so the grid falls
+/// back to the effect's name. A UI label only — the engine never reads it, so nothing
+/// is pushed live; it persists with the show. Returns the updated grid.
+#[tauri::command]
+fn main_rename_cell(
+    state: State<AppState>,
+    zone: Uuid,
+    index: usize,
+    name: String,
+) -> Vec<CellInfo> {
+    let mut show = state.show.lock().unwrap();
+    let Some(zs) = show.zones.iter_mut().find(|z| z.zone_id == zone) else {
+        return Vec::new();
+    };
+    if let Some(cell) = zs.grid.get_mut(index) {
+        let name = name.trim();
+        cell.cell_name = (!name.is_empty()).then(|| name.to_string());
+    }
+    grid_dto(zs)
+}
+
+/// Give a cell its own grid colour (sRGB 0–255). A UI label like the name: not light,
+/// never sent to the engine; it persists with the show. Returns the updated grid.
+#[tauri::command]
+fn main_set_cell_color(
+    state: State<AppState>,
+    zone: Uuid,
+    index: usize,
+    color: [u8; 3],
+) -> Vec<CellInfo> {
+    let mut show = state.show.lock().unwrap();
+    let Some(zs) = show.zones.iter_mut().find(|z| z.zone_id == zone) else {
+        return Vec::new();
+    };
+    if let Some(cell) = zs.grid.get_mut(index) {
+        cell.cell_color = Some(color);
+    }
+    grid_dto(zs)
 }
 
 // --- Main operation window (M8 step 5): the effect parameter panel ---
@@ -2316,8 +2424,11 @@ fn main() {
             main_effect_catalogue,
             main_zone_grid,
             main_assign_cell,
+            main_assign_cell_silent,
             main_trigger_cell,
             main_clear_cell,
+            main_rename_cell,
+            main_set_cell_color,
             main_effect_panel,
             main_set_param,
             main_set_palette,
