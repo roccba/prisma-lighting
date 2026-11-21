@@ -446,12 +446,38 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
   useEffect(() => {
     assigning.current = null;
   }, [zoneId, cell, draftEffect]);
-  // Auto-clear (see `isBlackColor`): every edit re-arms a timer; when it fires the latest
-  // panel state is checked. Cancelled when another cell is selected.
+  // Auto-clear (see `isBlackColor`), at two moments:
+  //  · while editing: every edit re-arms a timer; when it fires the latest panel state is
+  //    checked (the operator finished editing this cell);
+  //  · on LEAVING the cell: whenever the panel moves to another cell or zone — a grid
+  //    click, a zone switch, MIDI focus, another show — the cell being left is checked at
+  //    once with its last known state (a pending timer is superseded by this check).
+  // Both read `panelRef`, the latest panel, whose own zone/cell say which cell it is.
   const panelRef = useRef(panel);
   panelRef.current = panel;
+  const gridChangeRef = useRef(onGridChange);
+  gridChangeRef.current = onGridChange;
+  // What is selected NOW (refs are set during render, so a cleanup sees the new values).
+  const selectionRef = useRef({ zoneId, cell });
+  selectionRef.current = { zoneId, cell };
   const clearTimer = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(clearTimer.current), [zoneId, cell]);
+  useEffect(
+    () => () => {
+      window.clearTimeout(clearTimer.current);
+      const left = panelRef.current;
+      if (!left || left.cell_index == null || !isBlackColor(left)) return;
+      // Not actually left: the new selection is this same cell (e.g. clicking the running
+      // cell the panel was already showing as the zone's default).
+      const now = selectionRef.current;
+      const same =
+        now.zoneId === left.zone_id && (now.cell === left.cell_index || (now.cell === null && left.active));
+      if (same) return;
+      clearCell(left.zone_id, left.cell_index)
+        .then(() => gridChangeRef.current?.()) // the grid shows the left cell empty
+        .catch(() => {});
+    },
+    [zoneId, cell],
+  );
   const scheduleAutoClear = () => {
     window.clearTimeout(clearTimer.current);
     clearTimer.current = window.setTimeout(() => {
