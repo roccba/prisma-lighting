@@ -14,8 +14,9 @@ import { scrubHandler } from "./scrub";
 export function formatReal(p: ParamInfo, norm: number): string {
   const real = p.min + norm * (p.max - p.min);
   const span = p.max - p.min;
-  const decimals = span >= 10 ? 0 : span >= 3 ? 1 : 2;
-  return real.toFixed(decimals);
+  // Wide ranges read as whole numbers, except small values (the classic 0.01 step width).
+  if (span >= 10) return Math.abs(real) < 10 ? String(parseFloat(real.toFixed(2))) : real.toFixed(0);
+  return real.toFixed(span >= 3 ? 1 : 2);
 }
 
 export function ParamField({

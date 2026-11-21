@@ -443,7 +443,7 @@ export interface ParamInfo {
    *  colour picker, the direction rose, a channel of a palette slot, a palette's
    *  active-length, or a discrete choice → a dropdown. Value model is scalar regardless
    *  (an `enum` is an index 0..max). */
-  role: "scalar" | "color" | "direction" | "palette" | "palette_count" | "enum";
+  role: "scalar" | "color" | "direction" | "palette" | "palette_count" | "enum" | "toggle" | "bpm" | "direction_menu";
   /** A grouping key: the colour group id for `role === "color"`, or the palette slot
    *  index (as a string) for `role === "palette"`. Null otherwise. */
   group: string | null;
@@ -453,6 +453,9 @@ export interface ParamInfo {
    *  Absent for every other role (the shape effects that declare enums land in a later
    *  step; the panel already renders them). */
   choices?: string[] | null;
+  /** Greyed out unless `param` has the choice labelled `choice` (or, when `choice` is
+   *  null, unless `param` is above zero). console-style dependent controls. */
+  requires?: { param: string; choice: string | null } | null;
 }
 
 /** The effect work panel for a zone: its active cell's effect + its parameters.
@@ -469,9 +472,21 @@ export interface EffectPanelInfo {
 export const effectPanel = (zone: string) =>
   invoke<EffectPanelInfo>("main_effect_panel", { zone });
 
+/** Fired on `window` for every `setParam`, so the effect panel keeps its copy of the
+ *  values current (a control opened later — e.g. the Tabla de color — must see what was
+ *  set, not what was loaded when the cell was selected). */
+export const PARAM_WRITTEN = "prisma-param-written";
+export interface ParamWritten {
+  zone: string;
+  name: string;
+  value: number;
+}
+
 /** Set one parameter of a zone's active effect (normalized 0..1). Drives it live. */
-export const setParam = (zone: string, name: string, value: number) =>
-  invoke<void>("main_set_param", { zone, name, value });
+export const setParam = (zone: string, name: string, value: number) => {
+  window.dispatchEvent(new CustomEvent<ParamWritten>(PARAM_WRITTEN, { detail: { zone, name, value } }));
+  return invoke<void>("main_set_param", { zone, name, value });
+};
 
 // --- MIDI (M9 Slice 1): input device + MIDI Learn ---
 

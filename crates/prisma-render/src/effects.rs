@@ -5,7 +5,7 @@
 //! S1 ships one effect (a gradient) to establish the tree→uniform→pixel seam;
 //! S2+ add plasma, wave/noise, etc. behind the same [`EffectManifest`] contract.
 
-use crate::effect::{ColorChannel, EffectManifest, ParamRole, ParamSpec};
+use crate::effect::{ColorChannel, EffectManifest, ParamRole, ParamSpec, Requires};
 use prisma_core::{Curve, ParamDescriptor, RealRange};
 
 /// WGSL source for the horizontal grayscale gradient, from the shared shader
@@ -82,42 +82,206 @@ fn palette_color_params() -> Vec<ParamSpec> {
     out
 }
 
-/// Scrolling bands of a user palette (§5.3 "Scroll de color") — the
-/// first effect to declare a **palette** and a **direction**, so it lights up the
-/// palette editor and the 8-way rose. `speed` is scroll rate, `width` the number of
-/// palette repetitions across the scroll axis, `offset` a static phase, `direction`
-/// the 8-way axis, and `count`/`c0..c7` the palette itself. Param order here **is**
-/// the uniform layout the shader reads.
+/// The movement modes of "Scroll de color", in INDEX order (the shader switches on the
+/// index — keep `color_scroll.wgsl`'s `mode_*` tables in lockstep). `"Group|Label"`, the
+/// professional consoles names and menu groups. "Forma 3D" is deliberately not offered yet.
+pub const SCROLL_MODES: &[&str] = &[
+    // 0..=25 — Lineal: (x, y, z) direction of travel; z = toward the viewer (Frontal).
+    "Lineal|Frontal",
+    "Lineal|Posterior",
+    "Lineal|Izquierda",
+    "Lineal|Derecha",
+    "Lineal|Superior",
+    "Lineal|Inferior",
+    "Lineal|Superior izquierda",
+    "Lineal|Superior derecha",
+    "Lineal|Inferior izquierda",
+    "Lineal|Inferior derecha",
+    "Lineal|Frontal izquierda",
+    "Lineal|Frontal derecha",
+    "Lineal|Posterior izquierda",
+    "Lineal|Posterior derecha",
+    "Lineal|Frontal superior",
+    "Lineal|Frontal inferior",
+    "Lineal|Posterior superior",
+    "Lineal|Posterior inferior",
+    "Lineal|Frontal superior izquierda",
+    "Lineal|Frontal superior derecha",
+    "Lineal|Frontal inferior izquierda",
+    "Lineal|Frontal inferior derecha",
+    "Lineal|Posterior superior izquierda",
+    "Lineal|Posterior superior derecha",
+    "Lineal|Posterior inferior izquierda",
+    "Lineal|Posterior inferior derecha",
+    // 26..=31 — Lineal a 2 vías.
+    "Lineal a 2 vías|Implosionar eje X",
+    "Lineal a 2 vías|Explosionar eje X",
+    "Lineal a 2 vías|Implosionar eje Y",
+    "Lineal a 2 vías|Explosionar eje Y",
+    "Lineal a 2 vías|Implosionar eje Z",
+    "Lineal a 2 vías|Explosionar eje Z",
+    // 32..=41 — Forma 2D.
+    "Forma 2D|Implosionar rectángulo",
+    "Forma 2D|Explosionar rectángulo",
+    "Forma 2D|Implosionar cuadrado",
+    "Forma 2D|Explosionar cuadrado",
+    "Forma 2D|Implosionar elipse",
+    "Forma 2D|Explosionar elipse",
+    "Forma 2D|Implosionar círculo",
+    "Forma 2D|Explosionar círculo",
+    "Forma 2D|Implosionar diamante",
+    "Forma 2D|Explosionar diamante",
+    // 42 — Cross mode: opposing scrolls (the rose's centre ✕).
+    "|Cruz",
+];
+/// Default mode: "Lineal|Derecha".
+const SCROLL_MODE_DEFAULT: usize = 3;
+
+const DISPLACEMENT_DISTRIBUTIONS: &[&str] = &[
+    "Uniforme",
+    "Lineal creciente",
+    "Lineal decreciente",
+    "Triángulo",
+];
+const CROSS_AXES: &[&str] = &["Ejes 1 y 2", "Eje 1", "Eje 2"];
+
+/// Normalized default for a real value `v` in `min..=max` (linear).
+fn norm_of(v: f32, min: f32, max: f32) -> f32 {
+    (v - min) / (max - min)
+}
+
+/// "Scroll de color" — the classic colour-scroll effect (§5.3): bands of a user palette moving
+/// across the matrix. Parameters and defaults follow the professional consoles 5 help:
+/// `bpm` (speed, 0–9999, 600; 60 BPM = one step per second), `step` (how far each step
+/// moves, % of the matrix, 0.01), `color_width` (width of one colour, %, 10),
+/// `cross_width` (only in Cross mode, %, 50), `displacement` (distortion amount 0–100)
+/// with its `disp_speed` and `disp_dist`ribution, `cross_axes` (Cross mode), `mode` (the
+/// direction / movement, see [`SCROLL_MODES`]), the palette (`count`, `c0..c7`) and
+/// `fade` ("Atenuar": blend instead of hard cuts). Param order here **is** the uniform
+/// layout the shader reads.
 pub fn color_scroll() -> EffectManifest {
+    let cruz = Requires::Choice {
+        param: "mode",
+        choice: "|Cruz",
+    };
+    let displaced = Requires::NonZero {
+        param: "displacement",
+    };
     let mut params = vec![
-        ParamSpec::scalar(
-            "speed",
+        ParamSpec::bpm(
+            "bpm",
             ParamDescriptor::level(
-                "effect.color_scroll.speed",
-                RealRange { min: 0.0, max: 4.0 },
+                "effect.color_scroll.bpm",
+                RealRange {
+                    min: 0.0,
+                    max: 9999.0,
+                },
                 Curve::Linear,
-                // Mid-low so a freshly-assigned scroll drifts out of the box.
-                0.3,
+                norm_of(600.0, 0.0, 9999.0),
             ),
         ),
         ParamSpec::scalar(
-            "width",
+            "step",
             ParamDescriptor::level(
-                "effect.color_scroll.width",
-                RealRange { min: 0.5, max: 8.0 },
+                "effect.color_scroll.step",
+                RealRange {
+                    min: 0.01,
+                    max: 100.0,
+                },
                 Curve::Linear,
-                // ~2 repetitions across the axis: bands wide enough to read.
-                0.2,
+                0.0,
             ),
         ),
         ParamSpec::scalar(
-            "offset",
-            ParamDescriptor::unit_level("effect.color_scroll.offset", 0.0),
+            "color_width",
+            ParamDescriptor::level(
+                "effect.color_scroll.color_width",
+                RealRange {
+                    min: 0.01,
+                    max: 100.0,
+                },
+                Curve::Linear,
+                norm_of(10.0, 0.01, 100.0),
+            ),
         ),
-        ParamSpec::direction(
-            "direction",
-            // Default 0.0 → rose index 0 → Right.
-            ParamDescriptor::unit_level("effect.color_scroll.direction", 0.0),
+        ParamSpec::scalar(
+            "cross_width",
+            ParamDescriptor::level(
+                "effect.color_scroll.cross_width",
+                RealRange {
+                    min: 0.01,
+                    max: 100.0,
+                },
+                Curve::Linear,
+                norm_of(50.0, 0.01, 100.0),
+            ),
+        )
+        .requires(cruz),
+        ParamSpec::scalar(
+            "displacement",
+            ParamDescriptor::level(
+                "effect.color_scroll.displacement",
+                RealRange {
+                    min: 0.0,
+                    max: 100.0,
+                },
+                Curve::Linear,
+                0.0,
+            ),
+        ),
+        ParamSpec::scalar(
+            "disp_speed",
+            ParamDescriptor::level(
+                "effect.color_scroll.disp_speed",
+                RealRange {
+                    min: 0.0,
+                    max: 100.0,
+                },
+                Curve::Linear,
+                norm_of(10.0, 0.0, 100.0),
+            ),
+        )
+        .requires(displaced),
+        ParamSpec::enum_choice(
+            "disp_dist",
+            ParamDescriptor::level(
+                "effect.color_scroll.disp_dist",
+                RealRange {
+                    min: 0.0,
+                    max: (DISPLACEMENT_DISTRIBUTIONS.len() - 1) as f32,
+                },
+                Curve::Linear,
+                0.0,
+            ),
+            DISPLACEMENT_DISTRIBUTIONS,
+        )
+        .requires(displaced),
+        ParamSpec::enum_choice(
+            "cross_axes",
+            ParamDescriptor::level(
+                "effect.color_scroll.cross_axes",
+                RealRange {
+                    min: 0.0,
+                    max: (CROSS_AXES.len() - 1) as f32,
+                },
+                Curve::Linear,
+                0.0,
+            ),
+            CROSS_AXES,
+        )
+        .requires(cruz),
+        ParamSpec::direction_menu(
+            "mode",
+            ParamDescriptor::level(
+                "effect.color_scroll.mode",
+                RealRange {
+                    min: 0.0,
+                    max: (SCROLL_MODES.len() - 1) as f32,
+                },
+                Curve::Linear,
+                SCROLL_MODE_DEFAULT as f32 / (SCROLL_MODES.len() - 1) as f32,
+            ),
+            SCROLL_MODES,
         ),
         ParamSpec::palette_count(
             "count",
@@ -134,6 +298,12 @@ pub fn color_scroll() -> EffectManifest {
         ),
     ];
     params.extend(palette_color_params());
+    // "Atenuar": OFF = hard cuts between colours (the classic default), ON = each colour
+    // fades into the next.
+    params.push(ParamSpec::toggle(
+        "fade",
+        ParamDescriptor::unit_level("effect.color_scroll.fade", 0.0),
+    ));
     EffectManifest {
         effect_id: "color_scroll",
         params,
@@ -735,6 +905,8 @@ pub struct EffectParam {
     /// Presentation hint (scalar / colour channel / direction) — which control the
     /// panel draws for this param (§3.5). The value model is unchanged regardless.
     pub role: ParamRole,
+    /// Greyed out in the panel unless this holds (console-style dependent controls).
+    pub requires: Option<crate::effect::Requires>,
 }
 
 /// The parameters an effect exposes, in manifest (= uniform) order, for `effect_id`;
@@ -751,6 +923,7 @@ pub fn effect_params(id: &str) -> Vec<EffectParam> {
                     max: p.descriptor.range.max,
                     default_norm: p.descriptor.default_norm,
                     role: p.role,
+                    requires: p.requires,
                 })
                 .collect()
         })

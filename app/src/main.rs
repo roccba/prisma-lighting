@@ -30,7 +30,7 @@ use prisma_midi::io::{input_port_names, MidiInputLink, MidiIoError, MidiOutputLi
 use prisma_midi::{DeviceProfile, APC40_KEYWORDS};
 use prisma_patch::{load_patch, save_patch, BlendMode, Diagnostic, Patch, Zone};
 use prisma_preview::sink::WebSocketSink;
-use prisma_render::{AdapterPreference, ColorChannel, ParamRole};
+use prisma_render::{AdapterPreference, ColorChannel, ParamRole, Requires};
 use serde::{Deserialize, Serialize};
 use tauri::{
     AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, WindowEvent,
@@ -94,8 +94,19 @@ struct ParamInfo {
     /// The colour channel (`"r"`/`"g"`/`"b"`), `Some` for `role == "color"` or
     /// `"palette"`.
     channel: Option<&'static str>,
-    /// Dropdown labels for `role == "enum"`, in index order; `None` for every other role.
+    /// Dropdown labels for `role == "enum"` (or `"Group|Label"` for `"direction_menu"`),
+    /// in index order; `None` for every other role.
     choices: Option<Vec<String>>,
+    /// Greyed out unless this holds (console-style dependent controls); `None` = always on.
+    requires: Option<RequiresInfo>,
+}
+
+/// [`prisma_render::Requires`] for the panel: enabled while `param` has the choice
+/// labelled `choice`, or (when `choice` is `None`) while `param` is above zero.
+#[derive(Serialize)]
+struct RequiresInfo {
+    param: &'static str,
+    choice: Option<&'static str>,
 }
 
 /// The effect work panel's data for the selected zone (M8 step 5): the zone's active
@@ -115,6 +126,23 @@ struct EffectPanelInfo {
 /// per-effect label table (§5.3). Real i18n resolution of the manifest's `label_key`
 /// is deferred (the UI has no locale resolver yet); this is a legible stand-in.
 fn humanize(name: &str) -> String {
+    // Spanish names already settled with Bauti (professional consoles wording). A stand-in for the
+    // deferred i18n catalogue, keyed by parameter name — not a per-effect table.
+    if let Some(es) = match name {
+        "fade" => Some("Atenuar"),
+        "bpm" => Some("BPM"),
+        "step" => Some("Anchura del paso"),
+        "color_width" => Some("Anchura del color"),
+        "cross_width" => Some("Anchura de la cruz"),
+        "displacement" => Some("Desplazamiento"),
+        "disp_speed" => Some("Vel. del desplazamiento"),
+        "disp_dist" => Some("Distribución"),
+        "cross_axes" => Some("Ejes de la cruz"),
+        "mode" => Some("Dirección"),
+        _ => None,
+    } {
+        return es.to_string();
+    }
     let mut chars = name.chars();
     match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
@@ -148,6 +176,10 @@ fn role_dto(role: &ParamRole) -> (&'static str, Option<String>, Option<&'static 
         // The labels travel in `ParamInfo::choices`, computed at the call site; the
         // group/channel slots are unused for an enum.
         ParamRole::Enum { .. } => ("enum", None, None),
+        ParamRole::Toggle => ("toggle", None, None),
+        ParamRole::Bpm => ("bpm", None, None),
+        // Choices travel in `ParamInfo::choices` ("Group|Label"), like an enum's.
+        ParamRole::DirectionMenu { .. } => ("direction_menu", None, None),
     }
 }
 
@@ -2089,11 +2121,21 @@ fn main_effect_panel(state: State<AppState>, zone: Uuid) -> EffectPanelInfo {
         .map(|p| {
             let (role, group, channel) = role_dto(&p.role);
             let choices = match &p.role {
-                ParamRole::Enum { choices } => {
+                ParamRole::Enum { choices } | ParamRole::DirectionMenu { choices } => {
                     Some(choices.iter().map(|s| s.to_string()).collect())
                 }
                 _ => None,
             };
+            let requires = p.requires.map(|r| match r {
+                Requires::Choice { param, choice } => RequiresInfo {
+                    param,
+                    choice: Some(choice),
+                },
+                Requires::NonZero { param } => RequiresInfo {
+                    param,
+                    choice: None,
+                },
+            });
             ParamInfo {
                 value_norm: stored.0.get(&p.name).copied().unwrap_or(p.default_norm),
                 label: humanize(&p.name),
@@ -2104,6 +2146,7 @@ fn main_effect_panel(state: State<AppState>, zone: Uuid) -> EffectPanelInfo {
                 group,
                 channel,
                 choices,
+                requires,
             }
         })
         .collect();

@@ -66,6 +66,31 @@ pub enum ParamRole {
     /// is `0.0 ..= (len-1)` so the real value the shader receives is the index itself,
     /// selected with `i32(round(u.<name>))`). The panel draws the labels in index order.
     Enum { choices: &'static [&'static str] },
+    /// An on/off switch → a latching button (the classic "Atenuar"). The value is `0.0`
+    /// (off) or `1.0` (on), carried like any other scalar; the shader tests `> 0.5`.
+    Toggle,
+    /// A tempo in beats per minute → a slider plus the classic "Pulsar" (tap) button, which
+    /// sets the value from the operator's taps. A plain real-valued scalar otherwise.
+    Bpm,
+    /// A direction / movement mode picked from a grouped menu (the classic direction rose +
+    /// "→ Derecha" cascading menu). Like [`ParamRole::Enum`] the value is the choice
+    /// INDEX; each choice is `"Group|Label"` so the panel can build the submenus, and the
+    /// rose's arrows select choices by label.
+    DirectionMenu { choices: &'static [&'static str] },
+}
+
+/// When a parameter only applies in some state of another one, the panel greys it out
+/// (professional consoles: "Anchura de la cruz" only in Cross mode, displacement options only while
+/// there is displacement). Presentation only — the value is still carried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Requires {
+    /// Enabled while `param` (an enum / direction menu) has the choice labelled `choice`.
+    Choice {
+        param: &'static str,
+        choice: &'static str,
+    },
+    /// Enabled while `param` is above zero.
+    NonZero { param: &'static str },
 }
 
 /// One parameter an effect exposes. `name` is the trailing path segment (the
@@ -76,6 +101,8 @@ pub struct ParamSpec {
     pub name: &'static str,
     pub descriptor: ParamDescriptor,
     pub role: ParamRole,
+    /// Greyed out unless this holds (see [`Requires`]). `None` = always enabled.
+    pub requires: Option<Requires>,
 }
 
 impl ParamSpec {
@@ -85,6 +112,7 @@ impl ParamSpec {
             name,
             descriptor,
             role: ParamRole::Scalar,
+            requires: None,
         }
     }
 
@@ -101,6 +129,7 @@ impl ParamSpec {
             name,
             descriptor,
             role: ParamRole::Color { group, channel },
+            requires: None,
         }
     }
 
@@ -111,6 +140,7 @@ impl ParamSpec {
             name,
             descriptor,
             role: ParamRole::Direction,
+            requires: None,
         }
     }
 
@@ -126,6 +156,7 @@ impl ParamSpec {
             name,
             descriptor,
             role: ParamRole::Palette { index, channel },
+            requires: None,
         }
     }
 
@@ -135,12 +166,54 @@ impl ParamSpec {
             name,
             descriptor,
             role: ParamRole::PaletteCount,
+            requires: None,
         }
     }
 
     /// A discrete choice — the panel draws a dropdown of `choices`. The descriptor's
     /// real range must be `0.0 ..= (choices.len()-1)` with [`Curve::Linear`](prisma_core::Curve)
     /// so the shader receives the selected index directly (`i32(round(u.<name>))`).
+    /// An on/off switch — the panel draws a latching button. Descriptor `0..1`.
+    pub fn toggle(name: &'static str, descriptor: ParamDescriptor) -> Self {
+        Self {
+            name,
+            descriptor,
+            role: ParamRole::Toggle,
+            requires: None,
+        }
+    }
+
+    /// A tempo (BPM) — slider + tap button. See [`ParamRole::Bpm`].
+    pub fn bpm(name: &'static str, descriptor: ParamDescriptor) -> Self {
+        Self {
+            name,
+            descriptor,
+            role: ParamRole::Bpm,
+            requires: None,
+        }
+    }
+
+    /// A grouped direction menu. The descriptor's real range must be
+    /// `0.0 ..= (choices.len()-1)`, linear, so the shader receives the index.
+    pub fn direction_menu(
+        name: &'static str,
+        descriptor: ParamDescriptor,
+        choices: &'static [&'static str],
+    ) -> Self {
+        Self {
+            name,
+            descriptor,
+            role: ParamRole::DirectionMenu { choices },
+            requires: None,
+        }
+    }
+
+    /// Grey this parameter out unless `req` holds.
+    pub fn requires(mut self, req: Requires) -> Self {
+        self.requires = Some(req);
+        self
+    }
+
     pub fn enum_choice(
         name: &'static str,
         descriptor: ParamDescriptor,
@@ -150,6 +223,7 @@ impl ParamSpec {
             name,
             descriptor,
             role: ParamRole::Enum { choices },
+            requires: None,
         }
     }
 }

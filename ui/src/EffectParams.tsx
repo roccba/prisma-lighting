@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { effectPanel, setParam, type EffectPanelInfo, type ParamInfo } from "./api";
+import { effectPanel, PARAM_WRITTEN, setParam, type EffectPanelInfo, type ParamInfo, type ParamWritten } from "./api";
 import { ColorControl } from "./ColorControl";
 import { Dropdown } from "./Dropdown";
 import { Fader } from "./Fader";
-import { PaletteControl } from "./PaletteControl";
+import { ColorTable } from "./ColorTable";
+import { DirectionMenu } from "./DirectionMenu";
 import { ParamField, ValueBox } from "./ParamField";
 import { Rose } from "./Rose";
 
@@ -29,6 +30,8 @@ type PanelItem =
   | { kind: "scalar"; param: ParamInfo }
   | { kind: "direction"; param: ParamInfo }
   | { kind: "enum"; param: ParamInfo }
+  | { kind: "toggle"; param: ParamInfo }
+  | { kind: "dirmenu"; param: ParamInfo }
   | { kind: "color"; group: string; r?: ParamInfo; g?: ParamInfo; b?: ParamInfo }
   | { kind: "palette"; slots: Map<number, PaletteSlot>; count?: ParamInfo };
 
@@ -73,6 +76,10 @@ function buildItems(params: ParamInfo[]): PanelItem[] {
       items.push({ kind: "direction", param: p });
     } else if (p.role === "enum") {
       items.push({ kind: "enum", param: p });
+    } else if (p.role === "toggle") {
+      items.push({ kind: "toggle", param: p });
+    } else if (p.role === "direction_menu") {
+      items.push({ kind: "dirmenu", param: p });
     } else {
       items.push({ kind: "scalar", param: p });
     }
@@ -80,10 +87,48 @@ function buildItems(params: ParamInfo[]): PanelItem[] {
   return items;
 }
 
+/** Whether `p` is enabled given the other params' current values (its `requires`). */
+function enabledOf(p: ParamInfo, all: ParamInfo[]): boolean {
+  const req = p.requires;
+  if (!req) return true;
+  const other = all.find((q) => q.name === req.param);
+  if (!other) return true;
+  if (req.choice == null) return other.min + other.value_norm * (other.max - other.min) > 0;
+  const choices = other.choices ?? [];
+  const i = Math.round(other.value_norm * Math.max(1, choices.length - 1));
+  return choices[i] === req.choice;
+}
+
+/** the classic "Pulsar" (tap tempo): tap at least four times on the beat and the BPM is the
+ *  average interval of the recent taps (a pause of 2 s starts a new count). */
+function TapButton({ onBpm, disabled }: { onBpm: (bpm: number) => void; disabled?: boolean }) {
+  const taps = useRef<number[]>([]);
+  return (
+    <button
+      type="button"
+      className="pr-btn pr-tap"
+      disabled={disabled}
+      onPointerDown={() => {
+        const now = performance.now();
+        const list = taps.current;
+        if (list.length && now - list[list.length - 1] > 2000) list.length = 0;
+        list.push(now);
+        if (list.length > 8) list.shift();
+        if (list.length >= 4) {
+          const avg = (list[list.length - 1] - list[0]) / (list.length - 1);
+          if (avg > 0) onBpm(60000 / avg);
+        }
+      }}
+    >
+      Pulsar
+    </button>
+  );
+}
+
 /** One scalar parameter: label · value box · fader, all through the shared `ParamField`
  *  so it is identical to every other control. Owns its value locally for a smooth drag
  *  while writing every change straight to the engine; the value box edits the same value. */
-function ScalarRow({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
+function ScalarRow({ zoneId, param, disabled }: { zoneId: string; param: ParamInfo; disabled?: boolean }) {
   const [value, setValue] = useState(param.value_norm);
   useEffect(() => setValue(param.value_norm), [param.value_norm]);
 
@@ -92,17 +137,30 @@ function ScalarRow({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
     setParam(zoneId, param.name, v).catch(() => {});
   };
 
+  const fader = <Fader value={value} onChange={change} aria-label={param.label} />;
   return (
-    <ParamField label={param.label} value={<ValueBox param={param} valueNorm={value} onCommit={change} />}>
-      <Fader value={value} onChange={change} aria-label={param.label} />
-    </ParamField>
+    <div className={disabled ? "pr-param-off" : undefined}>
+      <ParamField label={param.label} value={<ValueBox param={param} valueNorm={value} onCommit={change} />}>
+        {param.role === "bpm" ? (
+          <div className="pr-field-bpm">
+            {fader}
+            <TapButton
+              disabled={disabled}
+              onBpm={(bpm) => change(Math.max(0, Math.min(1, (bpm - param.min) / (param.max - param.min))))}
+            />
+          </div>
+        ) : (
+          fader
+        )}
+      </ParamField>
+    </div>
   );
 }
 
 /** One enum parameter: a labelled dropdown (a block control on the right). The value is a
  *  scalar INDEX (0..steps): the normalized value maps linearly to the choice index, and
  *  picking a choice writes the index back as `i / steps`. Used by the shape/mode selectors. */
-function EnumRow({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
+function EnumRow({ zoneId, param, disabled }: { zoneId: string; param: ParamInfo; disabled?: boolean }) {
   const choices = param.choices ?? [];
   const steps = Math.max(1, choices.length - 1);
   const idxOf = (norm: number) => Math.min(choices.length - 1, Math.max(0, Math.round(norm * steps)));
@@ -116,15 +174,65 @@ function EnumRow({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
   };
 
   return (
-    <ParamField label={param.label} block>
-      <Dropdown
-        value={String(idx)}
-        options={choices.map((label, i) => ({ value: String(i), label }))}
-        onChange={change}
-        minWidth={140}
-        aria-label={param.label}
-      />
-    </ParamField>
+    <div className={disabled ? "pr-param-off" : undefined}>
+      <ParamField label={param.label} block>
+        <Dropdown
+          value={String(idx)}
+          options={choices.map((label, i) => ({ value: String(i), label }))}
+          onChange={change}
+          minWidth={140}
+          disabled={disabled}
+          aria-label={param.label}
+        />
+      </ParamField>
+    </div>
+  );
+}
+
+/** An on/off parameter as a latching button (the classic "Atenuar"): lit while on. */
+function ToggleButton({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
+  const [on, setOn] = useState(param.value_norm > 0.5);
+  useEffect(() => setOn(param.value_norm > 0.5), [param.value_norm]);
+  return (
+    <button
+      type="button"
+      className={`pr-btn pr-params-btn${on ? " is-active" : ""}`}
+      aria-pressed={on}
+      onClick={() => {
+        setOn(!on);
+        setParam(zoneId, param.name, on ? 0 : 1).catch(() => {});
+      }}
+    >
+      {param.label}
+    </button>
+  );
+}
+
+/** "Colores": opens the "Tabla de color" where the click happened. */
+function ColorsButton({
+  zoneId,
+  slots,
+  count,
+}: {
+  zoneId: string;
+  slots: { index: number; r: ParamInfo; g: ParamInfo; b: ParamInfo }[];
+  count: ParamInfo;
+}) {
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  return (
+    <>
+      <button
+        type="button"
+        className={`pr-btn pr-params-btn${at ? " is-active" : ""}`}
+        onClick={(e) => {
+          const p = { x: e.clientX, y: e.clientY };
+          setAt((cur) => (cur ? null : p));
+        }}
+      >
+        Colores
+      </button>
+      {at && <ColorTable zoneId={zoneId} slots={slots} count={count} at={at} onClose={() => setAt(null)} />}
+    </>
   );
 }
 
@@ -159,22 +267,41 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
     };
   }, [zoneId, rev]);
 
+  // Keep the loaded values current with every write, so a control mounted later (the
+  // Tabla de color, the Caja de Fader, a re-rendered row) starts from the real value.
+  useEffect(() => {
+    const onWrite = (e: Event) => {
+      const { zone, name, value } = (e as CustomEvent<ParamWritten>).detail;
+      if (zone !== zoneId) return;
+      setPanel((p) =>
+        p ? { ...p, params: p.params.map((q) => (q.name === name ? { ...q, value_norm: value } : q)) } : p,
+      );
+    };
+    window.addEventListener(PARAM_WRITTEN, onWrite);
+    return () => window.removeEventListener(PARAM_WRITTEN, onWrite);
+  }, [zoneId]);
+
   if (!panel || !panel.effect_id) {
     return null; // an empty cell has no parameters: the panel simply stays blank
   }
 
   const items = buildItems(panel.params);
   const scalarItems = items.filter((i): i is Extract<PanelItem, { kind: "scalar" }> => i.kind === "scalar");
-  const controlItems = items.filter((i) => i.kind !== "scalar");
+  // Buttons row on top (professional consoles: [Colores] [Atenuar] above the sliders): the palette's
+  // "Colores" and every on/off toggle. The rest: sliders left, other controls right.
+  const buttonItems = items.filter((i) => i.kind === "palette" || i.kind === "toggle");
+  const controlItems = items.filter((i) => i.kind !== "scalar" && i.kind !== "palette" && i.kind !== "toggle");
 
   return (
     <div className="pr-params">
+      {buttonItems.length > 0 && (
+        <div className="pr-params-buttons">{buttonItems.map((item) => renderButton(item, panel.effect_id!))}</div>
+      )}
       {items.length === 0 ? (
         null
       ) : (
-        // Two columns: the scalar sliders as a vertical
-        // list on the left, the effect-specific controls (direction rose, palette,
-        // colour picker) on the right.
+        // Two columns: the scalar sliders as a vertical list on the left, the
+        // effect-specific controls (direction rose, colour picker, …) on the right.
         <div className="pr-params-rows" ref={rowsRef}>
           <div className="pr-params-col pr-params-scalars" style={{ "--param-rows": rows } as CSSProperties}>
             {scalarItems.map((item) => (
@@ -182,6 +309,7 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
                 key={`${panel.effect_id}:${item.param.name}`}
                 zoneId={zoneId}
                 param={item.param}
+                disabled={!enabledOf(item.param, panel.params)}
               />
             ))}
           </div>
@@ -194,6 +322,25 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
       )}
     </div>
   );
+
+  // A button of the top row: the palette's "Colores" (opens the Tabla de color) or an
+  // on/off toggle. A malformed palette (missing channels / count) is simply not offered.
+  function renderButton(item: PanelItem, effectId: string) {
+    if (item.kind === "toggle") {
+      return <ToggleButton key={`${effectId}:${item.param.name}`} zoneId={zoneId} param={item.param} />;
+    }
+    if (item.kind === "palette") {
+      const slots = [...item.slots.values()]
+        .filter(
+          (s): s is { index: number; r: ParamInfo; g: ParamInfo; b: ParamInfo } =>
+            !!(s.r && s.g && s.b),
+        )
+        .sort((a, b) => a.index - b.index);
+      if (!item.count || slots.length === 0) return null;
+      return <ColorsButton key={`${effectId}:palette`} zoneId={zoneId} slots={slots} count={item.count} />;
+    }
+    return null;
+  }
 
   // One non-scalar control (colour picker, rose, or palette editor). Keys carry the
   // effect id so an effect swap rebuilds the control (and its local state) rather than
@@ -220,31 +367,20 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
     }
     if (item.kind === "enum") {
       return (
-        <EnumRow key={`${effectId}:${item.param.name}`} zoneId={zoneId} param={item.param} />
+        <EnumRow
+          key={`${effectId}:${item.param.name}`}
+          zoneId={zoneId}
+          param={item.param}
+          disabled={!enabledOf(item.param, panel!.params)}
+        />
       );
     }
-    if (item.kind === "palette") {
-      // Only complete slots (r+g+b present) with a count param form the editor; anything
-      // malformed degrades to sliders rather than a broken control.
-      const slots = [...item.slots.values()]
-        .filter(
-          (s): s is { index: number; r: ParamInfo; g: ParamInfo; b: ParamInfo } =>
-            !!(s.r && s.g && s.b),
-        )
-        .sort((a, b) => a.index - b.index);
-      if (item.count && slots.length > 0) {
-        return (
-          <ParamField key={`${effectId}:palette`} label="Colores" block>
-            <PaletteControl zoneId={zoneId} slots={slots} count={item.count} />
-          </ParamField>
-        );
-      }
-      const stray = [item.count, ...slots.flatMap((s) => [s.r, s.g, s.b])].filter(
-        (p): p is ParamInfo => !!p,
+    if (item.kind === "dirmenu") {
+      return (
+        <ParamField key={`${effectId}:${item.param.name}`} label={item.param.label} block>
+          <DirectionMenu zoneId={zoneId} param={item.param} />
+        </ParamField>
       );
-      return stray.map((p) => (
-        <ScalarRow key={`${effectId}:${p.name}`} zoneId={zoneId} param={p} />
-      ));
     }
     return null;
   }

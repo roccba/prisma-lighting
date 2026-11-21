@@ -709,7 +709,9 @@ input, textarea, [contenteditable="true"] {
    its container for the extra columns, so a 4th slider overflowed ON TOP of the controls
    beside it. The row count is set from the panel's height (EffectParams measures it). */
 .pr-params-scalars { flex: 0 0 auto; min-height: 0; display: grid; grid-auto-flow: column; grid-template-rows: repeat(var(--param-rows, 3), auto); align-content: start; gap: 12px 40px; }
-.pr-params-scalars .pr-field { width: 330px; }
+.pr-params-scalars .pr-field { width: 380px; grid-template-columns: 150px 52px 1fr; }
+/* A BPM row's "Pulsar" sits OUTSIDE the slider (professional consoles), so every fader keeps one length. */
+.pr-params-scalars:has(.pr-tap) { padding-right: 76px; }
 /* Effect-specific controls (rose, colour, palette, dropdown) sit just to their right. */
 .pr-params-controls { flex: 0 0 auto; display: flex; flex-flow: row wrap; align-content: flex-start; gap: 18px 28px; }
 /* The ONE shared parameter frame (ParamField): every control — scalar, enum, colour,
@@ -797,15 +799,27 @@ body.is-picking, body.is-picking * { cursor: crosshair !important; user-select: 
 .pr-rose-btn.is-active { border-color: var(--accent); color: var(--accent-text); box-shadow: 0 0 0 1px var(--accent) inset; }
 
 /* Palette editor (Scroll de color) — a row of editable colour slots + add/remove. */
-.pr-palette { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
-.pr-palette-slot { position: relative; width: 24px; height: 30px; }
-.pr-palette-slot.is-dragging { opacity: .5; }
-.pr-palette-swatch { display: block; width: 100%; height: 100%; position: relative; border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); cursor: grab; overflow: hidden; box-shadow: inset 0 0 0 1px rgba(0,0,0,.35); }
-.pr-palette-swatch input[type="color"] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: none; padding: 0; cursor: pointer; }
-.pr-palette-remove { position: absolute; top: -5px; right: -5px; width: 14px; height: 14px; display: none; align-items: center; justify-content: center; padding: 0; font-size: 11px; line-height: 1; background: var(--btn-face); color: var(--text); border: 1px solid var(--btn-border-dark); border-radius: 50%; cursor: pointer; }
-.pr-palette-slot:hover .pr-palette-remove { display: flex; }
-.pr-palette-add { width: 24px; height: 30px; padding: 0; font-size: 15px; line-height: 1; background: var(--btn-face); color: var(--text); border: 1px dashed var(--btn-border); border-radius: var(--r-sm); cursor: pointer; }
-.pr-palette-add:hover { background: var(--btn-face-hover); border-color: var(--accent); color: var(--accent-text); }
+/* Effect top button row (professional consoles: [Colores] [Atenuar] above the sliders). */
+.pr-params-buttons { flex: 0 0 auto; display: flex; gap: 8px; padding-left: 160px; }
+.pr-params-btn { min-width: 110px; }
+
+/* "Tabla de color" (professional consoles Color Table): fixed-size floating window. */
+.pr-ctable { width: 470px; height: 460px; }
+.pr-ctable-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 10px; }
+.pr-ctable-wrap { flex: 1 1 auto; min-height: 0; overflow-y: auto; background: var(--bg-input); border: 1px solid var(--btn-border-dark); }
+.pr-ctable-table th { text-align: center; padding: 4px 2px; }
+.pr-ctable-table th.is-off { color: var(--text-dim); }
+.pr-ctable-table td { padding: 2px; text-align: center; }
+.pr-ctable-table tr.is-sel td { background: var(--accent-dim); }
+.pr-ctable-table tr.is-drop td { box-shadow: inset 0 2px 0 var(--accent-bright); }
+.pr-ctable-table .c-idx { width: 34px; color: var(--text-label); cursor: grab; user-select: none; }
+.pr-ctable-table .c-sw { width: 62px; }
+.pr-ctable-swatch { width: 56px; height: 24px; border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); margin: 0 auto; }
+.pr-ctable-table .pr-ctable-val { width: 100%; height: 24px; border-top-width: 1px; }
+.pr-ctable-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
+.pr-ctable-bar .pr-btn { min-width: 34px; height: 28px; padding: 0 8px; display: inline-flex; align-items: center; justify-content: center; }
+.pr-ctable-count { color: var(--text-label); font-size: var(--fs-small); margin: 0 6px; }
+.pr-ctable-spacer { flex: 1 1 auto; }
 
 /* --- MIDI Learn (M9-SPEC §7) ---------------------------------------------------------
    Learn mode overlays every learnable control. Mapped = thin orange outline + its control
@@ -990,3 +1004,25 @@ body.is-picking, body.is-picking * { cursor: crosshair !important; user-select: 
 body.is-scrubbing, body.is-scrubbing * { cursor: ns-resize !important; user-select: none !important; }
 .pr-color-box input, input.pr-field-value, .pr-num input, .pr-master-value, .pr-zonecard-faderval { cursor: ns-resize; }
 .pr-color-box input:focus, input.pr-field-value:focus, .pr-num input:focus { cursor: text; }
+
+/* Effect parameters that do not apply right now (professional consoles greys them): visible, inert. */
+.pr-param-off { opacity: .4; pointer-events: none; }
+/* BPM row: the fader plus "Pulsar" (tap tempo). */
+.pr-field-bpm { position: relative; min-width: 0; }
+.pr-tap { position: absolute; top: 50%; left: calc(100% + 12px); transform: translateY(-50%); padding: 4px 10px; }
+
+/* Direction control (professional consoles): 3×3 rose + current-mode button with a cascading menu. */
+.pr-dirmenu { display: flex; flex-direction: column; gap: 4px; width: 126px; }
+.pr-dirmenu-rose { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
+.pr-dirmenu-rose .pr-btn { height: 30px; padding: 0; font-size: 15px; }
+.pr-dirmenu-current { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; overflow: hidden; }
+.pr-dirmenu-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-dirmenu-glyph { flex: 0 0 auto; width: 16px; text-align: center; }
+.pr-dirmenu-pop { position: fixed; z-index: 140; min-width: 170px; padding: 4px 0; background: var(--bg-panel-2); border: 1px solid var(--btn-border); box-shadow: 0 8px 24px rgba(0,0,0,.55); font-size: var(--fs-base); }
+.pr-dirmenu-item { position: relative; display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; color: var(--text); cursor: pointer; white-space: nowrap; }
+.pr-dirmenu-item:hover, .pr-dirmenu-item.is-open { background: var(--accent-dim); color: #fff; }
+.pr-dirmenu-item.is-sel, .pr-dirmenu-item.is-group.is-current:not(:hover):not(.is-open) { background: var(--accent); color: #fff; }
+.pr-dirmenu-item.is-group { justify-content: space-between; }
+.pr-dirmenu-caret { font-size: 10px; margin-left: 16px; }
+.pr-dirmenu-sub { position: absolute; left: 100%; min-width: 240px; padding: 4px 0; background: var(--bg-panel-2); border: 1px solid var(--btn-border); box-shadow: 0 8px 24px rgba(0,0,0,.55); }
+.pr-dirmenu-sub .pr-dirmenu-item { justify-content: flex-start; }

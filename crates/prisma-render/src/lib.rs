@@ -40,7 +40,7 @@ pub mod sample;
 pub use blend::{blend_code, create_cell_mask, Compositor, Layer, ZoneComposite};
 pub use cache::{CachedCompute, CachedRender, PipelineCache};
 pub use device::{AdapterPreference, Gpu, GpuError};
-pub use effect::{ColorChannel, EffectInstance, EffectManifest, ParamRole, ParamSpec};
+pub use effect::{ColorChannel, EffectInstance, EffectManifest, ParamRole, ParamSpec, Requires};
 pub use effects::{catalogue, effect_params, manifest_by_id, EffectListing, EffectParam};
 pub use live_params::{LiveParams, MasterHandles, StrobeHandles, ZoneHandles};
 pub use overlap::{zone_cell_coverage, OverlapCounter};
