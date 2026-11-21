@@ -941,3 +941,9 @@ input.pr-field-value:focus { outline: 1px solid var(--accent); outline-offset: -
 .pr-matrix .pr-num { height: 22px; }
 .pr-matrix .pr-num.pr-pm button { width: 20px; font-size: 13px; }
 .pr-matrix-fit { width: 100%; margin-bottom: 4px; }
+
+/* While a value box is being scrubbed (drag up/down), keep the vertical-resize cursor and
+   suppress text selection everywhere. */
+body.is-scrubbing, body.is-scrubbing * { cursor: ns-resize !important; user-select: none !important; }
+.pr-color-box input, input.pr-field-value, .pr-num input, .pr-master-value, .pr-zonecard-faderval { cursor: ns-resize; }
+.pr-color-box input:focus, input.pr-field-value:focus, .pr-num input:focus { cursor: text; }

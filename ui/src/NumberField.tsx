@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { scrubHandler } from "./scrub";
 
 // Numeric field on the design-system `.pr-num` primitive with the stacked `.pr-spin`
 // up/down buttons. Replaces native <input type="number"> across the app (matrix size,
@@ -78,6 +79,22 @@ export function NumberField({
           if (!Number.isNaN(n) && String(n) === e.target.value.trim()) onChange(clamp(n));
         }}
         onBlur={(e) => commit(e.target.value)}
+        // Drag up/down to scrub the value (one step per 4 px), like professional consoles.
+        onPointerDown={scrubHandler(() =>
+          disabled
+            ? null
+            : {
+                get: () => value,
+                set: (v) => {
+                  setDraft(String(v));
+                  onChange(v);
+                },
+                min: min ?? -1e9,
+                max: max ?? 1e9,
+                perPixel: step / 4,
+                step,
+              },
+        )}
         onKeyDown={(e) => {
           if (e.key === "Enter") commit((e.target as HTMLInputElement).value);
           else if (e.key === "ArrowUp") {

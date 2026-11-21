@@ -12,6 +12,7 @@ import {
 } from "./api";
 import { strobeHz } from "./strobe";
 import { LearnTarget } from "./midiLearn";
+import { scrubHandler } from "./scrub";
 
 // One zone's card in the zone row (M8-SPEC §3.1): name, a LIVE mini-preview of the zone's
 // own fixtures, flanked by two vertical faders — the dimmer on the left and the bipolar
@@ -151,7 +152,12 @@ export function ZoneCard({ zone, slot, selected, onSelect, registerPreview }: Zo
         >
           <div className="pr-zonecard-fader" onPointerDown={(e) => e.stopPropagation()}>
             <VFader value={dimmer} onChange={changeDimmer} aria-label={`${zone.name} dimmer`} />
-            <span className="pr-zonecard-faderval">{Math.round(dimmer * 100)}</span>
+            <span
+              className="pr-zonecard-faderval"
+              onPointerDown={scrubHandler(() => ({ get: () => dimmer, set: changeDimmer, min: 0, max: 1, perPixel: 1 / 255, step: 1 / 255 }))}
+            >
+              {Math.round(dimmer * 255)}
+            </span>
             <span className="pr-zonecard-faderlbl">DIM</span>
           </div>
         </LearnTarget>

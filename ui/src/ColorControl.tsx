@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { setParam, type ParamInfo } from "./api";
+import { scrubHandler } from "./scrub";
 import { linearToHex, linearToSrgb255, srgb255ToLinear } from "./srgb";
 
 // The effect colour control, console-style: a swatch square that opens a VERTICAL preset
@@ -22,6 +23,9 @@ const PRESETS = [
   "#ff00ff", "#ff007f", "#808080", "#000000",
 ];
 
+/** One 0–255 channel box. Only digits are accepted and the value is clamped to 255 as you
+ *  type (no leading zeros, no letters). It can be cleared to type over; an empty box
+ *  reverts on blur. Drag up/down on it to scrub the value like a fader. */
 function ChannelBox({
   label,
   v255,
@@ -33,14 +37,30 @@ function ChannelBox({
   tint: string;
   onChange: (v: number) => void;
 }) {
+  const [draft, setDraft] = useState(String(v255));
+  useEffect(() => setDraft(String(v255)), [v255]);
+
   return (
     <label className="pr-color-box" style={{ borderTopColor: tint }} title={`${label} 0–255`}>
       <input
-        type="number"
-        min={0}
-        max={255}
-        value={v255}
-        onChange={(e) => onChange(Math.max(0, Math.min(255, Math.round(Number(e.target.value) || 0))))}
+        value={draft}
+        inputMode="numeric"
+        maxLength={3}
+        onChange={(e) => {
+          const digits = e.target.value.replace(/\D/g, "");
+          if (digits === "") {
+            setDraft("");
+            return;
+          }
+          const v = Math.min(255, parseInt(digits, 10));
+          setDraft(String(v));
+          onChange(v);
+        }}
+        onBlur={() => setDraft(String(v255))}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        }}
+        onPointerDown={scrubHandler(() => ({ get: () => v255, set: onChange, min: 0, max: 255, perPixel: 1, step: 1 }))}
         aria-label={label}
       />
     </label>

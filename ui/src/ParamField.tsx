@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ParamInfo } from "./api";
+import { scrubHandler } from "./scrub";
 
 // The single, reusable frame every effect parameter renders inside, so labels and value
 // boxes are IDENTICAL and aligned for every control type (§3.5). You instantiate it with
@@ -96,6 +97,8 @@ export function ValueBox({
       onKeyDown={(e) => {
         if (e.key === "Enter") (e.target as HTMLInputElement).blur();
       }}
+      // Drag up/down = move the fader: the whole range over ~200 px.
+      onPointerDown={scrubHandler(() => ({ get: () => valueNorm, set: onCommit, min: 0, max: 1, perPixel: 1 / 200 }))}
       aria-label={param.label}
     />
   );
