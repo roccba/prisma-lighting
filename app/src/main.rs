@@ -150,6 +150,8 @@ fn humanize(name: &str) -> String {
         "disp_dist" => Some("Distribución"),
         "cross_axes" => Some("Ejes de la cruz"),
         "mode" => Some("Dirección"),
+        "ratio" => Some("Proporción"),
+        "fade_out" => Some("Difuminado"),
         _ => None,
     } {
         return es.to_string();

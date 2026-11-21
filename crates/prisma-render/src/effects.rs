@@ -23,6 +23,9 @@ const SIMPLE_SHAPE_WGSL: &str = include_str!("../../../shaders/simple_shape.wgsl
 const METABALLS_WGSL: &str = include_str!("../../../shaders/metaballs.wgsl");
 const DROPS_WGSL: &str = include_str!("../../../shaders/drops.wgsl");
 const EXPLOSIONS_WGSL: &str = include_str!("../../../shaders/explosions.wgsl");
+const PULSE_WGSL: &str = include_str!("../../../shaders/pulse.wgsl");
+const COLOR_CHANGE_WGSL: &str = include_str!("../../../shaders/color_change.wgsl");
+const BOUNCE_WGSL: &str = include_str!("../../../shaders/bounce.wgsl");
 
 /// The factory colour table of "Scroll de color" (the classic defaults: red, yellow,
 /// green, cyan, blue, magenta). LINEAR light — for fully saturated sRGB primaries the
@@ -699,6 +702,218 @@ pub fn explosions() -> EffectManifest {
     }
 }
 
+/// A colour group `group` whose three channels are named `names` (r/g/b order) with
+/// tree keys `{key_prefix}.{name}`, defaulting to `rgb` (linear light). For effects with
+/// more than one colour, where [`color_group`]'s fixed `r`/`g`/`b` names would collide.
+fn color_group_as(
+    group: &'static str,
+    names: [&'static str; 3],
+    keys: [&'static str; 3],
+    rgb: [f32; 3],
+) -> Vec<ParamSpec> {
+    let channels = [ColorChannel::R, ColorChannel::G, ColorChannel::B];
+    (0..3)
+        .map(|i| {
+            ParamSpec::color(
+                names[i],
+                ParamDescriptor::unit_level(keys[i], rgb[i]),
+                group,
+                channels[i],
+            )
+        })
+        .collect()
+}
+
+/// A BPM-synchronised brightness pulse ("Pulse / Estroboscope"). `speed` is the tempo
+/// (one pulse per beat), `ratio` the balance between rise and fall (% — 0 = rise only,
+/// 50 = symmetric, 100 = fall only), `fade` ON = smooth pulse, OFF = hard strobe, and
+/// the `color` group the tint. Param order here **is** the uniform layout the shader reads.
+pub fn pulse() -> EffectManifest {
+    let mut params = vec![
+        ParamSpec::bpm(
+            "speed",
+            ParamDescriptor::level(
+                "effect.pulse.speed",
+                RealRange {
+                    min: 0.0,
+                    max: 9999.0,
+                },
+                Curve::Linear,
+                norm_of(1080.0, 0.0, 9999.0),
+            ),
+        ),
+        ParamSpec::scalar(
+            "ratio",
+            ParamDescriptor::level(
+                "effect.pulse.ratio",
+                RealRange {
+                    min: 0.0,
+                    max: 100.0,
+                },
+                Curve::Linear,
+                0.5,
+            ),
+        ),
+        ParamSpec::toggle(
+            "fade",
+            ParamDescriptor::unit_level("effect.pulse.fade", 1.0),
+        ),
+    ];
+    params.extend(color_group([
+        "effect.pulse.r",
+        "effect.pulse.g",
+        "effect.pulse.b",
+    ]));
+    EffectManifest {
+        effect_id: "pulse",
+        params,
+        palette: None,
+        shader_source: PULSE_WGSL,
+    }
+}
+
+/// The whole canvas cross-fading through four colours in a cycle (1→2→3→4→1), one
+/// colour per beat at `speed` BPM. Global, not spatial. Factory colours: red, yellow,
+/// green, blue. Param order here **is** the uniform layout the shader reads.
+pub fn color_change() -> EffectManifest {
+    let mut params = vec![ParamSpec::bpm(
+        "speed",
+        ParamDescriptor::level(
+            "effect.color_change.speed",
+            RealRange {
+                min: 0.0,
+                max: 9999.0,
+            },
+            Curve::Linear,
+            norm_of(60.0, 0.0, 9999.0),
+        ),
+    )];
+    params.extend(color_group_as(
+        "color_a",
+        ["a_r", "a_g", "a_b"],
+        [
+            "effect.color_change.a_r",
+            "effect.color_change.a_g",
+            "effect.color_change.a_b",
+        ],
+        [1.0, 0.0, 0.0],
+    ));
+    params.extend(color_group_as(
+        "color_b",
+        ["b_r", "b_g", "b_b"],
+        [
+            "effect.color_change.b_r",
+            "effect.color_change.b_g",
+            "effect.color_change.b_b",
+        ],
+        [1.0, 1.0, 0.0],
+    ));
+    params.extend(color_group_as(
+        "color_c",
+        ["c_r", "c_g", "c_b"],
+        [
+            "effect.color_change.c_r",
+            "effect.color_change.c_g",
+            "effect.color_change.c_b",
+        ],
+        [0.0, 1.0, 0.0],
+    ));
+    params.extend(color_group_as(
+        "color_d",
+        ["d_r", "d_g", "d_b"],
+        [
+            "effect.color_change.d_r",
+            "effect.color_change.d_g",
+            "effect.color_change.d_b",
+        ],
+        [0.0, 0.0, 1.0],
+    ));
+    EffectManifest {
+        effect_id: "color_change",
+        params,
+        palette: None,
+        shader_source: COLOR_CHANGE_WGSL,
+    }
+}
+
+/// Bounce axes, in index order (the shader switches on the index).
+const BOUNCE_AXES: &[&str] = &["Horizontal", "Vertical", "Ambos"];
+
+/// Round objects bouncing off the canvas edges. `speed` is the tempo (one round trip
+/// per beat), `count` the number of objects (1–20), `size` their radius as a fraction
+/// of the canvas, `fade_out` the soft falloff from centre to edge (0 = hard disc),
+/// `direction` the bounce axis, and the `color` group the tint. Param order here
+/// **is** the uniform layout the shader reads.
+pub fn bounce() -> EffectManifest {
+    let mut params = vec![
+        ParamSpec::bpm(
+            "speed",
+            ParamDescriptor::level(
+                "effect.bounce.speed",
+                RealRange {
+                    min: 0.0,
+                    max: 9999.0,
+                },
+                Curve::Linear,
+                norm_of(120.0, 0.0, 9999.0),
+            ),
+        ),
+        ParamSpec::scalar(
+            "count",
+            ParamDescriptor::level(
+                "effect.bounce.count",
+                RealRange {
+                    min: 1.0,
+                    max: 20.0,
+                },
+                Curve::Linear,
+                norm_of(3.0, 1.0, 20.0),
+            ),
+        ),
+        ParamSpec::scalar(
+            "size",
+            ParamDescriptor::level(
+                "effect.bounce.size",
+                RealRange {
+                    min: 0.01,
+                    max: 1.0,
+                },
+                Curve::Linear,
+                norm_of(0.1, 0.01, 1.0),
+            ),
+        ),
+        ParamSpec::scalar(
+            "fade_out",
+            ParamDescriptor::unit_level("effect.bounce.fade_out", 0.3),
+        ),
+    ];
+    params.extend(color_group([
+        "effect.bounce.r",
+        "effect.bounce.g",
+        "effect.bounce.b",
+    ]));
+    params.push(ParamSpec::enum_choice(
+        "direction",
+        ParamDescriptor::level(
+            "effect.bounce.direction",
+            RealRange {
+                min: 0.0,
+                max: (BOUNCE_AXES.len() - 1) as f32,
+            },
+            Curve::Linear,
+            // Default "Ambos" (the last index).
+            1.0,
+        ),
+        BOUNCE_AXES,
+    ));
+    EffectManifest {
+        effect_id: "bounce",
+        params,
+        palette: None,
+        shader_source: BOUNCE_WGSL,
+    }
+}
+
 /// A flat linear-light color from three unit-range parameters `r`, `g`, `b`. The
 /// simplest effect (§5.3 "solid color") and a clean, known building block for the
 /// compositor tests. Param order here is the uniform layout the shader reads.
@@ -841,6 +1056,21 @@ pub fn catalogue() -> Vec<EffectListing> {
             name: "Explosiones",
             category: "Generadores",
         },
+        EffectListing {
+            id: "pulse",
+            name: "Pulse / Estroboscope",
+            category: "Generadores",
+        },
+        EffectListing {
+            id: "color_change",
+            name: "Color Change",
+            category: "Generadores",
+        },
+        EffectListing {
+            id: "bounce",
+            name: "Bounce",
+            category: "Generadores",
+        },
     ]
 }
 
@@ -905,6 +1135,9 @@ pub fn manifest_by_id(id: &str) -> Option<EffectManifest> {
         "metaballs" => Some(metaballs()),
         "drops" => Some(drops()),
         "explosions" => Some(explosions()),
+        "pulse" => Some(pulse()),
+        "color_change" => Some(color_change()),
+        "bounce" => Some(bounce()),
         _ => None,
     }
 }

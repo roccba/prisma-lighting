@@ -31,7 +31,7 @@ type PanelItem =
   | { kind: "enum"; param: ParamInfo }
   | { kind: "toggle"; param: ParamInfo }
   | { kind: "dirmenu"; param: ParamInfo }
-  | { kind: "color"; group: string; r?: ParamInfo; g?: ParamInfo; b?: ParamInfo };
+  | { kind: "color"; group: string; label: string; r?: ParamInfo; g?: ParamInfo; b?: ParamInfo };
 
 function buildItems(params: ParamInfo[]): PanelItem[] {
   const items: PanelItem[] = [];
@@ -40,7 +40,7 @@ function buildItems(params: ParamInfo[]): PanelItem[] {
     if (p.role === "color" && p.group) {
       let item = colorItems.get(p.group);
       if (!item) {
-        item = { kind: "color", group: p.group };
+        item = { kind: "color", group: p.group, label: "Color" };
         colorItems.set(p.group, item);
         items.push(item);
       }
@@ -58,6 +58,11 @@ function buildItems(params: ParamInfo[]): PanelItem[] {
     } else {
       items.push({ kind: "scalar", param: p });
     }
+  }
+  // Several colours in one effect (e.g. Color Change's four): number them in manifest order.
+  if (colorItems.size > 1) {
+    let n = 0;
+    for (const item of colorItems.values()) item.label = `Color ${++n}`;
   }
   return items;
 }
@@ -327,7 +332,7 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
     if (item.kind === "color") {
       if (item.r && item.g && item.b) {
         return (
-          <ParamField key={`${effectId}:color:${item.group}`} label="Color" block>
+          <ParamField key={`${effectId}:color:${item.group}`} label={item.label} block>
             <ColorControl zoneId={zoneId} r={item.r} g={item.g} b={item.b} />
           </ParamField>
         );

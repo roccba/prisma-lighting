@@ -572,6 +572,136 @@ fn explosions_burst_and_animate() {
 }
 
 #[test]
+fn pulse_follows_the_bpm_envelope_and_strobes_without_fade() {
+    let gpu = software_gpu();
+    let tree = ParameterTree::with_defaults();
+    let mut pulse = EffectInstance::new(gpu, &tree, "/fx/pulse", &effects::pulse());
+    let set = |path: &str, v: f32| {
+        let h = tree.resolve(path).unwrap();
+        tree.write_real(&h, v, ui());
+    };
+    // 60 BPM = one pulse per second; default ratio 50 (symmetric), fade on, white.
+    set("/fx/pulse/param/speed", 60.0);
+    let lum = |p: &mut EffectInstance, t: f64| render_2d(gpu, p, &clock_at(t), 4, 4)[5][0];
+
+    assert!(lum(&mut pulse, 0.0) < EPS, "a pulse starts dark");
+    assert!(
+        (lum(&mut pulse, 0.5) - 1.0).abs() < EPS,
+        "peaks mid-cycle at ratio 50"
+    );
+    assert!(
+        (lum(&mut pulse, 0.25) - 0.5).abs() < 0.02,
+        "smooth rise halfway at a quarter cycle"
+    );
+    assert!(
+        (lum(&mut pulse, 0.75) - 0.5).abs() < 0.02,
+        "symmetric fall at ratio 50"
+    );
+
+    // Ratio 0 = rise only: still climbing late in the cycle.
+    set("/fx/pulse/param/ratio", 0.0);
+    assert!(
+        lum(&mut pulse, 0.9) > 0.9,
+        "ratio 0 rises across the whole cycle"
+    );
+
+    // Fade off = hard strobe: only fully on or fully off.
+    set("/fx/pulse/param/ratio", 50.0);
+    set("/fx/pulse/param/fade", 0.0);
+    for (t, on) in [(0.1, false), (0.3, true), (0.5, true), (0.9, false)] {
+        let v = lum(&mut pulse, t);
+        let want = if on { 1.0 } else { 0.0 };
+        assert!(
+            (v - want).abs() < EPS,
+            "strobe at {t}s must be {want}, got {v}"
+        );
+    }
+}
+
+#[test]
+fn color_change_cycles_through_four_colours_globally() {
+    let gpu = software_gpu();
+    let tree = ParameterTree::with_defaults();
+    let mut cc = EffectInstance::new(gpu, &tree, "/fx/cc", &effects::color_change());
+    let speed = tree.resolve("/fx/cc/param/speed").unwrap();
+    tree.write_real(&speed, 60.0, ui());
+    // 60 BPM = one colour per second. Factory colours: red, yellow, green, blue.
+    let rgb = |cc: &mut EffectInstance, t: f64| {
+        let px = render_2d(gpu, cc, &clock_at(t), 4, 4);
+        assert!(
+            px.iter().all(|p| (p[0] - px[0][0]).abs() < EPS
+                && (p[1] - px[0][1]).abs() < EPS
+                && (p[2] - px[0][2]).abs() < EPS),
+            "colour change is global: every pixel the same"
+        );
+        [px[0][0], px[0][1], px[0][2]]
+    };
+    let close = |a: [f32; 3], b: [f32; 3]| a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 0.02);
+
+    assert!(
+        close(rgb(&mut cc, 0.0), [1.0, 0.0, 0.0]),
+        "starts on colour 1"
+    );
+    assert!(close(rgb(&mut cc, 0.5), [1.0, 0.5, 0.0]), "blends 1→2");
+    assert!(
+        close(rgb(&mut cc, 1.0), [1.0, 1.0, 0.0]),
+        "colour 2 after a beat"
+    );
+    assert!(close(rgb(&mut cc, 2.0), [0.0, 1.0, 0.0]), "colour 3");
+    assert!(close(rgb(&mut cc, 3.0), [0.0, 0.0, 1.0]), "colour 4");
+    assert!(close(rgb(&mut cc, 3.5), [0.5, 0.0, 0.5]), "wraps 4→1");
+    assert!(
+        close(rgb(&mut cc, 4.0), [1.0, 0.0, 0.0]),
+        "back to colour 1"
+    );
+}
+
+#[test]
+fn bounce_draws_objects_that_move_and_respond_to_count() {
+    let gpu = software_gpu();
+    let tree = ParameterTree::with_defaults();
+    let mut bounce = EffectInstance::new(gpu, &tree, "/fx/bounce", &effects::bounce());
+
+    let (w, h) = (16u32, 16u32);
+    let a = render_2d(gpu, &mut bounce, &clock_at(0.1), w, h);
+    let lit = a.iter().filter(|p| p[0] > 0.5).count();
+    assert!(lit > 0, "bounce must light some cells");
+    assert!(
+        lit < (w * h) as usize / 2,
+        "small objects leave most of the canvas dark"
+    );
+    assert!(
+        a.iter().all(|p| (0.0..=1.0).contains(&p[0])),
+        "stays in range"
+    );
+    let b = render_2d(gpu, &mut bounce, &clock_at(0.3), w, h);
+    assert!(
+        a.iter().zip(&b).any(|(x, y)| (x[0] - y[0]).abs() > 0.3),
+        "objects must move over show time"
+    );
+    let count = tree.resolve("/fx/bounce/param/count").unwrap();
+    tree.write_real(&count, 10.0, ui());
+    let many = render_2d(gpu, &mut bounce, &clock_at(0.1), w, h);
+    assert!(
+        many.iter().filter(|p| p[0] > 0.5).count() > lit,
+        "more objects light more cells"
+    );
+    // Each axis mode is a different field.
+    let dir = tree.resolve("/fx/bounce/param/direction").unwrap();
+    tree.write_real(&dir, 0.0, ui());
+    let horiz = render_2d(gpu, &mut bounce, &clock_at(0.1), w, h);
+    tree.write_real(&dir, 1.0, ui());
+    let vert = render_2d(gpu, &mut bounce, &clock_at(0.1), w, h);
+    assert!(
+        horiz
+            .iter()
+            .zip(&vert)
+            .any(|(x, y)| (x[0] - y[0]).abs() > 0.3),
+        "horizontal and vertical bounce differ"
+    );
+}
+
+#[test]
 fn the_four_core_effects_are_distinguishable_patterns() {
     // The milestone asks for three or four core effects. Four that look alike
     // would not let anyone judge a preview, so assert they actually differ.
