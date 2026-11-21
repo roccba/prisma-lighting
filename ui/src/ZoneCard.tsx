@@ -137,8 +137,10 @@ export function ZoneCard({ zone, slot, selected, onSelect, registerPreview }: Zo
       tabIndex={0}
       aria-pressed={selected}
     >
-      <div className="pr-zonecard-head">
-        <span className="pr-zonecard-swatch" style={{ background: swatch }} />
+      {/* Title: neutral strip, the name centred in bold, the zone's colour as a thin line
+          under it (identifies the zone without competing with the live preview or with
+          the blue "selected" border). */}
+      <div className="pr-zonecard-head" style={{ borderBottomColor: swatch }} title={zone.name}>
         <span className="pr-zonecard-name">{zone.name}</span>
       </div>
 

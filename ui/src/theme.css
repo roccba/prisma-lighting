@@ -552,9 +552,8 @@ input, textarea, [contenteditable="true"] {
 /* --- Zone card --- */
 .pr-zonecard { flex: 0 0 auto; width: 178px; background: var(--bg-panel-2); border: 1px solid var(--btn-border); border-top-color: #3a3a3a; border-bottom-color: var(--btn-border-dark); border-radius: var(--r-md); display: flex; flex-direction: column; gap: 6px; padding: 6px; cursor: pointer; user-select: none; }
 .pr-zonecard.is-selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset, 0 0 6px rgba(0,122,204,.35); }
-.pr-zonecard-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.pr-zonecard-swatch { width: 10px; height: 10px; flex: 0 0 auto; border-radius: var(--r-sm); border: 1px solid var(--btn-border-dark); }
-.pr-zonecard-name { font-size: var(--fs-base); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-zonecard-head { display: flex; align-items: center; justify-content: center; min-width: 0; padding: 3px 6px; background: var(--header-bg); border-bottom: 2px solid transparent; border-radius: var(--r-sm) var(--r-sm) 0 0; }
+.pr-zonecard-name { font-size: var(--fs-small); font-weight: 700; letter-spacing: .02em; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Body: dimmer fader · mini-preview · velocity fader. Align tops so the fader RAILS line
    up with the canvas top (the fader columns run taller because of the labels below). */
