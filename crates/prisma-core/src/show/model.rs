@@ -339,13 +339,13 @@ fn prefix_mask(prefix_len: u8) -> u32 {
     }
 }
 
-/// One Art-Net device row, as professional consoles lists it: a node (or one `BindIndex` group of a
+/// One Art-Net device row, as professional consoles list it: a node (or one `BindIndex` group of a
 /// node with more than 4 ports — the H802RA answers as 18 of them) and the universe of
 /// each of its output ports.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArtNetNode {
     pub id: Uuid,
-    /// Short name ("H802RA"; professional consoles "Nombre del dispositivo").
+    /// Short name ("H802RA"; classic "Nombre del dispositivo").
     pub name: String,
     /// Long name ("Oem ArtNet-Node").
     #[serde(default)]

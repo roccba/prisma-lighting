@@ -14,7 +14,7 @@ import { ColorPicker, type Rgb } from "./ColorPicker";
 import { LearnTarget } from "./midiLearn";
 
 // The scene grid of the SELECTED zone (M8-SPEC §3.3): a grid of assignable cells (the
-// zone's "scenes"). the classic model — select, then play:
+// zone's "scenes"). The classic console model — select, then play:
 //  · a click SELECTS a cell (its effect and parameters show in the panel below) and never
 //    changes output (selected ≠ active), nor the cell: an empty cell stays empty — the
 //    panel shows it as a draft and assigns it only on the first edit or GO.
@@ -180,7 +180,7 @@ export function SceneGrid({ zoneId, slot, selectedCell, onSelectCell, rev, onAct
       openMenu(cell.index, r.left + 8, r.top + 8);
     } else if (e.key === "Enter") {
       e.preventDefault();
-      fire(cell.index); // professional consoles: Enter plays the cell
+      fire(cell.index); // consoles: Enter plays the cell
     }
   };
 

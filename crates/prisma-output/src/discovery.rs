@@ -2,7 +2,7 @@
 //!
 //! Sends `ArtPoll` and collects `ArtPollReply`s for a short window, then merges the
 //! replies **per node**: a board with more than 4 ports answers once per group of 4
-//! (`BindIndex`), and professional consoles lists each group as its own row — the H802RA shows up as
+//! (`BindIndex`), and professional consoles list each group as its own row — the H802RA shows up as
 //! 18 rows. Prisma shows one row per board (Bauti, 2026-11-17), so replies sharing an
 //! IP become one [`DiscoveredNode`] with all their universes.
 //!
@@ -20,7 +20,7 @@ use crate::packet::artpoll::{parse_artpollreply, write_artpoll, PollReply};
 use crate::route::ARTNET_PORT;
 
 /// One device row found by a scan: a node, or one `BindIndex` group of a node with more
-/// than 4 ports. Listed exactly as professional consoles does — the H802RA is 18 rows of 4 universes,
+/// than 4 ports. Listed exactly as professional consoles do — the H802RA is 18 rows of 4 universes,
 /// same IP and MAC, "BindIdx1"…"BindIdx18".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveredNode {
@@ -57,7 +57,7 @@ impl DiscoveredNode {
 /// Why a scan could not run.
 #[derive(Debug)]
 pub enum ScanError {
-    /// UDP 6454 is held by another program (e.g. professional consoles running on this PC): replies
+    /// UDP 6454 is held by another program (e.g. another lighting program running on this PC): replies
     /// cannot be received. Manual add still works.
     PortBusy(io::Error),
     /// Any other socket error.
@@ -180,7 +180,7 @@ mod tests {
 
     const H802RA_MAC: [u8; 6] = [0x48, 0xE0, 0xC7, 0x4D, 0x96, 0x64];
 
-    /// The H802RA as professional consoles scanned it: 18 binds × 4 universes, one IP/MAC. Port
+    /// The H802RA as a professional console scanned it: 18 binds × 4 universes, one IP/MAC. Port
     /// addresses run 0..71 (net 0, sub-nets 0..4, contiguous) — synthetic until the
     /// real bytes are captured by Prisma's own Scan.
     fn h802ra_replies() -> Vec<(PollReply, Vec<u8>)> {

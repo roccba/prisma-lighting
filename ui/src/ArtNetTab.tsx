@@ -22,7 +22,7 @@ import { Dropdown } from "./Dropdown";
 import { Duplicate, Gear, Globe, Minus, Plus, Search } from "./icons";
 import { NumberField } from "./NumberField";
 
-// The Device Manager's Art-Net tab, modelled on the classic (docs/DEVICES-SPEC.md §9):
+// The Device Manager's Art-Net tab, modelled on professional consoles (docs/DEVICES-SPEC.md §9):
 // one row per device — a node, or one BindIndex group of a node with more than 4 ports
 // (the H802RA lists as 18 rows of 4 universes) — with the classic columns, a right-hand
 // panel (Habilitar · ArtSync · interfaz de red · ▲▼) and a bottom bar (Scan · Agregar ·
@@ -50,7 +50,7 @@ const isIpv4 = (ip: string) =>
     .split(".")
     .every((o) => Number(o) <= 255);
 
-/** Ports' universes as professional consoles lists them ("1, 2, 3, 4"), with runs of 3+ consecutive
+/** Ports' universes as professional consoles list them ("1, 2, 3, 4"), with runs of 3+ consecutive
  *  universes compressed ("3–149") so a big device never makes the column kilometres wide. */
 function formatPorts(ports: number[]): string {
   if (ports.length === 0) return "—";
@@ -98,7 +98,7 @@ const REACH_LABEL: Record<NodeReach, string> = {
   lost: "Dejó de responder",
 };
 
-/** the classic IP/MAC column: "ip / mac / BindIdxN (Envío …)". */
+/** The classic IP/MAC column: "ip / mac / BindIdxN (Envío …)". */
 function addressText(n: ArtNetNode, broadcast: string): string {
   const parts = [n.ip === NO_IP ? "Sin IP" : n.ip];
   if (n.origin.kind === "scanned") {

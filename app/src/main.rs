@@ -143,7 +143,7 @@ struct EffectPanelInfo {
 /// per-effect label table (§5.3). Real i18n resolution of the manifest's `label_key`
 /// is deferred (the UI has no locale resolver yet); this is a legible stand-in.
 fn humanize(name: &str) -> String {
-    // Spanish names already settled with Bauti (professional consoles wording). A stand-in for the
+    // Spanish names already settled with Bauti (console wording). A stand-in for the
     // deferred i18n catalogue, keyed by parameter name — not a per-effect table.
     if let Some(es) = match name {
         "fade" => Some("Atenuar"),
@@ -2680,7 +2680,7 @@ fn main() {
             // Open the MIDI input off the boot path's critical section: a missing device
             // just leaves the link empty (the device manager can reconnect later).
             connect_midi(&app.state::<AppState>());
-            // Art-Net node monitor (status dots + Scan). A held 6454 (professional consoles open on this
+            // Art-Net node monitor (status dots + Scan). A held 6454 (another lighting program open on this
             // PC) just leaves it off; the Scan retries and explains.
             let _ = ensure_artnet_monitor(app.handle());
 

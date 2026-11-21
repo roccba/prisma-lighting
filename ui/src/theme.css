@@ -799,7 +799,7 @@ input.pr-field-value:focus { outline: 1px solid var(--accent); outline-offset: -
 .pr-color-box.is-off { opacity: .45; }
 .pr-color-faderbtn { width: 40px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 
-/* "Selector de color" (professional consoles colour picker): quick colours / grey strip + hue field +
+/* "Selector de color" (classic colour picker): quick colours / grey strip + hue field +
    now/was / favourites. Press and drag inside the field or the grey strip. */
 .pr-cpick { position: fixed; z-index: 130; width: 640px; height: 330px; display: grid; grid-template-rows: 44px 1fr 40px; background: #000; border: 1px solid var(--btn-border-dark); box-shadow: 0 10px 28px rgba(0,0,0,.6); user-select: none; }
 .pr-swatch-pick { cursor: pointer; touch-action: none; }
@@ -829,7 +829,7 @@ body.is-picking, body.is-picking * { cursor: crosshair !important; user-select: 
 .pr-float-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; height: 30px; padding: 0 4px 0 12px; background: var(--header-bg); border-bottom: 1px solid var(--btn-border-dark); color: var(--text); font-size: var(--fs-base); cursor: move; user-select: none; }
 .pr-float-x { width: 26px; height: 24px; background: transparent; border: none; color: var(--text); font-size: 18px; cursor: pointer; border-radius: var(--r-sm); }
 .pr-float-x:hover { background: var(--danger); color: #fff; }
-/* "Caja de Fader" (professional consoles Fader Box). */
+/* "Caja de Fader" (classic Fader Box). */
 .pr-faderbox { width: 330px; }
 .pr-faderbox-body { display: flex; flex-direction: column; align-items: stretch; gap: 10px; padding: 10px 12px 12px; }
 .pr-faderbox-chans { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
@@ -862,10 +862,10 @@ body.is-picking, body.is-picking * { cursor: crosshair !important; user-select: 
 }
 .pr-go-btn:hover:not(:disabled) { filter: brightness(1.12); }
 .pr-go-btn:disabled { opacity: .45; cursor: default; }
-/* Effect top button row (professional consoles: [Colores] [Atenuar] above the sliders). */
+/* Effect top button row (consoles: [Colores] [Atenuar] above the sliders). */
 .pr-params-buttons { flex: 0 0 auto; display: flex; gap: 8px; padding-left: 160px; }
 .pr-params-btn { min-width: 110px; }
-/* Colour-table play mode (professional consoles: the icon button beside "Colores" — loop / ping-pong /
+/* Colour-table play mode (consoles: the icon button beside "Colores" — loop / ping-pong /
    RND), dropping a vertical list of the same glyphs. */
 .pr-palmode { position: relative; display: inline-flex; }
 .pr-palmode-btn { min-width: 52px; display: inline-flex; align-items: center; justify-content: center; }
@@ -883,7 +883,7 @@ body.is-picking, body.is-picking * { cursor: crosshair !important; user-select: 
 .pr-palmode-opt.is-sel { background: var(--accent); color: #fff; }
 .pr-palmode-rnd { font-size: var(--fs-small); font-weight: 700; letter-spacing: .04em; }
 
-/* "Tabla de color" (professional consoles Color Table): fixed-size floating window. */
+/* "Tabla de color" (classic Color Table): fixed-size floating window. */
 .pr-ctable { width: 470px; height: 460px; }
 .pr-ctable-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 10px; }
 .pr-ctable-wrap { flex: 1 1 auto; min-height: 0; overflow-y: auto; background: var(--bg-input); border: 1px solid var(--btn-border-dark); }
@@ -1017,7 +1017,7 @@ body.is-picking, body.is-picking * { cursor: crosshair !important; user-select: 
 .pr-artnet-total { font-size: var(--fs-small); color: var(--text-label); text-align: center; }
 .pr-artnet-total b { color: var(--accent-text); margin-right: 6px; }
 .pr-artnet-config-body { gap: 12px; }
-/* the classic titled sections: a full-width title strip (optional action on its right) over
+/* The classic titled sections: a full-width title strip (optional action on its right) over
    the section body. Not fieldset/legend — the browser draws a legend ON the border line,
    which never lines up with the rest of the dialog. */
 .pr-group { border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); background: var(--bg-panel-2); flex: 0 0 auto; }
@@ -1085,7 +1085,7 @@ body.is-scrubbing, body.is-scrubbing * { cursor: ns-resize !important; user-sele
 .pr-color-box input, input.pr-field-value, .pr-num input, .pr-master-value, .pr-zonecard-faderval { cursor: ns-resize; }
 .pr-color-box input:focus, input.pr-field-value:focus, .pr-num input:focus { cursor: text; }
 
-/* Effect parameters that do not apply right now (professional consoles greys them): visible, inert. */
+/* Effect parameters that do not apply right now (professional consoles grey them): visible, inert. */
 .pr-param-off { opacity: .4; pointer-events: none; }
 /* BPM row: the fader plus "Pulsar" (tap tempo). */
 .pr-field-bpm { position: relative; min-width: 0; }

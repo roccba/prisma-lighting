@@ -6,7 +6,7 @@ const GROUPS_H_KEY = "prisma.editor.groupsHeight";
 
 // Left sector "Grupos" (§M7 restyle, §3.3 / §6). Groups — a saved convenience selection
 // across fixtures — are NOT implemented yet (M7 gap): this is the sectorised placeholder
-// that reserves the space and the affordances (add / remove) professional consoles puts at the bottom
+// that reserves the space and the affordances (add / remove) professional consoles put at the bottom
 // left, so the layout is complete and the feature has an obvious home. Controls are
 // disabled until the feature lands. Its height is user-draggable (the splitter sits on
 // the boundary with the Zonas sector above) so it never crowds the zone list.

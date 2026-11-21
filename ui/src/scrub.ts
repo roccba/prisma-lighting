@@ -1,6 +1,6 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
 
-// console-style "scrub": press on a value box and drag UP to raise it / DOWN to lower it,
+// Console-style "scrub": press on a value box and drag UP to raise it / DOWN to lower it,
 // as if you had grabbed its fader. A press that does not move is an ordinary click, so the
 // box can still be focused and typed into. Shared by every numeric box (colour channels,
 // effect parameter values, the −/+ number fields, the master readout) so they all behave

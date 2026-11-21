@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-// A floating tool window in the professional consoles style (Caja de Fader, Tabla de color, …):
+// A floating tool window in the classic console style (Caja de Fader, Tabla de color, …):
 // FIXED size (no resize), non-blocking (no backdrop — the rest of the console stays
 // usable), opens where it was asked for (the click point) kept fully on screen, and
 // moves by dragging its title bar. Escape or × closes it.

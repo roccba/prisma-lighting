@@ -106,7 +106,7 @@ export interface PixelRole {
  *  left → right). The 45° steps are Prisma's diagonals. */
 export type Rotation = "R0" | "R45" | "R90" | "R135" | "R180" | "R225" | "R270" | "R315";
 
-/** Grid corner that receives the first DMX address (professional consoles "Esquina inicial"). */
+/** Grid corner that receives the first DMX address (classic "Esquina inicial"). */
 export type StartCorner = "TopLeft" | "TopRight" | "BottomLeft" | "BottomRight";
 
 /** Addressing walks rows (Horizontal) or columns (Vertical) first. */
@@ -306,7 +306,7 @@ export type NodeOrigin =
   | { kind: "manual" }
   | { kind: "scanned"; mac: string; bind_index: number; esta: number; oem: number; firmware: number };
 
-/** One Art-Net device row, as professional consoles lists it: a node or one BindIndex group of it. */
+/** One Art-Net device row, as professional consoles list it: a node or one BindIndex group of it. */
 export interface ArtNetNode {
   id: string;
   /** Short name ("Nombre del dispositivo"). */
@@ -485,7 +485,7 @@ export interface ParamInfo {
    *  step; the panel already renders them). */
   choices?: string[] | null;
   /** Greyed out unless `param` has the choice labelled `choice` (or, when `choice` is
-   *  null, unless `param` is above zero). console-style dependent controls. */
+   *  null, unless `param` is above zero). Console-style dependent controls. */
   requires?: { param: string; choice: string | null } | null;
 }
 

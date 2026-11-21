@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { usePanelWrites } from "./panelCell";
 import { type ParamInfo } from "./api";
 
-// the classic direction control for movement effects (Scroll de color): the 3×3 rose (eight
+// The classic direction control for movement effects (Scroll de color): the 3×3 rose (eight
 // arrows + ✕ in the centre) for the common directions, and below it a button showing the
 // current one that opens a CASCADING menu with every mode, grouped
 // (Lineal ▸ / Lineal a 2 vías ▸ / Forma 2D ▸ / …).

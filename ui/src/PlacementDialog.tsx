@@ -20,7 +20,7 @@ import { NumberField } from "./NumberField";
 
 // "Añadir instalaciones" — modelled on the classic Add Fixtures dialog (M7 spec §4.1).
 //
-// Two independent facts, kept apart exactly as professional consoles does:
+// Two independent facts, kept apart exactly as professional consoles do:
 //  · ROTACIÓN — which way the pixels run INSIDE each fixture (8 directions; the 45°
 //    steps are Prisma's diagonals). The product preview draws the fixture as created
 //    in the library, turned by this rotation, with pixel 1 (the signal input) lit.
@@ -419,7 +419,7 @@ export function PlacementDialog({ patch, activeZone, onPlaced, onClose }: Props)
   }, [onClose]);
 
   // How many fixtures of this product fit in one universe — the ceiling of
-  // "Número límite de instalaciones por universo" (professional consoles greys its + at this value).
+  // "Número límite de instalaciones por universo" (professional consoles grey their + at this value).
   const span = type ? type.pixel_count * componentCount(type) : 0;
   const firstChannel = channelEveryUniverse ? channel : 1;
   const maxPerUniverse = span > 0 ? Math.max(1, Math.floor((513 - firstChannel) / (span + channelOffset))) : 1;

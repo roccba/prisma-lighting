@@ -41,7 +41,7 @@ pub const SCROLL_PALETTE: &[[f32; 3]] = &[
 
 /// The movement modes of "Scroll de color", in INDEX order (the shader switches on the
 /// index — keep `color_scroll.wgsl`'s `mode_*` tables in lockstep). `"Group|Label"`, the
-/// professional consoles names and menu groups. "Forma 3D" is deliberately not offered yet.
+/// the classic names and menu groups. "Forma 3D" is deliberately not offered yet.
 pub const SCROLL_MODES: &[&str] = &[
     // 0..=25 — Lineal: (x, y, z) direction of travel; z = toward the viewer (Frontal).
     "Lineal|Frontal",
@@ -108,7 +108,7 @@ fn norm_of(v: f32, min: f32, max: f32) -> f32 {
 }
 
 /// "Scroll de color" — the classic colour-scroll effect (§5.3): bands of a user palette moving
-/// across the matrix. Parameters and defaults follow the professional consoles 5 help:
+/// across the matrix. Parameters and defaults follow the reference manuals of professional consoles:
 /// `bpm` (speed, 0–9999, 600; 60 BPM = one step per second), `step` (how far each step
 /// moves, % of the matrix, 0.01), `color_width` (width of one colour, %, 10),
 /// `cross_width` (only in Cross mode, %, 50), `displacement` (distortion amount 0–100)

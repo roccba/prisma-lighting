@@ -73,7 +73,7 @@ pub enum ParamRole {
 }
 
 /// When a parameter only applies in some state of another one, the panel greys it out
-/// (professional consoles: "Anchura de la cruz" only in Cross mode, displacement options only while
+/// (consoles: "Anchura de la cruz" only in Cross mode, displacement options only while
 /// there is displacement). Presentation only — the value is still carried.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Requires {

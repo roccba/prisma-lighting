@@ -185,7 +185,7 @@ fn fs(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let count = clamp(i32(round(palette.len)), 1, 255);
 
     // Bands of `color_width`% of L, cycling through the live palette. "Atenuar" (fade)
-    // blends each band into the next; off = hard cuts (professional consoles default).
+    // blends each band into the next; off = hard cuts (classic default).
     let w = max(u.color_width / 100.0 * L, 0.5);
     let f = s / w;
     let band = i32(floor(f));

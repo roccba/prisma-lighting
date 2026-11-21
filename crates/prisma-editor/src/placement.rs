@@ -61,7 +61,7 @@ pub struct FixtureType {
 /// `R0` ("Original") is the fixture as it was created in the library: a strip runs
 /// left → right. Angles are clockwise on screen (y grows downward), so `R90` runs top →
 /// bottom and `R270` bottom → top. The four 45° steps are Prisma's diagonal stepped runs
-/// (professional consoles has no diagonals) — all eight directions stay reachable.
+/// (professional consoles have no diagonals) — all eight directions stay reachable.
 ///
 /// This is deliberately separate from the *addressing order between fixtures*
 /// ([`StartCorner`] + [`MainOrientation`] + snake): a tube's internal direction and which

@@ -4,7 +4,7 @@ import { ArtNetTab } from "./ArtNetTab";
 import { Check } from "./Check";
 import { Search } from "./icons";
 
-// The device manager, modelled on the classic (docs/DEVICES-SPEC.md §9). The Art-Net tab
+// The device manager, modelled on professional consoles (docs/DEVICES-SPEC.md §9). The Art-Net tab
 // (`ArtNetTab`) lists the show's devices — one row per node / BindIndex group — with
 // Scan, staged edits and Aceptar / Aplicar / Cancelar.
 //

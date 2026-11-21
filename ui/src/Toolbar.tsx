@@ -19,7 +19,7 @@ import {
   Undo,
 } from "./icons";
 
-// console-style icon-over-label toolbar (§M7 restyle): every action is a `.pr-tbtn`
+// Console-style icon-over-label toolbar (§M7 restyle): every action is a `.pr-tbtn`
 // (icon on top, label under), grouped into labelled sections separated by `.sep`.
 // Zone management lives in the left ZonesPanel now, not here — the toolbar is
 // file / fixtures / edit / view / rig-highlight only.

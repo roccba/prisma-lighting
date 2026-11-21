@@ -117,7 +117,7 @@ function enabledOf(p: ParamInfo, all: ParamInfo[]): boolean {
   return choices[i] === req.choice;
 }
 
-/** the classic "Pulsar" (tap tempo): tap at least four times on the beat and the BPM is the
+/** The classic "Pulsar" (tap tempo): tap at least four times on the beat and the BPM is the
  *  average interval of the recent taps (a pause of 2 s starts a new count). */
 function TapButton({ onBpm, disabled }: { onBpm: (bpm: number) => void; disabled?: boolean }) {
   const taps = useRef<number[]>([]);
@@ -604,9 +604,9 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
 
   const items = buildItems(panel.params);
   const scalarItems = items.filter((i): i is Extract<PanelItem, { kind: "scalar" }> => i.kind === "scalar");
-  // Buttons row on top (professional consoles: [Colores] [Atenuar] above the sliders): the palette's
+  // Buttons row on top (consoles: [Colores] [Atenuar] above the sliders): the palette's
   // "Colores" and every on/off toggle. The rest: sliders left, other controls right.
-  // The colour table's play mode sits right after "Colores" (professional consoles: [Colores] [⇄▾]).
+  // The colour table's play mode sits right after "Colores" (consoles: [Colores] [⇄▾]).
   const palModeItems = items.filter((i) => i.kind === "palmode");
   const buttonItems = items.filter((i) => i.kind === "toggle");
   const controlItems = items.filter((i) => i.kind !== "scalar" && i.kind !== "toggle" && i.kind !== "palmode");
