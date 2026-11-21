@@ -17,6 +17,35 @@ import {
 // fixture editor). Intra-fixture roles (§3.2 hexagon) exist in the model but have no UI
 // yet. Every change persists to the library file via the backend.
 
+/** Standard fixtures every install ships with: generic single pixels and 20-pixel tubes
+ *  in the common component sets / colour orders. Frontend constants — not in the user's
+ *  library file, so they can be used but never edited or deleted. */
+const builtin = (name: string, pixel_count: number, components: ComponentSet, color_order: ColorOrder): FixtureType => ({
+  name,
+  pixel_count,
+  components,
+  color_order,
+  arrangement: "Strip",
+  roles: [],
+});
+export const BUILTIN_FIXTURES: FixtureType[] = [
+  builtin("Píxel RGB", 1, "Rgb", "Rgb"),
+  builtin("Píxel GRB", 1, "Rgb", "Grb"),
+  builtin("Píxel RGBW", 1, "Rgbw", "Rgb"),
+  builtin("Píxel GRBW", 1, "Rgbw", "Grb"),
+  builtin("Tubo RGB 20", 20, "Rgb", "Rgb"),
+  builtin("Tubo GRB 20", 20, "Rgb", "Grb"),
+  builtin("Tubo RGBW 20", 20, "Rgbw", "Rgb"),
+  builtin("Tubo GRBW 20", 20, "Rgbw", "Grb"),
+];
+
+/** One readable line per fixture: its size and the channel order on the wire, e.g.
+ *  "20 píxeles · orden GRBW" (an RGBW fixture sends its colour order, then white). */
+const fixtureMeta = (t: FixtureType) =>
+  `${t.pixel_count} ${t.pixel_count === 1 ? "píxel" : "píxeles"} · orden ${t.color_order.toUpperCase()}${
+    t.components === "Rgbw" ? "W" : ""
+  }`;
+
 const COMPONENTS: ComponentSet[] = ["Rgb", "Rgbw"];
 const COLOR_ORDERS: ColorOrder[] = ["Rgb", "Rbg", "Grb", "Gbr", "Brg", "Bgr"];
 
@@ -26,7 +55,7 @@ interface Props {
 
 function blankType(): FixtureType {
   return {
-    name: "New fixture",
+    name: "Nuevo fixture",
     pixel_count: 60,
     components: "Rgb",
     color_order: "Grb",
@@ -40,6 +69,23 @@ export function LibraryManager({ onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   // The type being added (index null) or edited (index set). Null = list view.
   const [form, setForm] = useState<{ index: number | null; value: FixtureType } | null>(null);
+  // Collapsed groups of the list (by heading), like the classic per-manufacturer tree.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggleGroup = (g: string) =>
+    setCollapsed((c) => {
+      const next = new Set(c);
+      if (next.has(g)) next.delete(g);
+      else next.add(g);
+      return next;
+    });
+  const groupHead = (g: string) => (
+    <li className="library-group">
+      <button type="button" className="library-group-head" aria-expanded={!collapsed.has(g)} onClick={() => toggleGroup(g)}>
+        <span className="library-group-sign">{collapsed.has(g) ? "+" : "−"}</span>
+        {g}
+      </button>
+    </li>
+  );
 
   useEffect(() => {
     getLibrary().then(setLib).catch((e) => setError(String(e)));
@@ -57,7 +103,7 @@ export function LibraryManager({ onClose }: Props) {
 
   const save = () => {
     if (!form) return;
-    const value = { ...form.value, name: form.value.name.trim() || "Unnamed", pixel_count: Math.max(1, Math.round(form.value.pixel_count || 1)) };
+    const value = { ...form.value, name: form.value.name.trim() || "Sin nombre", pixel_count: Math.max(1, Math.round(form.value.pixel_count || 1)) };
     run(form.index === null ? addFixtureType(value) : updateFixtureType(form.index, value));
   };
 
@@ -67,23 +113,22 @@ export function LibraryManager({ onClose }: Props) {
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal library-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
-          Fixture library
-          {lib && <span className="modal-zone">{lib.types.length} types</span>}
+          Biblioteca de fixtures
         </div>
 
         {error && <div className="modal-error">{error}</div>}
 
         {!lib ? (
-          <div className="modal-message">Loading…</div>
+          <div className="modal-message">Cargando…</div>
         ) : form ? (
           <div className="library-form">
             <label className="field">
-              <span>Name</span>
+              <span>Nombre</span>
               <input value={form.value.name} autoFocus onChange={(e) => set({ name: e.target.value })} />
             </label>
             <div className="field-row">
               <label className="field">
-                <span>Pixel count</span>
+                <span>Cantidad de píxeles</span>
                 <input
                   type="number"
                   min={1}
@@ -92,7 +137,7 @@ export function LibraryManager({ onClose }: Props) {
                 />
               </label>
               <label className="field">
-                <span>Component set</span>
+                <span>Componentes</span>
                 <select value={form.value.components} onChange={(e) => set({ components: e.target.value as ComponentSet })}>
                   {COMPONENTS.map((c) => (<option key={c} value={c}>{c.toUpperCase()}</option>))}
                 </select>
@@ -100,47 +145,58 @@ export function LibraryManager({ onClose }: Props) {
             </div>
             <div className="field-row">
               <label className="field">
-                <span>Colour order</span>
+                <span>Orden de color</span>
                 <select value={form.value.color_order} onChange={(e) => set({ color_order: e.target.value as ColorOrder })}>
                   {COLOR_ORDERS.map((c) => (<option key={c} value={c}>{c.toUpperCase()}</option>))}
                 </select>
               </label>
               <label className="field">
-                <span>Arrangement</span>
+                <span>Disposición</span>
                 <select value={form.value.arrangement} disabled>
-                  <option value="Strip">Strip (1-D)</option>
+                  <option value="Strip">Tira (1-D)</option>
                 </select>
               </label>
             </div>
             <div className="modal-foot">
-              <button className="btn" onClick={() => setForm(null)}>Cancel</button>
+              <button className="btn" onClick={() => setForm(null)}>Cancelar</button>
               <div className="spacer" />
               <button className="btn primary" onClick={save}>
-                {form.index === null ? "Add" : "Save"}
+                {form.index === null ? "Añadir" : "Guardar"}
               </button>
             </div>
           </div>
         ) : (
           <>
             <ul className="library-list">
-              {lib.types.map((t, i) => (
-                <li key={i} className="library-item">
+              {groupHead("Genérico")}
+              {!collapsed.has("Genérico") &&
+                BUILTIN_FIXTURES.map((t) => (
+                  <li key={`std:${t.name}`} className="library-item in-group">
+                    <div className="library-item-main">
+                      <span className="library-item-name">{t.name}</span>
+                      <span className="library-item-meta">{fixtureMeta(t)}</span>
+                    </div>
+                  </li>
+                ))}
+              {groupHead("Mis tipos")}
+              {!collapsed.has("Mis tipos") && lib.types.map((t, i) => (
+                <li key={i} className="library-item in-group">
                   <div className="library-item-main">
                     <span className="library-item-name">{t.name}</span>
-                    <span className="library-item-meta">
-                      {t.pixel_count}px · {t.components.toUpperCase()} · {t.color_order.toUpperCase()}
-                    </span>
+                    <span className="library-item-meta">{fixtureMeta(t)}</span>
                   </div>
-                  <button className="btn small" onClick={() => setForm({ index: i, value: { ...t } })}>Edit</button>
-                  <button className="btn small" onClick={() => run(removeFixtureType(i))}>Delete</button>
+                  <button className="btn small" onClick={() => setForm({ index: i, value: { ...t } })}>Editar</button>
+                  <button className="btn small" onClick={() => run(removeFixtureType(i))}>Borrar</button>
                 </li>
               ))}
-              {lib.types.length === 0 && <li className="library-empty">No fixture types yet.</li>}
+              {!collapsed.has("Mis tipos") && lib.types.length === 0 && (
+                <li className="library-empty in-group">Todavía no creaste tipos propios.</li>
+              )}
             </ul>
             <div className="modal-foot">
-              <button className="btn" onClick={() => setForm({ index: null, value: blankType() })}>+ Add type</button>
+              <button className="btn" onClick={() => setForm({ index: null, value: blankType() })}>+ Añadir tipo</button>
               <div className="spacer" />
-              <button className="btn primary" onClick={onClose}>Done</button>
+              <button className="btn primary" onClick={onClose}>Listo</button>
             </div>
           </>
         )}

@@ -10,6 +10,9 @@ export interface DropdownOption {
   value: string;
   label: string;
   swatch?: string; // optional colour chip (data value → inline background is fine)
+  /** Optional group heading (like <optgroup>): consecutive options with the same group
+   *  are listed under one non-selectable heading, indented. */
+  group?: string;
 }
 
 interface DropdownProps {
@@ -81,10 +84,15 @@ export function Dropdown({ value, options, onChange, disabled, minWidth, ...rest
       </div>
       {open && (
         <div className="pr-dd-list" role="listbox">
-          {options.map((o) => (
+          {options.map((o, i) => [
+            o.group && o.group !== options[i - 1]?.group && (
+              <div key={`group:${i}`} className="pr-dd-group" role="presentation">
+                {o.group}
+              </div>
+            ),
             <div
               key={o.value}
-              className={`pr-dd-opt${o.value === value ? " is-sel" : ""}`}
+              className={`pr-dd-opt${o.value === value ? " is-sel" : ""}${o.group ? " in-group" : ""}`}
               onClick={() => pick(o.value)}
               role="option"
               aria-selected={o.value === value}
@@ -92,8 +100,8 @@ export function Dropdown({ value, options, onChange, disabled, minWidth, ...rest
             >
               {o.swatch && <Swatch color={o.swatch} />}
               {o.label}
-            </div>
-          ))}
+            </div>,
+          ])}
         </div>
       )}
     </div>

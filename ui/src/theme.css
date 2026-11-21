@@ -297,6 +297,9 @@ input, textarea, [contenteditable="true"] {
 .pr-dd .pr-dd-opt:last-child { border-bottom: none; }
 .pr-dd .pr-dd-opt:hover { background: var(--accent-dim); color: #fff; }
 .pr-dd .pr-dd-opt.is-sel { background: var(--accent); color: #fff; }
+/* Option group heading (an <optgroup>): not selectable; its options are indented. */
+.pr-dd .pr-dd-group { padding: 5px 9px 3px; font-size: var(--fs-tiny); font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--divider); cursor: default; }
+.pr-dd .pr-dd-opt.in-group { padding-left: 20px; }
 
 /* ============================================================
    Checkbox & toggle

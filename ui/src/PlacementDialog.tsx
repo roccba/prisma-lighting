@@ -4,6 +4,7 @@ import {
   nextFixtureId,
   nextFreeAddress,
   placeFixtures,
+  previewPlacement,
   type EditorState,
   type FixtureType,
   type MainOrientation,
@@ -14,6 +15,7 @@ import {
 } from "./api";
 import { Check } from "./Check";
 import { Dropdown } from "./Dropdown";
+import { BUILTIN_FIXTURES } from "./LibraryManager";
 import { NumberField } from "./NumberField";
 
 // "Añadir instalaciones" — modelled on the classic Add Fixtures dialog (M7 spec §4.1).
@@ -72,6 +74,73 @@ const STEP: Record<Rotation, [number, number]> = {
 };
 
 const componentCount = (t: FixtureType) => (t.components === "Rgbw" ? 4 : 3);
+
+/** One entry of the "Producto" list: a built-in (standard) fixture or one of the user's. */
+interface Product {
+  key: string;
+  type: FixtureType;
+  builtin: boolean;
+}
+
+/** The product last chosen in this session (the window's lifetime) — reopening the dialog
+ *  keeps it. Starts on the first built-in ("Píxel RGB"). */
+let lastProductKey = `std:${BUILTIN_FIXTURES[0].name}`;
+
+/** Cells a batch occupies when placed at (0, 0): every pixel cell along each fixture's
+ *  run as the backend plans it (straight or 45°). Falls back to one fixture's strip,
+ *  stepped by the rotation, if the backend cannot plan the spec (e.g. no addresses). */
+function footprintCells(runs: { start: [number, number]; end: [number, number] }[], type: FixtureType, rotation: Rotation): [number, number][] {
+  const cells: [number, number][] = [];
+  if (runs.length === 0) {
+    const [dx, dy] = STEP[rotation];
+    for (let i = 0; i < Math.max(1, type.pixel_count); i++) cells.push([dx * i, dy * i]);
+    return cells;
+  }
+  for (const r of runs) {
+    const [x0, y0] = [Math.round(r.start[0]), Math.round(r.start[1])];
+    const [x1, y1] = [Math.round(r.end[0]), Math.round(r.end[1])];
+    const sx = Math.sign(x1 - x0);
+    const sy = Math.sign(y1 - y0);
+    const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+    for (let i = 0; i <= n; i++) cells.push([x0 + sx * i, y0 + sy * i]);
+  }
+  return cells;
+}
+
+/** The first top-left position (0-based), scanning left → right, top → bottom, where the
+ *  whole footprint lands on free cells (no pixel of any placed fixture). The scan is as
+ *  wide as the rig (or the footprint, if wider); a row just below the rig always fits, so
+ *  the scan ends there. An empty rig gives (0, 0). */
+function firstFreePosition(patch: Patch, cells: [number, number][]): [number, number] {
+  if (cells.length === 0) return [0, 0];
+  const occupied = new Set<string>();
+  let rigW = 0;
+  let rigH = 0;
+  for (const f of patch.fixtures) {
+    for (const p of f.pixels) {
+      const x = Math.round(p.position[0]);
+      const y = Math.round(p.position[1]);
+      occupied.add(`${x},${y}`);
+      rigW = Math.max(rigW, x + 1);
+      rigH = Math.max(rigH, y + 1);
+    }
+  }
+  if (occupied.size === 0) return [0, 0];
+  let minX = Infinity, minY = Infinity, maxX = -Infinity;
+  for (const [x, y] of cells) {
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+  }
+  // Positions keep every footprint cell at x, y >= 0 and inside the scan width.
+  const width = Math.max(rigW, maxX - minX + 1);
+  for (let py = -minY; py <= rigH - minY; py++) {
+    for (let px = -minX; px + maxX < width; px++) {
+      if (cells.every(([x, y]) => !occupied.has(`${px + x},${py + y}`))) return [px, py];
+    }
+  }
+  return [0, 0];
+}
 
 /** A canvas sized to its box at device-pixel resolution, redrawn when `deps` change. */
 function useCanvas(draw: (ctx: CanvasRenderingContext2D, w: number, h: number, css: CSSStyleDeclaration) => void, deps: unknown[]) {
@@ -295,13 +364,16 @@ function Xyz({ values, onChange, min, zLocked = true, label }: { values: [number
 
 export function PlacementDialog({ patch, activeZone, onPlaced, onClose }: Props) {
   const [types, setTypes] = useState<FixtureType[]>([]);
-  const [typeIndex, setTypeIndex] = useState(0);
+  const [productKey, setProductKey] = useState(lastProductKey);
   const [startId, setStartId] = useState(1);
   const [rotation, setRotation] = useState<Rotation>("R0");
   const [count, setCount] = useState<[number, number, number]>([1, 1, 1]);
   const [offset, setOffset] = useState<[number, number, number]>([0, 0, 0]);
   // Shown 1-based like professional consoles; the spec is 0-based.
   const [position, setPosition] = useState<[number, number, number]>([1, 1, 1]);
+  // While true the start position follows the first free spot for the current batch;
+  // editing it by hand stops that until the next "Añadir".
+  const [positionAuto, setPositionAuto] = useState(true);
   const [corner, setCorner] = useState<StartCorner>("TopLeft");
   const [orientation, setOrientation] = useState<MainOrientation>("Horizontal");
   const [snake, setSnake] = useState(false);
@@ -316,7 +388,12 @@ export function PlacementDialog({ patch, activeZone, onPlaced, onClose }: Props)
   const [busy, setBusy] = useState(false);
 
   const zoneName = patch.zones.find((z) => z.id === activeZone)?.name ?? "—";
-  const type = types[typeIndex] as FixtureType | undefined;
+  const products: Product[] = [
+    ...BUILTIN_FIXTURES.map((t) => ({ key: `std:${t.name}`, type: t, builtin: true })),
+    ...types.map((t, i) => ({ key: `user:${i}:${t.name}`, type: t, builtin: false })),
+  ];
+  const product = products.find((p) => p.key === productKey) ?? products[0];
+  const type = product?.type as FixtureType | undefined;
 
   const refreshNext = () => {
     nextFixtureId().then(setStartId).catch(() => {});
@@ -350,6 +427,42 @@ export function PlacementDialog({ patch, activeZone, onPlaced, onClose }: Props)
 
   const total = count[0] * count[1];
 
+  // Suggest the first free position for the batch as it is set up right now (product,
+  // rotation, count, gaps, addressing order) and re-suggest after the rig changes (e.g.
+  // after "Añadir"). Only a suggestion: the operator can type any position, overlapping
+  // included. A sequence number drops answers that arrive after a newer request.
+  const suggestSeq = useRef(0);
+  useEffect(() => {
+    if (!positionAuto || !type) return;
+    const seq = ++suggestSeq.current;
+    const spec: PlacementSpec = {
+      fixture_type: type,
+      start_number: 1,
+      rotation,
+      count: [count[0], count[1], 1],
+      offset: [offset[0], offset[1], 0],
+      start_position: [0, 0, 0],
+      start_corner: corner,
+      orientation,
+      snake,
+      snake_rotation: snake && snakeRotation,
+      start_universe: 1,
+      start_channel: 1,
+      channel_offset: 0,
+      universe_offset: 0,
+      start_channel_every_universe: false,
+      fixtures_per_universe: Math.max(1, Math.floor(512 / Math.max(1, type.pixel_count * componentCount(type)))),
+      zone: activeZone,
+    };
+    previewPlacement(spec)
+      .catch(() => [])
+      .then((runs) => {
+        if (seq !== suggestSeq.current) return;
+        const [x, y] = firstFreePosition(patch, footprintCells(runs, type, rotation));
+        setPosition([x + 1, y + 1, 1]);
+      });
+  }, [positionAuto, type, rotation, count, offset, corner, orientation, snake, snakeRotation, patch, activeZone]);
+
   const submit = async () => {
     if (!type || total === 0) return;
     const spec: PlacementSpec = {
@@ -375,6 +488,7 @@ export function PlacementDialog({ patch, activeZone, onPlaced, onClose }: Props)
     setStatus(null);
     try {
       onPlaced(await placeFixtures(spec));
+      setPositionAuto(true); // the next batch goes to the next free spot
       setStatus({ text: `${total} ${total === 1 ? "instalación añadida" : "instalaciones añadidas"} a ${zoneName}`, error: false });
       refreshNext();
     } catch (e) {
@@ -384,15 +498,15 @@ export function PlacementDialog({ patch, activeZone, onPlaced, onClose }: Props)
     }
   };
 
-  const typeOptions = types.map((t, i) => ({ value: String(i), label: t.name }));
+  const typeOptions = products.map((p) => ({ value: p.key, label: p.type.name, group: p.builtin ? "Genérico" : "Mis tipos" }));
 
   return (
     <div className="pr-picker-backdrop">
       <div className="pr-picker pr-place" role="dialog" aria-label="Añadir instalaciones">
         <div className="pr-picker-head pr-place-title">
           <span>Añadir instalaciones</span>
-          <span className="pr-place-zone">
-            Zona: <b>{zoneName}</b>
+          <span className="pr-place-zone" title="Zona a la que se añaden">
+            <b>{zoneName}</b>
           </span>
         </div>
 
@@ -403,11 +517,16 @@ export function PlacementDialog({ patch, activeZone, onPlaced, onClose }: Props)
                 <Dropdown value="DMX" options={[{ value: "DMX", label: "DMX" }]} onChange={() => {}} aria-label="Protocolo" />
               </Row>
               <Row label="Producto:">
-                {types.length > 0 ? (
-                  <Dropdown value={String(typeIndex)} options={typeOptions} onChange={(v) => { setTypeIndex(Number(v)); setPerUniverse(null); }} aria-label="Producto" />
-                ) : (
-                  <span className="pr-place-dim">La biblioteca de fixtures está vacía</span>
-                )}
+                <Dropdown
+                  value={product?.key ?? ""}
+                  options={typeOptions}
+                  onChange={(v) => {
+                    setProductKey(v);
+                    lastProductKey = v;
+                    setPerUniverse(null);
+                  }}
+                  aria-label="Producto"
+                />
               </Row>
               <Row label="Iniciar ID de instalación:">
                 <NumberField variant="pm" width={60} value={startId} min={1} onChange={setStartId} aria-label="Iniciar ID de instalación" />
@@ -430,7 +549,15 @@ export function PlacementDialog({ patch, activeZone, onPlaced, onClose }: Props)
                 <Xyz label="Desfase" values={offset} onChange={setOffset} />
               </Row>
               <Row label="Posición inicial X/Y/Z:">
-                <Xyz label="Posición inicial" values={position} min={1} onChange={setPosition} />
+                <Xyz
+                  label="Posición inicial"
+                  values={position}
+                  min={1}
+                  onChange={(v) => {
+                    setPositionAuto(false);
+                    setPosition(v);
+                  }}
+                />
               </Row>
             </Group>
 
