@@ -1,6 +1,6 @@
-import { useContext, useEffect, useRef, useState } from "react";
-import { PanelCellContext } from "./panelCell";
-import { setParam, type ParamInfo } from "./api";
+import { useEffect, useRef, useState } from "react";
+import { usePanelWrites } from "./panelCell";
+import { type ParamInfo } from "./api";
 
 // the classic direction control for movement effects (Scroll de color): the 3×3 rose (eight
 // arrows + ✕ in the centre) for the common directions, and below it a button showing the
@@ -45,7 +45,7 @@ function glyph(label: string): string {
 }
 
 export function DirectionMenu({ zoneId, param }: DirectionMenuProps) {
-  const cell = useContext(PanelCellContext);
+  const write = usePanelWrites(zoneId);
   const choices = param.choices ?? [];
   const steps = Math.max(1, choices.length - 1);
   const idxOf = (norm: number) => Math.min(choices.length - 1, Math.max(0, Math.round(norm * steps)));
@@ -58,7 +58,7 @@ export function DirectionMenu({ zoneId, param }: DirectionMenuProps) {
   });
   const pick = (i: number) => {
     setIdx(i);
-    setParam(zoneId, param.name, i / steps, cell).catch(() => {});
+    write.param(param.name, i / steps);
   };
   const byLabel = (label: string) => parsed.findIndex((p) => p.label === label);
   const current = parsed[idx];

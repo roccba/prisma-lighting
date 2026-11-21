@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   assignCell,
   assignCellSilent,
@@ -7,6 +7,7 @@ import {
   PARAM_WRITTEN,
   renameCell,
   setCellColor,
+  setPalette,
   setParam,
   triggerCell,
   zoneGrid,
@@ -23,13 +24,19 @@ import { DirectionMenu } from "./DirectionMenu";
 import { ParamField, ValueBox } from "./ParamField";
 import { Rose } from "./Rose";
 import { PingPong, PlayLoop } from "./icons";
-import { PanelCellContext } from "./panelCell";
+import { PanelCellContext, usePanelWrites, type PanelTarget } from "./panelCell";
 
 // The effect parameter panel for the SELECTED zone's SELECTED cell (M8-SPEC §3.5). On top:
 // the cell's effect (a dropdown over the engine's catalogue — changing it reassigns the
 // cell) and GO, which plays the cell (the classic double-click / Enter). Selecting a cell
 // never plays it (selected ≠ active): a cell that is not running is edited "blind" — its
 // values are stored and take effect when it is played; the running cell's edits are live.
+//
+// An EMPTY cell is shown as a DRAFT: the dropdown offers Color (`solid`) by default and the
+// panel shows that effect's parameters at their defaults — UI state only, the cell stays
+// empty in the show. Changing the draft's effect is still UI only. The cell is assigned
+// (silently, never played) the moment the operator commits to it: the first parameter /
+// colour-table edit, or GO (which then plays it).
 //
 // Below, the panel builds itself from
 // the effect's manifest (`main_effect_panel`) and now honours each parameter's TYPE: a
@@ -139,13 +146,13 @@ function TapButton({ onBpm, disabled }: { onBpm: (bpm: number) => void; disabled
  *  so it is identical to every other control. Owns its value locally for a smooth drag
  *  while writing every change straight to the engine; the value box edits the same value. */
 function ScalarRow({ zoneId, param, disabled }: { zoneId: string; param: ParamInfo; disabled?: boolean }) {
-  const cell = useContext(PanelCellContext);
+  const write = usePanelWrites(zoneId);
   const [value, setValue] = useState(param.value_norm);
   useEffect(() => setValue(param.value_norm), [param.value_norm]);
 
   const change = (v: number) => {
     setValue(v);
-    setParam(zoneId, param.name, v, cell).catch(() => {});
+    write.param(param.name, v);
   };
 
   const fader = <Fader value={value} onChange={change} aria-label={param.label} />;
@@ -172,7 +179,7 @@ function ScalarRow({ zoneId, param, disabled }: { zoneId: string; param: ParamIn
  *  scalar INDEX (0..steps): the normalized value maps linearly to the choice index, and
  *  picking a choice writes the index back as `i / steps`. Used by the shape/mode selectors. */
 function EnumRow({ zoneId, param, disabled }: { zoneId: string; param: ParamInfo; disabled?: boolean }) {
-  const cell = useContext(PanelCellContext);
+  const write = usePanelWrites(zoneId);
   const choices = param.choices ?? [];
   const steps = Math.max(1, choices.length - 1);
   const idxOf = (norm: number) => Math.min(choices.length - 1, Math.max(0, Math.round(norm * steps)));
@@ -182,7 +189,7 @@ function EnumRow({ zoneId, param, disabled }: { zoneId: string; param: ParamInfo
   const change = (v: string) => {
     const i = Number(v);
     setIdx(i);
-    setParam(zoneId, param.name, i / steps, cell).catch(() => {});
+    write.param(param.name, i / steps);
   };
 
   return (
@@ -203,7 +210,7 @@ function EnumRow({ zoneId, param, disabled }: { zoneId: string; param: ParamInfo
 
 /** An on/off parameter as a latching button (the classic "Atenuar"): lit while on. */
 function ToggleButton({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
-  const cell = useContext(PanelCellContext);
+  const write = usePanelWrites(zoneId);
   const [on, setOn] = useState(param.value_norm > 0.5);
   useEffect(() => setOn(param.value_norm > 0.5), [param.value_norm]);
   return (
@@ -213,7 +220,7 @@ function ToggleButton({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
       aria-pressed={on}
       onClick={() => {
         setOn(!on);
-        setParam(zoneId, param.name, on ? 0 : 1, cell).catch(() => {});
+        write.param(param.name, on ? 0 : 1);
       }}
     >
       {param.label}
@@ -233,7 +240,7 @@ function paletteModeGlyph(i: number, label: string) {
 /** The colour table's play mode (the classic button beside "Colores"): an icon button that
  *  drops a vertical menu of the modes. The value is the choice INDEX, like an enum. */
 function PaletteModeButton({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
-  const cell = useContext(PanelCellContext);
+  const write = usePanelWrites(zoneId);
   const choices = param.choices ?? [];
   const steps = Math.max(1, choices.length - 1);
   const idxOf = (norm: number) => Math.min(choices.length - 1, Math.max(0, Math.round(norm * steps)));
@@ -253,7 +260,7 @@ function PaletteModeButton({ zoneId, param }: { zoneId: string; param: ParamInfo
   const pick = (i: number) => {
     setIdx(i);
     setOpen(false);
-    setParam(zoneId, param.name, i / steps, cell).catch(() => {});
+    write.param(param.name, i / steps);
   };
 
   return (
@@ -320,16 +327,24 @@ function ColorsButton({
 }
 
 /** The panel's head: the cell's effect (a dropdown over the catalogue, grouped by
- *  category) and GO. Changing the effect reassigns the cell with the new effect's
- *  defaults, keeping the cell's label and grid colour; a running cell keeps running
- *  (with the new effect), any other cell stays un-played. GO plays the cell. */
+ *  category) and GO.
+ *  · An assigned cell: changing the effect reassigns the cell with the new effect's
+ *    defaults, keeping the cell's label and grid colour; a running cell keeps running
+ *    (with the new effect), any other cell stays un-played. GO plays the cell.
+ *  · An empty cell (a draft): changing the effect only changes the draft (UI state). GO
+ *    first assigns the cell with the draft effect, then plays it. */
 function EffectHead({
   zoneId,
   panel,
+  onDraftEffect,
+  ensureAssigned,
   onGridChange,
 }: {
   zoneId: string;
   panel: EffectPanelInfo;
+  onDraftEffect: (effectId: string) => void;
+  /** Assign a draft cell (no-op for an assigned one); resolves once it holds the effect. */
+  ensureAssigned: () => Promise<void>;
   onGridChange?: () => void;
 }) {
   const [catalogue, setCatalogue] = useState<EffectListing[]>([]);
@@ -340,8 +355,12 @@ function EffectHead({
   }, []);
   const index = panel.cell_index!;
 
-  const reassign = async (effectId: string) => {
+  const pick = async (effectId: string) => {
     if (effectId === panel.effect_id) return;
+    if (panel.draft) {
+      onDraftEffect(effectId); // still a draft: nothing is written
+      return;
+    }
     try {
       // The cell's label and colour survive an effect change (the assign rewrites the cell).
       const before = (await zoneGrid(zoneId))[index];
@@ -356,24 +375,24 @@ function EffectHead({
   };
 
   const go = () => {
-    triggerCell(zoneId, index)
+    ensureAssigned()
+      .then(() => triggerCell(zoneId, index))
       .then(() => onGridChange?.())
       .catch(() => {});
   };
 
+  const state = panel.draft ? "Vacía" : panel.active ? "En vivo" : "Sin activar";
   return (
     <div className="pr-params-head">
       <span className="pr-params-head-label">Celda {index + 1}</span>
       <Dropdown
         value={panel.effect_id ?? ""}
         options={catalogue.map((e) => ({ value: e.id, label: e.name, group: e.category }))}
-        onChange={(v) => void reassign(v)}
+        onChange={(v) => void pick(v)}
         minWidth={220}
         aria-label="Efecto de la celda"
       />
-      <span className={`pr-params-state${panel.active ? " is-live" : ""}`}>
-        {panel.active ? "En vivo" : "Sin activar"}
-      </span>
+      <span className={`pr-params-state${panel.active ? " is-live" : ""}`}>{state}</span>
       <button
         type="button"
         className="pr-btn pr-go-btn"
@@ -392,8 +411,21 @@ function EffectHead({
 const ROW_H = 40;
 const ROW_GAP = 12;
 
+/** The effect an empty cell's draft starts with: Color (its defaults are black). */
+const DRAFT_DEFAULT_EFFECT = "solid";
+
 export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsProps) {
   const [panel, setPanel] = useState<EffectPanelInfo | null>(null);
+  // The effect an EMPTY selected cell is shown with (UI state only). Back to the default
+  // whenever another cell is selected.
+  const [draftEffect, setDraftEffect] = useState(DRAFT_DEFAULT_EFFECT);
+  useEffect(() => setDraftEffect(DRAFT_DEFAULT_EFFECT), [zoneId, cell]);
+  // The in-flight assignment of a draft cell: edits made while it is pending wait for it,
+  // so one drag of a slider assigns the cell once and then writes to it.
+  const assigning = useRef<Promise<void> | null>(null);
+  useEffect(() => {
+    assigning.current = null;
+  }, [zoneId, cell, draftEffect]);
   // How many slider rows fit the panel's height; the scalars fill that many rows, then
   // continue in the next column (and the column really takes its width).
   const rowsRef = useRef<HTMLDivElement>(null);
@@ -414,13 +446,13 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
 
   useEffect(() => {
     let live = true;
-    effectPanel(zoneId, cell)
+    effectPanel(zoneId, cell, draftEffect)
       .then((p) => live && setPanel(p))
       .catch(() => live && setPanel(null));
     return () => {
       live = false;
     };
-  }, [zoneId, cell, rev]);
+  }, [zoneId, cell, rev, draftEffect]);
 
   // Keep the loaded values current with every write, so a control mounted later (the
   // Tabla de color, the Caja de Fader, a re-rendered row) starts from the real value.
@@ -439,9 +471,60 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
   if (!panel || panel.cell_index == null) {
     return null; // no cell selected and none running: the panel simply stays blank
   }
-  const head = <EffectHead zoneId={zoneId} panel={panel} onGridChange={onGridChange} />;
+  const index = panel.cell_index;
+
+  // Assign a draft cell with its effect — once; later callers wait for the same promise.
+  // `params` / `palette` carry the edit that triggered it, so it lands with the assign.
+  const assignDraft = (
+    params: Record<string, number> | null,
+    palette: [number, number, number][] | null,
+  ): Promise<void> => {
+    if (!assigning.current) {
+      const effectId = panel.effect_id!;
+      assigning.current = assignCellSilent(zoneId, index, effectId, params, palette).then(() => {
+        onGridChange?.(); // the grid shows the cell assigned; the panel re-reads it
+      });
+      assigning.current.catch(() => {
+        assigning.current = null; // failed: the next edit tries again
+      });
+    }
+    return assigning.current;
+  };
+  const target: PanelTarget = {
+    cell: index,
+    writeParam: (name, value) => {
+      if (!panel.draft) {
+        setParam(zoneId, name, value, index).catch(() => {});
+        return;
+      }
+      // Keep the shown value (setParam would announce it; the first write is the assign).
+      window.dispatchEvent(new CustomEvent<ParamWritten>(PARAM_WRITTEN, { detail: { zone: zoneId, name, value } }));
+      if (assigning.current) {
+        assigning.current.then(() => setParam(zoneId, name, value, index)).catch(() => {});
+      } else {
+        assignDraft({ [name]: value }, null).catch(() => {});
+      }
+    },
+    writePalette: (colors) => {
+      if (!panel.draft) {
+        setPalette(zoneId, colors, index).catch(() => {});
+      } else if (assigning.current) {
+        assigning.current.then(() => setPalette(zoneId, colors, index)).catch(() => {});
+      } else {
+        assignDraft(null, colors).catch(() => {});
+      }
+    },
+  };
+  const head = (
+    <EffectHead
+      zoneId={zoneId}
+      panel={panel}
+      onDraftEffect={setDraftEffect}
+      ensureAssigned={() => (panel.draft ? assignDraft(null, null) : Promise.resolve())}
+      onGridChange={onGridChange}
+    />
+  );
   if (!panel.effect_id) {
-    // An empty cell (cleared): pick an effect for it from the head; no parameters yet.
     return <div className="pr-params">{head}</div>;
   }
 
@@ -458,7 +541,7 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
   return (
     // Keyed by cell: switching the selected cell rebuilds every control (and closes an
     // open Tabla de color), so nothing carries one cell's local state into another.
-    <PanelCellContext.Provider value={panel.cell_index}>
+    <PanelCellContext.Provider value={target}>
       <div className="pr-params" key={panel.cell_index}>
         {head}
         {(palette || buttonItems.length > 0 || palModeItems.length > 0) && (

@@ -497,6 +497,8 @@ export interface EffectPanelInfo {
   cell_index: number | null;
   /** Whether `cell_index` is the zone's running cell (its edits drive the output live). */
   active: boolean;
+  /** The cell is EMPTY: this is the UI's draft effect at its defaults, nothing stored. */
+  draft: boolean;
   effect_id: string | null;
   effect_name: string | null;
   params: ParamInfo[];
@@ -507,9 +509,10 @@ export interface EffectPanelInfo {
 }
 
 /** A cell's effect and its manifest-driven parameters (§3.5). `cell` is the grid's
- *  selection; null = the zone's running cell. */
-export const effectPanel = (zone: string, cell: number | null = null) =>
-  invoke<EffectPanelInfo>("main_effect_panel", { zone, cell });
+ *  selection; null = the zone's running cell. For an EMPTY cell, `draft` is the effect
+ *  to show at its defaults (read-only — the cell stays empty). */
+export const effectPanel = (zone: string, cell: number | null = null, draft: string | null = null) =>
+  invoke<EffectPanelInfo>("main_effect_panel", { zone, cell, draft });
 
 /** Replace the colour table of a cell's effect (linear-light RGB list). Live only when
  *  that cell is the running one; `cell` null = the running cell. */

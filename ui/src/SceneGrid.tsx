@@ -16,12 +16,12 @@ import { LearnTarget } from "./midiLearn";
 // The scene grid of the SELECTED zone (M8-SPEC §3.3): a grid of assignable cells (the
 // zone's "scenes"). the classic model — select, then play:
 //  · a click SELECTS a cell (its effect and parameters show in the panel below) and never
-//    changes output (selected ≠ active). An empty cell is first readied with a black
-//    Color effect, silently (assigned, not played), so it has something to edit.
+//    changes output (selected ≠ active), nor the cell: an empty cell stays empty — the
+//    panel shows it as a draft and assigns it only on the first edit or GO.
 //  · a double click, Enter, or the panel's GO plays the cell — it becomes the zone's
 //    active content, enqueued through the frame-boundary queue (step 2), so the change
 //    shows in the zone's mini-preview and on the wire.
-// The active cell is marked with the accent; the selected one with an outline. Per zone,
+// The active cell is marked with the accent; the selected one with a green outline. Per zone,
 // not cross-zone (the product's thesis): this is the selected zone's own grid; switching
 // the selected zone swaps to its cells.
 //
@@ -45,10 +45,6 @@ interface SceneGridProps {
    *  panel can re-fetch. */
   onActiveChange?: () => void;
 }
-
-/** The effect an empty cell is readied with when it is selected: black Color (the
- *  `solid` effect's defaults are black), assigned silently so nothing lights up. */
-const EMPTY_CELL_EFFECT = "solid";
 
 /** Quick colours offered above the colour selector — fixed by design. */
 const QUICK_CELL_COLORS: { label: string; rgb: Rgb }[] = [
@@ -135,26 +131,16 @@ export function SceneGrid({ zoneId, slot, selectedCell, onSelectCell, rev, onAct
     };
   }, [zoneId, onActiveChange]);
 
-  // A click selects. An empty cell is readied first (black Color, assigned silently —
-  // never played), then selected, so the panel has an effect to show and edit.
+  // A click selects — only. An empty cell is not assigned (the panel drafts it).
   const onCellPointerDown = (e: React.PointerEvent, cell: CellInfo) => {
     if (e.button !== 0) return; // right button opens the cell menu, never selects
     if (editing === cell.index) return;
-    if (cell.effect_id) {
-      onSelectCell(cell.index);
-      return;
-    }
-    assignCellSilent(zoneId, cell.index, EMPTY_CELL_EFFECT, null, null)
-      .then((c) => {
-        setCells(c);
-        onSelectCell(cell.index);
-        onActiveChange?.();
-      })
-      .catch(() => {});
+    onSelectCell(cell.index);
   };
 
-  // Play a cell (double click / Enter / the panel's GO): it becomes the zone's running
-  // content. The running cell updates asynchronously and arrives as `cells-changed`.
+  // Play an assigned cell (double click / Enter): it becomes the zone's running content.
+  // The running cell updates asynchronously and arrives as `cells-changed`. An empty cell
+  // has nothing to play — it is played from the panel's GO, which assigns its draft first.
   const fire = (index: number) => {
     if (!cells[index]?.effect_id) return;
     onSelectCell(index);
@@ -312,7 +298,7 @@ export function SceneGrid({ zoneId, slot, selectedCell, onSelectCell, rev, onAct
                 title={
                   assigned
                     ? `${title}${cell.name ? ` — ${cell.effect_name ?? ""}` : ""} (doble clic o Enter para activar)`
-                    : "Vacío — clic para preparar la celda"
+                    : "Vacía — clic para seleccionarla y elegir un efecto"
                 }
               >
                 <span className="pr-cell-num">{cell.index + 1}</span>

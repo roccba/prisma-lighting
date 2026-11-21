@@ -126,6 +126,9 @@ struct EffectPanelInfo {
     /// Whether `cell_index` is the zone's running cell — its edits drive the output live;
     /// any other cell's edits are only stored, for when it is played.
     active: bool,
+    /// The cell is EMPTY and this panel shows the UI's draft effect at its defaults (a
+    /// read of the manifest only — the cell stays empty until the UI assigns it).
+    draft: bool,
     effect_id: Option<String>,
     effect_name: Option<String>,
     params: Vec<ParamInfo>,
@@ -2259,14 +2262,24 @@ fn panel_cell(zs: &ZoneShow, cell: Option<usize>) -> Option<usize> {
 /// The effect work panel for a zone (§3.5): the effect of the given `cell` (the grid's
 /// selection; `None` = the zone's running cell) and the effect's manifest-driven
 /// parameters, each merged with the cell's stored value (else the manifest default).
-/// Empty (`effect_id: None`) when that cell holds no effect.
+///
+/// For an EMPTY cell, `draft` names the effect the UI offers for it (the panel's
+/// dropdown): the panel then shows that effect at its manifest defaults, flagged
+/// `draft`. Read-only — the cell is not touched; the UI assigns it on the first edit or
+/// GO. Without a (known) draft an empty cell's panel is empty (`effect_id: None`).
 #[tauri::command]
-fn main_effect_panel(state: State<AppState>, zone: Uuid, cell: Option<usize>) -> EffectPanelInfo {
+fn main_effect_panel(
+    state: State<AppState>,
+    zone: Uuid,
+    cell: Option<usize>,
+    draft: Option<String>,
+) -> EffectPanelInfo {
     let show = state.show.lock().unwrap();
     let empty = |cell_index: Option<usize>, active: bool| EffectPanelInfo {
         zone_id: zone,
         cell_index,
         active,
+        draft: false,
         effect_id: None,
         effect_name: None,
         params: Vec::new(),
@@ -2290,6 +2303,14 @@ fn main_effect_panel(state: State<AppState>, zone: Uuid, cell: Option<usize>) ->
                 palette,
             } => (effect_id.clone(), params, palette.clone()),
         });
+    // An empty cell: the UI's draft effect, at its defaults (nothing stored).
+    let no_params = ParamSet::new();
+    let is_draft = effect.is_none();
+    let effect = effect.or_else(|| {
+        index?;
+        let id = draft.filter(|d| prisma_render::manifest_by_id(d).is_some())?;
+        Some((id, &no_params, None))
+    });
     let Some((effect_id, stored, stored_palette)) = effect else {
         return empty(index, active);
     };
@@ -2338,6 +2359,7 @@ fn main_effect_panel(state: State<AppState>, zone: Uuid, cell: Option<usize>) ->
         zone_id: zone,
         cell_index: index,
         active,
+        draft: is_draft,
         effect_name: effect_display_name(&effect_id),
         effect_id: Some(effect_id),
         params,
