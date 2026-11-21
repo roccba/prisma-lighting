@@ -65,6 +65,11 @@ pub enum ParamRole {
     /// INDEX; each choice is `"Group|Label"` so the panel can build the submenus, and the
     /// rose's arrows select choices by label.
     DirectionMenu { choices: &'static [&'static str] },
+    /// How the effect walks its colour table (the classic play-mode button next to
+    /// "Colores": loop / ping-pong / RND). Like [`ParamRole::Enum`] the value is the
+    /// choice INDEX; the panel draws it as an icon menu beside the palette's button, so
+    /// only effects that declare a `palette` should carry one.
+    PaletteMode { choices: &'static [&'static str] },
 }
 
 /// When a parameter only applies in some state of another one, the panel greys it out
@@ -163,6 +168,21 @@ impl ParamSpec {
             name,
             descriptor,
             role: ParamRole::DirectionMenu { choices },
+            requires: None,
+        }
+    }
+
+    /// A colour-table play mode (see [`ParamRole::PaletteMode`]). The descriptor's real
+    /// range must be `0.0 ..= (choices.len()-1)`, linear, so the shader receives the index.
+    pub fn palette_mode(
+        name: &'static str,
+        descriptor: ParamDescriptor,
+        choices: &'static [&'static str],
+    ) -> Self {
+        Self {
+            name,
+            descriptor,
+            role: ParamRole::PaletteMode { choices },
             requires: None,
         }
     }

@@ -270,3 +270,26 @@ export function Globe(p: IconProps) {
     </Svg>
   );
 }
+
+/** A closed loop with an arrow — colour table played in order, wrapping (Secuencial). */
+export function PlayLoop(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M17 7H7a3 3 0 0 0-3 3v2" />
+      <path d="M7 17h10a3 3 0 0 0 3-3v-2" />
+      <path d="M14 4l3 3-3 3" />
+    </Svg>
+  );
+}
+
+/** Two opposing arrows — colour table played back and forth (Ping-pong). */
+export function PingPong(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M4 8h15" />
+      <path d="M16 5l3 3-3 3" />
+      <path d="M20 16H5" />
+      <path d="M8 13l-3 3 3 3" />
+    </Svg>
+  );
+}

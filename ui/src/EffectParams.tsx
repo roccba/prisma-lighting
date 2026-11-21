@@ -7,6 +7,7 @@ import { ColorTable } from "./ColorTable";
 import { DirectionMenu } from "./DirectionMenu";
 import { ParamField, ValueBox } from "./ParamField";
 import { Rose } from "./Rose";
+import { PingPong, PlayLoop } from "./icons";
 
 // The effect parameter panel for the SELECTED zone (M8-SPEC §3.5). It builds itself from
 // the effect's manifest (`main_effect_panel`) and now honours each parameter's TYPE: a
@@ -30,6 +31,7 @@ type PanelItem =
   | { kind: "direction"; param: ParamInfo }
   | { kind: "enum"; param: ParamInfo }
   | { kind: "toggle"; param: ParamInfo }
+  | { kind: "palmode"; param: ParamInfo }
   | { kind: "dirmenu"; param: ParamInfo }
   | { kind: "color"; group: string; label: string; r?: ParamInfo; g?: ParamInfo; b?: ParamInfo };
 
@@ -53,6 +55,8 @@ function buildItems(params: ParamInfo[]): PanelItem[] {
       items.push({ kind: "enum", param: p });
     } else if (p.role === "toggle") {
       items.push({ kind: "toggle", param: p });
+    } else if (p.role === "palette_mode") {
+      items.push({ kind: "palmode", param: p });
     } else if (p.role === "direction_menu") {
       items.push({ kind: "dirmenu", param: p });
     } else {
@@ -188,6 +192,73 @@ function ToggleButton({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
   );
 }
 
+/** The glyph for a colour-table play mode, by choice INDEX (PALETTE_MODES order in
+ *  effects.rs): loop, ping-pong, RND. An unknown index falls back to its label. */
+function paletteModeGlyph(i: number, label: string) {
+  if (i === 0) return <PlayLoop size={18} />;
+  if (i === 1) return <PingPong size={18} />;
+  if (i === 2) return <span className="pr-palmode-rnd">RND</span>;
+  return <span className="pr-palmode-rnd">{label}</span>;
+}
+
+/** The colour table's play mode (the classic button beside "Colores"): an icon button that
+ *  drops a vertical menu of the modes. The value is the choice INDEX, like an enum. */
+function PaletteModeButton({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
+  const choices = param.choices ?? [];
+  const steps = Math.max(1, choices.length - 1);
+  const idxOf = (norm: number) => Math.min(choices.length - 1, Math.max(0, Math.round(norm * steps)));
+  const [idx, setIdx] = useState(idxOf(param.value_norm));
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => setIdx(idxOf(param.value_norm)), [param.value_norm]);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const pick = (i: number) => {
+    setIdx(i);
+    setOpen(false);
+    setParam(zoneId, param.name, i / steps).catch(() => {});
+  };
+
+  return (
+    <div ref={rootRef} className="pr-palmode">
+      <button
+        type="button"
+        className={`pr-btn pr-palmode-btn${open ? " is-active" : ""}`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={`${param.label}: ${choices[idx] ?? ""}`}
+        title={choices[idx]}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {paletteModeGlyph(idx, choices[idx] ?? "")}
+      </button>
+      {open && (
+        <div className="pr-palmode-list" role="listbox">
+          {choices.map((label, i) => (
+            <div
+              key={label}
+              role="option"
+              aria-selected={i === idx}
+              title={label}
+              className={`pr-palmode-opt${i === idx ? " is-sel" : ""}`}
+              onClick={() => pick(i)}
+            >
+              {paletteModeGlyph(i, label)}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** "Colores": opens the "Tabla de color" where the click happened. */
 function ColorsButton({
   zoneId,
@@ -271,13 +342,15 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
   const scalarItems = items.filter((i): i is Extract<PanelItem, { kind: "scalar" }> => i.kind === "scalar");
   // Buttons row on top (professional consoles: [Colores] [Atenuar] above the sliders): the palette's
   // "Colores" and every on/off toggle. The rest: sliders left, other controls right.
+  // The colour table's play mode sits right after "Colores" (professional consoles: [Colores] [⇄▾]).
+  const palModeItems = items.filter((i) => i.kind === "palmode");
   const buttonItems = items.filter((i) => i.kind === "toggle");
-  const controlItems = items.filter((i) => i.kind !== "scalar" && i.kind !== "toggle");
+  const controlItems = items.filter((i) => i.kind !== "scalar" && i.kind !== "toggle" && i.kind !== "palmode");
   const palette = panel.palette;
 
   return (
     <div className="pr-params">
-      {(palette || buttonItems.length > 0) && (
+      {(palette || buttonItems.length > 0 || palModeItems.length > 0) && (
         <div className="pr-params-buttons">
           {palette && (
             <ColorsButton
@@ -287,6 +360,12 @@ export function EffectParams({ zoneId, rev }: EffectParamsProps) {
               max={panel.palette_max}
               onChange={(next) => setPanel((p) => (p ? { ...p, palette: next } : p))}
             />
+          )}
+          {palModeItems.map(
+            (item) =>
+              item.kind === "palmode" && (
+                <PaletteModeButton key={`${panel.effect_id}:${item.param.name}`} zoneId={zoneId} param={item.param} />
+              ),
           )}
           {buttonItems.map((item) => renderButton(item, panel.effect_id!))}
         </div>

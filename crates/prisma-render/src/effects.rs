@@ -702,34 +702,46 @@ pub fn explosions() -> EffectManifest {
     }
 }
 
-/// A colour group `group` whose three channels are named `names` (r/g/b order) with
-/// tree keys `{key_prefix}.{name}`, defaulting to `rgb` (linear light). For effects with
-/// more than one colour, where [`color_group`]'s fixed `r`/`g`/`b` names would collide.
-fn color_group_as(
-    group: &'static str,
-    names: [&'static str; 3],
-    keys: [&'static str; 3],
-    rgb: [f32; 3],
-) -> Vec<ParamSpec> {
-    let channels = [ColorChannel::R, ColorChannel::G, ColorChannel::B];
-    (0..3)
-        .map(|i| {
-            ParamSpec::color(
-                names[i],
-                ParamDescriptor::unit_level(keys[i], rgb[i]),
-                group,
-                channels[i],
-            )
-        })
-        .collect()
+/// The play modes of a colour table, in INDEX order (the shaders' `pal_index` switches
+/// on it): loop through the list, bounce back and forth through it, or pick at random.
+pub const PALETTE_MODES: &[&str] = &["Secuencial", "Ping-pong", "Aleatorio"];
+
+/// The `color_mode` parameter shared by the colour-table effects (default Secuencial).
+fn color_mode(key: &'static str) -> ParamSpec {
+    ParamSpec::palette_mode(
+        "color_mode",
+        ParamDescriptor::level(
+            key,
+            RealRange {
+                min: 0.0,
+                max: (PALETTE_MODES.len() - 1) as f32,
+            },
+            Curve::Linear,
+            0.0,
+        ),
+        PALETTE_MODES,
+    )
 }
+
+/// Factory colour table of a single-colour effect (Pulse, Bounce): pure white.
+pub const WHITE_PALETTE: &[[f32; 3]] = &[[1.0, 1.0, 1.0]];
+
+/// Factory colour table of "Color Change": red, yellow, green, blue (linear light).
+pub const COLOR_CHANGE_PALETTE: &[[f32; 3]] = &[
+    [1.0, 0.0, 0.0],
+    [1.0, 1.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, 0.0, 1.0],
+];
 
 /// A BPM-synchronised brightness pulse ("Pulse / Estroboscope"). `speed` is the tempo
 /// (one pulse per beat), `ratio` the balance between rise and fall (% — 0 = rise only,
 /// 50 = symmetric, 100 = fall only), `fade` ON = smooth pulse, OFF = hard strobe, and
-/// the `color` group the tint. Param order here **is** the uniform layout the shader reads.
+/// `color_mode` how successive pulses walk the colour table (one colour per pulse). The
+/// colours are the cell's colour TABLE (default white). Param order here **is** the
+/// uniform layout the shader reads.
 pub fn pulse() -> EffectManifest {
-    let mut params = vec![
+    let params = vec![
         ParamSpec::bpm(
             "speed",
             ParamDescriptor::level(
@@ -758,80 +770,40 @@ pub fn pulse() -> EffectManifest {
             "fade",
             ParamDescriptor::unit_level("effect.pulse.fade", 1.0),
         ),
+        color_mode("effect.pulse.color_mode"),
     ];
-    params.extend(color_group([
-        "effect.pulse.r",
-        "effect.pulse.g",
-        "effect.pulse.b",
-    ]));
     EffectManifest {
         effect_id: "pulse",
         params,
-        palette: None,
+        palette: Some(WHITE_PALETTE),
         shader_source: PULSE_WGSL,
     }
 }
 
-/// The whole canvas cross-fading through four colours in a cycle (1→2→3→4→1), one
-/// colour per beat at `speed` BPM. Global, not spatial. Factory colours: red, yellow,
-/// green, blue. Param order here **is** the uniform layout the shader reads.
+/// The whole canvas cross-fading through the cell's colour TABLE, one colour per beat
+/// at `speed` BPM; `color_mode` picks the order (loop, ping-pong, random). Global, not
+/// spatial. Factory table: red, yellow, green, blue. Param order here **is** the uniform
+/// layout the shader reads.
 pub fn color_change() -> EffectManifest {
-    let mut params = vec![ParamSpec::bpm(
-        "speed",
-        ParamDescriptor::level(
-            "effect.color_change.speed",
-            RealRange {
-                min: 0.0,
-                max: 9999.0,
-            },
-            Curve::Linear,
-            norm_of(60.0, 0.0, 9999.0),
+    let params = vec![
+        ParamSpec::bpm(
+            "speed",
+            ParamDescriptor::level(
+                "effect.color_change.speed",
+                RealRange {
+                    min: 0.0,
+                    max: 9999.0,
+                },
+                Curve::Linear,
+                norm_of(60.0, 0.0, 9999.0),
+            ),
         ),
-    )];
-    params.extend(color_group_as(
-        "color_a",
-        ["a_r", "a_g", "a_b"],
-        [
-            "effect.color_change.a_r",
-            "effect.color_change.a_g",
-            "effect.color_change.a_b",
-        ],
-        [1.0, 0.0, 0.0],
-    ));
-    params.extend(color_group_as(
-        "color_b",
-        ["b_r", "b_g", "b_b"],
-        [
-            "effect.color_change.b_r",
-            "effect.color_change.b_g",
-            "effect.color_change.b_b",
-        ],
-        [1.0, 1.0, 0.0],
-    ));
-    params.extend(color_group_as(
-        "color_c",
-        ["c_r", "c_g", "c_b"],
-        [
-            "effect.color_change.c_r",
-            "effect.color_change.c_g",
-            "effect.color_change.c_b",
-        ],
-        [0.0, 1.0, 0.0],
-    ));
-    params.extend(color_group_as(
-        "color_d",
-        ["d_r", "d_g", "d_b"],
-        [
-            "effect.color_change.d_r",
-            "effect.color_change.d_g",
-            "effect.color_change.d_b",
-        ],
-        [0.0, 0.0, 1.0],
-    ));
+        color_mode("effect.color_change.color_mode"),
+    ];
     EffectManifest {
         effect_id: "color_change",
         params,
-        palette: None,
+        palette: Some(COLOR_CHANGE_PALETTE),
         shader_source: COLOR_CHANGE_WGSL,
     }
 }
@@ -842,8 +814,10 @@ const BOUNCE_AXES: &[&str] = &["Horizontal", "Vertical", "Ambos"];
 /// Round objects bouncing off the canvas edges. `speed` is the tempo (one round trip
 /// per beat), `count` the number of objects (1–20), `size` their radius as a fraction
 /// of the canvas, `fade_out` the soft falloff from centre to edge (0 = hard disc),
-/// `direction` the bounce axis, and the `color` group the tint. Param order here
-/// **is** the uniform layout the shader reads.
+/// `direction` the bounce axis, and `color_mode` how each object walks the colour table
+/// (it takes the next colour every time it hits a wall; objects start staggered). The
+/// colours are the cell's colour TABLE (default white). Param order here **is** the
+/// uniform layout the shader reads.
 pub fn bounce() -> EffectManifest {
     let mut params = vec![
         ParamSpec::bpm(
@@ -887,11 +861,6 @@ pub fn bounce() -> EffectManifest {
             ParamDescriptor::unit_level("effect.bounce.fade_out", 0.3),
         ),
     ];
-    params.extend(color_group([
-        "effect.bounce.r",
-        "effect.bounce.g",
-        "effect.bounce.b",
-    ]));
     params.push(ParamSpec::enum_choice(
         "direction",
         ParamDescriptor::level(
@@ -906,10 +875,11 @@ pub fn bounce() -> EffectManifest {
         ),
         BOUNCE_AXES,
     ));
+    params.push(color_mode("effect.bounce.color_mode"));
     EffectManifest {
         effect_id: "bounce",
         params,
-        palette: None,
+        palette: Some(WHITE_PALETTE),
         shader_source: BOUNCE_WGSL,
     }
 }

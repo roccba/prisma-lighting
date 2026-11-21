@@ -475,7 +475,7 @@ export interface ParamInfo {
    *  colour picker, the direction rose, a channel of a palette slot, a palette's
    *  active-length, or a discrete choice → a dropdown. Value model is scalar regardless
    *  (an `enum` is an index 0..max). */
-  role: "scalar" | "color" | "direction" | "enum" | "toggle" | "bpm" | "direction_menu";
+  role: "scalar" | "color" | "direction" | "enum" | "toggle" | "bpm" | "direction_menu" | "palette_mode";
   /** A grouping key: the colour group id for `role === "color"`. Null otherwise. */
   group: string | null;
   /** Colour channel — set for `role === "color"`. */

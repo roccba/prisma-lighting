@@ -616,6 +616,20 @@ fn pulse_follows_the_bpm_envelope_and_strobes_without_fade() {
             "strobe at {t}s must be {want}, got {v}"
         );
     }
+
+    // Each pulse takes the next colour of the table: red, then blue.
+    pulse.set_palette(gpu, &[[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]);
+    let px = |p: &mut EffectInstance, t: f64| render_2d(gpu, p, &clock_at(t), 4, 4)[5];
+    let first = px(&mut pulse, 0.5);
+    let second = px(&mut pulse, 1.5);
+    assert!(
+        first[0] > 0.9 && first[2] < EPS,
+        "pulse 1 is red: {first:?}"
+    );
+    assert!(
+        second[2] > 0.9 && second[0] < EPS,
+        "pulse 2 is blue: {second:?}"
+    );
 }
 
 #[test]
@@ -653,6 +667,60 @@ fn color_change_cycles_through_four_colours_globally() {
     assert!(
         close(rgb(&mut cc, 4.0), [1.0, 0.0, 0.0]),
         "back to colour 1"
+    );
+
+    // Ping-pong: 1 2 3 4 3 2 1 … — after colour 4 it heads back to colour 3.
+    let mode = tree.resolve("/fx/cc/param/color_mode").unwrap();
+    tree.write_real(&mode, 1.0, ui());
+    assert!(
+        close(rgb(&mut cc, 3.0), [0.0, 0.0, 1.0]),
+        "ping-pong reaches colour 4"
+    );
+    assert!(
+        close(rgb(&mut cc, 3.5), [0.0, 0.5, 0.5]),
+        "ping-pong turns 4→3"
+    );
+    assert!(
+        close(rgb(&mut cc, 6.0), [1.0, 0.0, 0.0]),
+        "ping-pong back to colour 1"
+    );
+
+    // Aleatorio: every beat lands on a table colour, the order is not the sequence,
+    // and the choice is stable (stateless hash of the beat).
+    tree.write_real(&mode, 2.0, ui());
+    let table = effects::COLOR_CHANGE_PALETTE;
+    let picks: Vec<usize> = (0..16)
+        .map(|b| {
+            let c = rgb(&mut cc, b as f64);
+            table
+                .iter()
+                .position(|t| close(c, *t))
+                .unwrap_or_else(|| panic!("beat {b} must land on a table colour, got {c:?}"))
+        })
+        .collect();
+    assert!(
+        picks.iter().enumerate().any(|(b, i)| *i != b % 4),
+        "random order differs from the sequence: {picks:?}"
+    );
+    assert!(
+        close(rgb(&mut cc, 5.0), table[picks[5]]),
+        "random pick is stable"
+    );
+
+    // The table is a list: two colours alternate.
+    cc.set_palette(gpu, &[[0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
+    tree.write_real(&mode, 0.0, ui());
+    assert!(
+        close(rgb(&mut cc, 0.0), [0.0, 1.0, 0.0]),
+        "custom table colour 1"
+    );
+    assert!(
+        close(rgb(&mut cc, 1.0), [0.0, 0.0, 1.0]),
+        "custom table colour 2"
+    );
+    assert!(
+        close(rgb(&mut cc, 2.0), [0.0, 1.0, 0.0]),
+        "custom table wraps"
     );
 }
 

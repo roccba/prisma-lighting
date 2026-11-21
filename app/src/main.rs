@@ -152,6 +152,7 @@ fn humanize(name: &str) -> String {
         "mode" => Some("Dirección"),
         "ratio" => Some("Proporción"),
         "fade_out" => Some("Difuminado"),
+        "color_mode" => Some("Modo de color"),
         _ => None,
     } {
         return es.to_string();
@@ -186,6 +187,8 @@ fn role_dto(role: &ParamRole) -> (&'static str, Option<String>, Option<&'static 
         ParamRole::Bpm => ("bpm", None, None),
         // Choices travel in `ParamInfo::choices` ("Group|Label"), like an enum's.
         ParamRole::DirectionMenu { .. } => ("direction_menu", None, None),
+        // Choices travel in `ParamInfo::choices`, like an enum's.
+        ParamRole::PaletteMode { .. } => ("palette_mode", None, None),
     }
 }
 
@@ -2263,7 +2266,9 @@ fn main_effect_panel(state: State<AppState>, zone: Uuid) -> EffectPanelInfo {
         .map(|p| {
             let (role, group, channel) = role_dto(&p.role);
             let choices = match &p.role {
-                ParamRole::Enum { choices } | ParamRole::DirectionMenu { choices } => {
+                ParamRole::Enum { choices }
+                | ParamRole::DirectionMenu { choices }
+                | ParamRole::PaletteMode { choices } => {
                     Some(choices.iter().map(|s| s.to_string()).collect())
                 }
                 _ => None,
