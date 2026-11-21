@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   assignCell,
   assignCellSilent,
+  clearCell,
   effectCatalogue,
   effectPanel,
   PARAM_WRITTEN,
@@ -414,6 +415,20 @@ const ROW_GAP = 12;
 /** The effect an empty cell's draft starts with: Color (its defaults are black). */
 const DRAFT_DEFAULT_EFFECT = "solid";
 
+/** How long after the last edit a black Color cell is cleared back to empty ("the
+ *  operator is done"): long enough that a fader merely passing through 0 mid-drag, or
+ *  three channels being zeroed one after another, does not empty the cell. */
+const AUTO_CLEAR_MS = 600;
+
+/** A Color (`solid`) cell at R = G = B = 0 — black, i.e. no content. Such a cell is
+ *  cleared back to empty when the operator finishes editing it (lazy assignment works
+ *  both ways: a cell holds an effect only while it holds something). */
+function isBlackColor(p: EffectPanelInfo): boolean {
+  if (p.effect_id !== DRAFT_DEFAULT_EFFECT || p.draft) return false;
+  const channels = p.params.filter((q) => q.role === "color");
+  return channels.length > 0 && channels.every((q) => q.value_norm <= 1e-6);
+}
+
 export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsProps) {
   const [panel, setPanel] = useState<EffectPanelInfo | null>(null);
   // The effect an EMPTY selected cell is shown with (UI state only). Back to the default
@@ -426,6 +441,22 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
   useEffect(() => {
     assigning.current = null;
   }, [zoneId, cell, draftEffect]);
+  // Auto-clear (see `isBlackColor`): every edit re-arms a timer; when it fires the latest
+  // panel state is checked. Cancelled when another cell is selected.
+  const panelRef = useRef(panel);
+  panelRef.current = panel;
+  const clearTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(clearTimer.current), [zoneId, cell]);
+  const scheduleAutoClear = () => {
+    window.clearTimeout(clearTimer.current);
+    clearTimer.current = window.setTimeout(() => {
+      const p = panelRef.current;
+      if (!p || p.cell_index == null || !isBlackColor(p)) return;
+      clearCell(zoneId, p.cell_index)
+        .then(() => onGridChange?.()) // the grid shows it empty; the panel drafts it
+        .catch(() => {});
+    }, AUTO_CLEAR_MS);
+  };
   // How many slider rows fit the panel's height; the scalars fill that many rows, then
   // continue in the next column (and the column really takes its width).
   const rowsRef = useRef<HTMLDivElement>(null);
@@ -493,6 +524,7 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
   const target: PanelTarget = {
     cell: index,
     writeParam: (name, value) => {
+      scheduleAutoClear();
       if (!panel.draft) {
         setParam(zoneId, name, value, index).catch(() => {});
         return;
