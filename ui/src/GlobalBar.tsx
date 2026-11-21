@@ -12,6 +12,7 @@ import { VFader } from "./VFader";
 import { Bolt } from "./icons";
 import { strobeHz } from "./strobe";
 import { LearnTarget } from "./midiLearn";
+import { scrubHandler } from "./scrub";
 
 // The master column (M8-SPEC §3.6): master dimmer + blackout and the GLOBAL strobe,
 // applied ABOVE all zones at the output stage. It lives on the RIGHT of the bottom work
@@ -72,11 +73,16 @@ export function GlobalBar() {
 
   return (
     <div className="pr-master">
-      <span className="pr-master-title">Master</span>
       <LearnTarget target={{ path: "/master/dimmer" }} name="Master dimmer" className="pr-master-fader">
         <VFader value={dimmer} onChange={changeDimmer} aria-label="Master dimmer" />
       </LearnTarget>
-      <span className="pr-value pr-master-value">{Math.round(dimmer * 100)}%</span>
+      <span
+        className="pr-value pr-master-value"
+        onPointerDown={scrubHandler(() => ({ get: () => dimmer, set: changeDimmer, min: 0, max: 1, perPixel: 1 / 255, step: 1 / 255 }))}
+      >
+        {Math.round(dimmer * 255)}
+      </span>
+      <span className="pr-master-label">MASTER</span>
       <div className="pr-master-actions">
         <LearnTarget target={{ path: "/master/blackout" }} name="Blackout master" className="pr-learn-compact">
           <button

@@ -519,11 +519,11 @@ input, textarea, [contenteditable="true"] {
 /* Bottom work row: FIXED height, not resizable (console-style). The effect-parameters
    panel (a swappable slot — groups will share it later) sits left at a fixed width where
    every parameter fits without scrolling; the master strip sits right at a fixed width. */
-.pr-workrow { flex: 0 0 auto; height: 190px; display: flex; gap: 6px; }
+.pr-workrow { flex: 0 0 auto; height: clamp(250px, 36vh, 460px); display: flex; gap: 6px; }
 /* The params panel FILLS the row (minus the fixed master), so faders/controls use the
    width instead of leaving a gap. Its content is sized so the densest effect still fits. */
 .pr-workrow-panel { flex: 1 1 auto; min-width: 0; }
-.pr-workrow-master { flex: 0 0 220px; }
+.pr-workrow-master { flex: 0 0 150px; }
 /* Fixed 26px height so layouts can compute from it (`.pr-region-grid` does — keep in sync). */
 .pr-region-title { box-sizing: border-box; height: 26px; display: flex; align-items: center; white-space: pre; font-size: var(--fs-small); color: var(--text-label); padding: 0 8px; border-bottom: 1px solid var(--divider); text-transform: uppercase; letter-spacing: .04em; flex: 0 0 auto; }
 
@@ -602,20 +602,20 @@ input, textarea, [contenteditable="true"] {
 /* The master column: fixed-height row, so the FADER flexes to fill whatever vertical
    space the fixed elements (title, value, buttons, strobe rate) leave. This guarantees
    the whole stack always fits inside the row — nothing spills below the window. */
-/* Two columns so the short work row still gives the FADER its full height: the fader on
-   the left spans every row; title, value, blackout/strobe and strobe rate stack on the
-   right. (Stacked in one column, a 190px row crushed the fader to a stub.) */
-.pr-master { flex: 1 1 auto; min-height: 0; overflow: hidden; display: grid; grid-template-columns: 56px 1fr; grid-template-rows: auto 1fr auto auto auto; grid-template-areas: "fader title" "fader ." "fader value" "fader actions" "fader strobe"; column-gap: 12px; row-gap: 8px; align-items: center; padding: 10px; }
-.pr-master-title { grid-area: title; font-size: var(--fs-base); color: var(--text-label); text-transform: uppercase; letter-spacing: .05em; }
-.pr-master-fader { grid-area: fader; align-self: stretch; min-height: 0; display: flex; align-items: center; justify-content: center; }
+/* One narrow vertical stack: the fader takes all the free height, then its value, the
+   MASTER label, blackout + strobe and the strobe rate underneath (Bauti: nothing to the
+   right of the fader). Works now that the work row is tall. */
+.pr-master { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 8px; }
+.pr-master-fader { flex: 1 1 auto; min-height: 0; align-self: stretch; display: flex; align-items: center; justify-content: center; }
 .pr-master-fader .pr-fader { height: 100%; width: 48px; }
-.pr-master-value { grid-area: value; justify-self: start; font-size: var(--fs-value); color: var(--accent-text); font-variant-numeric: tabular-nums; font-weight: 600; }
-.pr-master-actions { grid-area: actions; display: flex; gap: 8px; }
+.pr-master-value { flex: 0 0 auto; font-size: var(--fs-value); color: var(--accent-text); font-variant-numeric: tabular-nums; font-weight: 600; }
+.pr-master-label { flex: 0 0 auto; margin-top: -4px; font-size: var(--fs-tiny); color: var(--text-label); letter-spacing: .05em; }
+.pr-master-actions { flex: 0 0 auto; display: flex; gap: 6px; margin-top: 4px; }
 .pr-master-actions .pr-btn { min-width: 40px; }
 .pr-master-actions .pr-strobe-trigger { position: static; width: 40px; height: 28px; font-size: 14px; }
 .pr-master-strobe-rate { flex: 0 0 auto; width: 100%; height: 6px; }
 /* Strobe-rate row: the slider plus its live value in Hz. */
-.pr-master-strobe { grid-area: strobe; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pr-master-strobe { flex: 0 0 auto; align-self: stretch; display: flex; align-items: center; gap: 8px; min-width: 0; }
 .pr-master-strobe-wrap { flex: 1 1 auto; min-width: 0; align-items: center; }
 
 .pr-mainwin-error { flex: 0 0 auto; color: var(--accent-text); background: var(--bg-panel); border-top: 1px solid var(--btn-border-dark); padding: 6px 10px; font-size: var(--fs-small); font-family: var(--font-mono); }
@@ -699,15 +699,16 @@ input, textarea, [contenteditable="true"] {
    controls (rose, palette, colour) on the right. All primitives (.pr-value, .pr-hslider). */
 .pr-params { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 8px 10px; gap: 8px; overflow: hidden; }
 /* The running effect's name, appended to the region title (no header row of its own). */
-.pr-params-effect { color: var(--accent-text); font-weight: 600; text-transform: none; letter-spacing: .02em; }
-.pr-params-none { flex: 1 1 auto; display: flex; align-items: center; color: var(--text-dim); font-size: var(--fs-small); }
 .pr-params-rows { flex: 1 1 auto; min-height: 0; display: flex; gap: 36px; align-items: stretch; overflow: hidden; }
 .pr-params-col { flex: 0 0 auto; min-height: 0; }
 /* Scalars are moderate fixed-width rows that FLOW top-to-bottom and WRAP into the next
    column when they fill the panel's height — dense, console-style, using the vertical
    space. Packed left; a simple effect leaves the right of the panel empty (by design,
    like professional consoles), rather than stretching a few faders across the whole window. */
-.pr-params-scalars { flex: 0 1 auto; min-height: 0; display: flex; flex-flow: column wrap; align-content: flex-start; gap: 12px 40px; }
+/* A column-flowing GRID, not `flex-flow: column wrap`: a wrapping flex column never widens
+   its container for the extra columns, so a 4th slider overflowed ON TOP of the controls
+   beside it. The row count is set from the panel's height (EffectParams measures it). */
+.pr-params-scalars { flex: 0 0 auto; min-height: 0; display: grid; grid-auto-flow: column; grid-template-rows: repeat(var(--param-rows, 3), auto); align-content: start; gap: 12px 40px; }
 .pr-params-scalars .pr-field { width: 330px; }
 /* Effect-specific controls (rose, colour, palette, dropdown) sit just to their right. */
 .pr-params-controls { flex: 0 0 auto; display: flex; flex-flow: row wrap; align-content: flex-start; gap: 18px 28px; }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { effectPanel, setParam, type EffectPanelInfo, type ParamInfo } from "./api";
 import { ColorControl } from "./ColorControl";
 import { Dropdown } from "./Dropdown";
@@ -19,9 +19,6 @@ interface EffectParamsProps {
   zoneId: string;
   /** Bumped by the scene grid when the active cell changes, to re-fetch the panel. */
   rev: number;
-  /** The region title ("Parámetros — <zone>"). The panel renders it so it can append the
-   *  running effect's name to it instead of spending a whole row on a separate header. */
-  title: string;
 }
 
 // A panel item: the grouping of raw manifest params into rendered controls. Colour
@@ -131,8 +128,26 @@ function EnumRow({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
   );
 }
 
-export function EffectParams({ zoneId, rev, title }: EffectParamsProps) {
+/** Height of one scalar row (the slider) and the vertical gap between rows, in px —
+ *  must match `.pr-field-control .pr-hslider` and `.pr-params-scalars` in theme.css. */
+const ROW_H = 40;
+const ROW_GAP = 12;
+
+export function EffectParams({ zoneId, rev }: EffectParamsProps) {
   const [panel, setPanel] = useState<EffectPanelInfo | null>(null);
+  // How many slider rows fit the panel's height; the scalars fill that many rows, then
+  // continue in the next column (and the column really takes its width).
+  const rowsRef = useRef<HTMLDivElement>(null);
+  const [rows, setRows] = useState(3);
+  useEffect(() => {
+    const el = rowsRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      setRows(Math.max(1, Math.floor((el.clientHeight + ROW_GAP) / (ROW_H + ROW_GAP))));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [panel?.effect_id]);
 
   useEffect(() => {
     let live = true;
@@ -145,12 +160,7 @@ export function EffectParams({ zoneId, rev, title }: EffectParamsProps) {
   }, [zoneId, rev]);
 
   if (!panel || !panel.effect_id) {
-    return (
-      <>
-        <div className="pr-region-title">{title}</div>
-        <div className="pr-placeholder-body">Celda vacía — asigná un efecto en la grilla</div>
-      </>
-    );
+    return null; // an empty cell has no parameters: the panel simply stays blank
   }
 
   const items = buildItems(panel.params);
@@ -158,20 +168,15 @@ export function EffectParams({ zoneId, rev, title }: EffectParamsProps) {
   const controlItems = items.filter((i) => i.kind !== "scalar");
 
   return (
-    <>
-    <div className="pr-region-title">
-      {title}
-      <span className="pr-params-effect"> · {panel.effect_name}</span>
-    </div>
     <div className="pr-params">
       {items.length === 0 ? (
-        <div className="pr-params-none">Este efecto no tiene parámetros</div>
+        null
       ) : (
         // Two columns: the scalar sliders as a vertical
         // list on the left, the effect-specific controls (direction rose, palette,
         // colour picker) on the right.
-        <div className="pr-params-rows">
-          <div className="pr-params-col pr-params-scalars">
+        <div className="pr-params-rows" ref={rowsRef}>
+          <div className="pr-params-col pr-params-scalars" style={{ "--param-rows": rows } as CSSProperties}>
             {scalarItems.map((item) => (
               <ScalarRow
                 key={`${panel.effect_id}:${item.param.name}`}
@@ -188,7 +193,6 @@ export function EffectParams({ zoneId, rev, title }: EffectParamsProps) {
         </div>
       )}
     </div>
-    </>
   );
 
   // One non-scalar control (colour picker, rose, or palette editor). Keys carry the

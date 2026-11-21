@@ -338,15 +338,11 @@ function MainWindowBody() {
 
         <div className="pr-mainwin-body">
           <section className="pr-region pr-region-zonerow">
-            <div className="pr-region-title">Zonas</div>
             <ZoneRow zones={zones} selected={selected} onSelect={setSelected} />
           </section>
 
           <div className="pr-mainwin-mid">
             <section className="pr-region pr-region-grid">
-              <div className="pr-region-title">
-                Grilla{selectedZone ? ` — ${selectedZone.name}` : ""}
-              </div>
               {/* No `key={zone.id}` — keying would REMOUNT the grid on every zone switch
                   (unmount → blank → re-fetch), which is why the grid "disappeared" and felt
                   slow. SceneGrid re-fetches in place on a zoneId change (its `useEffect`),
@@ -362,9 +358,6 @@ function MainWindowBody() {
               )}
             </section>
             <section className="pr-region pr-region-preview">
-              <div className="pr-region-title">
-                Preview{selectedZone ? ` — ${selectedZone.name}` : ""}
-              </div>
               {selectedZone ? (
                 <LargePreview zoneId={selectedZone.id} />
               ) : (
@@ -378,16 +371,9 @@ function MainWindowBody() {
           <div className="pr-workrow">
             <section className="pr-region pr-workrow-panel">
               {selectedZone ? (
-                <EffectParams
-                  zoneId={selectedZone.id}
-                  rev={gridRev}
-                  title={`Parámetros — ${selectedZone.name}`}
-                />
+                <EffectParams zoneId={selectedZone.id} rev={gridRev} />
               ) : (
-                <>
-                  <div className="pr-region-title">Parámetros</div>
-                  <div className="pr-placeholder-body">Seleccioná una zona</div>
-                </>
+                <div className="pr-placeholder-body">Seleccioná una zona</div>
               )}
             </section>
 
