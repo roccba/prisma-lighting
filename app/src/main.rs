@@ -299,13 +299,16 @@ fn empty_patch() -> Patch {
     patch
 }
 
-/// A zone's starting grid: cell 1 holds the Color effect at R = G = B = 0 (the effect's
-/// manifest defaults), the rest are empty. Every zone starts with it (Bauti: a zone never
-/// begins without content) and with that cell RUNNING.
+/// A zone's starting grid: EVERY cell holds the Color effect at R = G = B = 0 (the
+/// effect's manifest defaults), so the grid shows "Color" in each cell from the moment the
+/// zone exists and any cell is ready to edit and play — no cell starts empty (Bauti: a zone
+/// never begins without content). The caller makes cell 1 the RUNNING one. Only a freshly
+/// created zone gets this: a loaded show keeps its saved cells, and a cell the operator
+/// clears stays empty.
 fn default_grid() -> Vec<Cell> {
-    let mut grid: Vec<Cell> = (0..GRID_CELLS).map(|_| Cell::empty()).collect();
-    grid[0] = Cell::single(Layer::shader("solid".to_string(), ParamSet::new()));
-    grid
+    (0..GRID_CELLS)
+        .map(|_| Cell::single(Layer::shader("solid".to_string(), ParamSet::new())))
+        .collect()
 }
 
 /// Pad every zone's grid up to `GRID_CELLS` with assignable (empty) cells. A zone with an
@@ -2758,14 +2761,13 @@ mod tests {
         let zs = &show.zones[0];
         assert_eq!(zs.active, Some(0));
         assert_eq!(zs.grid.len(), GRID_CELLS);
-        match &zs.grid[0].layers[0].source {
-            Source::Shader {
+        // Every cell — not only the running one — is pre-assigned black Color.
+        for (i, cell) in zs.grid.iter().enumerate() {
+            let Source::Shader {
                 effect_id, params, ..
-            } => {
-                assert_eq!(effect_id, "solid");
-                assert!(params.iter().next().is_none(), "manifest defaults: R=G=B=0");
-            }
-            other => panic!("cell 1 is not the Color effect: {other:?}"),
+            } = &cell.layers.first().expect("no empty cell").source;
+            assert_eq!(effect_id, "solid", "cell {}", i + 1);
+            assert!(params.iter().next().is_none(), "manifest defaults: R=G=B=0");
         }
     }
 
