@@ -334,7 +334,22 @@ function MainWindowBody() {
   return (
     <PreviewStreamProvider>
       <div className="pr-mainwin">
-        <MenuBar menus={menus} />
+        <MenuBar
+          menus={menus}
+          right={
+            learn.active && (
+              <button
+                className="pr-learn-ind"
+                type="button"
+                onClick={() => learn.setActive(false)}
+                title="Salir de MIDI Learn (Esc)"
+              >
+                <span className="pr-learn-bar-dot" />
+                MIDI Learn
+              </button>
+            )
+          }
+        />
 
         <div className="pr-mainwin-body">
           <section className="pr-region pr-region-zonerow">
@@ -383,16 +398,6 @@ function MainWindowBody() {
           </div>
         </div>
 
-        {learn.active && (
-          <div className="pr-learn-bar">
-            <span className="pr-learn-bar-dot" />
-            MIDI Learn — hacé clic en un control y mové un fader o pad del hardware · clic derecho
-            quita la asignación
-            <button className="pr-btn" type="button" onClick={() => learn.setActive(false)}>
-              Salir (Esc)
-            </button>
-          </div>
-        )}
         {error && <div className="pr-mainwin-error">Error: {error}</div>}
         {notice && <div className="pr-toast">{notice}</div>}
         {deviceMgrOpen && <DeviceManager onClose={() => setDeviceMgrOpen(false)} zones={zones} />}

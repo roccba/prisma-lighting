@@ -817,12 +817,10 @@ input.pr-field-value:focus { outline: 1px solid var(--accent); outline-offset: -
 .pr-swatch.is-selected { outline: 2px solid var(--learn); outline-offset: 0; z-index: 1; }
 .pr-swatch-auto { background: var(--bg-input); color: var(--text-dim); font-size: 8px; line-height: 1; }
 
-.pr-learn-bar {
-  flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
-  padding: 5px 10px; background: var(--bg-panel); border-top: 1px solid var(--learn);
-  color: var(--text); font-size: var(--fs-small);
-}
-.pr-learn-bar .pr-btn { margin-left: auto; }
+/* MIDI Learn indicator: pinned to the menu bar's right end (no layout change on entry). */
+.pr-menubar-right { margin-left: auto; display: flex; align-items: center; padding-right: 8px; }
+.pr-learn-ind { display: inline-flex; align-items: center; gap: 7px; height: 22px; padding: 0 9px; background: transparent; border: 1px solid var(--learn); border-radius: var(--r-sm); color: var(--learn); font: inherit; font-size: var(--fs-small); cursor: pointer; }
+.pr-learn-ind:hover { background: var(--learn-soft); }
 .pr-learn-bar-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--learn); animation: pr-learn-pulse 1s ease-in-out infinite; }
 
 /* Device manager — MIDI tab (M9). */

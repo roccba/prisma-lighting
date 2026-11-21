@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 // The top application menu bar. Data-driven: the window passes a tree of menus and this
 // component renders the bar, the drop-downs and nested fly-outs, shows keyboard-shortcut
@@ -22,7 +22,9 @@ export interface MenuDef {
   children: MenuNode[];
 }
 
-export function MenuBar({ menus }: { menus: MenuDef[] }) {
+/** `right`: an optional status item pinned to the bar's right end (e.g. the MIDI Learn
+ *  indicator). It lives in the bar so showing it never changes the window's layout. */
+export function MenuBar({ menus, right }: { menus: MenuDef[]; right?: ReactNode }) {
   const [open, setOpen] = useState<string | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
 
@@ -68,6 +70,7 @@ export function MenuBar({ menus }: { menus: MenuDef[] }) {
           )}
         </div>
       ))}
+      {right && <div className="pr-menubar-right">{right}</div>}
     </div>
   );
 }
