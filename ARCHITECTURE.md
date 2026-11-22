@@ -9,40 +9,46 @@ Scope: the live model with tracks. Zones, patch, output and preview are unchange
 
 ```mermaid
 flowchart BT
-    patch[prisma-patch<br/>patch model, PatchIndex]
-    core[prisma-core<br/>clock, Parameter Tree, show model, decks]
-    output[prisma-output<br/>OutputPlan, Art-Net, scheduler, virtual sink]
-    preview[prisma-preview<br/>master buffer → sRGB → WebSocket]
-    render[prisma-render<br/>wgpu, effects, blend, gather]
-    midi[prisma-midi<br/>mappings, learn, profiles, LED feedback]
-    editor[prisma-editor<br/>patch draft, reversible edit ops]
-    script[prisma-script<br/>Lua, placeholder]
-    engine[prisma-engine<br/>assembly, threads, show content]
-    app[app<br/>Tauri shell, IPC commands]
-    ui[ui<br/>React]
+    patch[prisma-patch]
+    core[prisma-core]
+    output[prisma-output]
+    preview[prisma-preview]
+    render[prisma-render]
+    midi[prisma-midi]
+    editor[prisma-editor]
+    engine[prisma-engine]
+    app[app]
+    ui[ui]
 
     core --> patch
-    output --> patch
     output --> core
-    preview --> patch
-    preview --> core
     preview --> output
-    render --> core
-    render --> patch
-    render --> output
     render --> preview
     midi --> core
     editor --> patch
-    engine --> core
-    engine --> patch
     engine --> render
-    engine --> output
-    engine --> preview
     engine --> midi
     app --> engine
     app --> editor
-    ui -. IPC + WebSocket .-> app
+    ui -. IPC .-> app
 ```
+
+Arrows point to what a crate depends on. Dependencies implied by another arrow are left out
+(`render` also uses `core`, `patch` and `output` directly).
+
+| Crate | Owns |
+|---|---|
+| `prisma-patch` | patch model, `PatchIndex` |
+| `prisma-core` | clock, Parameter Tree, show model, decks, transitions |
+| `prisma-output` | `OutputPlan`, Art-Net, output scheduler, virtual sink |
+| `prisma-preview` | master buffer → sRGB → WebSocket |
+| `prisma-render` | wgpu, effects, blend, gather |
+| `prisma-midi` | mappings, learn, device profiles, LED feedback |
+| `prisma-editor` | patch draft, reversible edit ops |
+| `prisma-engine` | assembly, threads, show content |
+| `prisma-script` | Lua, placeholder |
+| `app` | Tauri shell, IPC commands |
+| `ui` | React |
 
 Rules:
 
