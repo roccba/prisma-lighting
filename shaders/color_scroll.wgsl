@@ -28,9 +28,25 @@ struct Uniforms {
     cross_axes: f32,
     mode: f32,
     fade: f32,
+    // LIVE-MODEL-SPEC 2b: 0 = transparent background, 1 = black.
+    background: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
+
+// Background (LIVE-MODEL-SPEC 2b): `background` 0 = transparent — the picture gets an
+// alpha (a shape's coverage, a field's brightest channel) — 1 = black, opaque. Colour
+// is premultiplied either way, so over black it is the same picture.
+fn out_alpha(rgb: vec3<f32>, coverage: f32) -> vec4<f32> {
+    if (u.background < 0.5) {
+        return vec4<f32>(rgb, clamp(coverage, 0.0, 1.0));
+    }
+    return vec4<f32>(rgb, 1.0);
+}
+
+fn field_out(rgb: vec3<f32>) -> vec4<f32> {
+    return out_alpha(rgb, max(rgb.r, max(rgb.g, rgb.b)));
+}
 
 // The cell's colour table (a list, not parameters): `len` live colours, up to 255.
 struct Palette {
@@ -192,5 +208,5 @@ fn fs(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let i0 = ((band % count) + count) % count;
     let i1 = (i0 + 1) % count;
     let frac = select(0.0, fract(f), u.fade > 0.5);
-    return vec4<f32>(mix(palette.colors[i0].rgb, palette.colors[i1].rgb, frac), 1.0);
+    return field_out(mix(palette.colors[i0].rgb, palette.colors[i1].rgb, frac));
 }

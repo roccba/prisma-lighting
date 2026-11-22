@@ -330,6 +330,20 @@ pub struct Track {
     pub mute: bool,
     #[serde(default)]
     pub solo: bool,
+    /// `BlendMode::LumaKey`: the luminance (linear) where the source starts to show…
+    #[serde(default = "default_key_threshold")]
+    pub key_threshold: f32,
+    /// …and how far above it it reaches full opacity.
+    #[serde(default = "default_key_softness")]
+    pub key_softness: f32,
+}
+
+fn default_key_threshold() -> f32 {
+    0.05
+}
+
+fn default_key_softness() -> f32 {
+    0.1
 }
 
 impl Track {
@@ -348,6 +362,8 @@ impl Track {
             active: None,
             mute: false,
             solo: false,
+            key_threshold: default_key_threshold(),
+            key_softness: default_key_softness(),
         }
     }
 

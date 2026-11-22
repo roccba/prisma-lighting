@@ -38,6 +38,9 @@ pub enum BlendMode {
     Subtract,
     /// `min(a, b)`: the darker of the two, per channel.
     Min,
+    /// Normal, with the source's alpha taken from its own luminance (threshold +
+    /// softness) — for sources without alpha.
+    LumaKey,
 }
 
 /// A stable reference to one pixel: the owning fixture plus the pixel's index

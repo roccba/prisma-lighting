@@ -196,6 +196,12 @@ fn scenes_arm_go_and_track_controls_reach_the_wire() {
         state(&engine, ta, 0) == CLIP_RUNNING && state(&engine, tb, 2) == CLIP_RUNNING
     });
 
+    // Disarm everything (`/arm/clear`): an armed clip goes back to loaded.
+    assert!(engine.arm_clip(1, 0));
+    wait_for("armed", || state(&engine, tb, 0) == CLIP_ARMED);
+    assert!(engine.clear_arm());
+    wait_for("disarmed", || state(&engine, tb, 0) == CLIP_ASSIGNED);
+
     // An Arm-mode track: a launch arms instead of playing.
     host.0.lock().unwrap().track_mut(ta).unwrap().launch = LaunchMode::Arm;
     assert!(engine.fire_clip(0, 1));

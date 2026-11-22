@@ -11,12 +11,19 @@
 //! ```text
 //! Normal   = b
 //! Add      = clamp(a + b, 0, 1)
+//! Subtract = max(a - b, 0)
 //! Multiply = a * b
 //! Screen   = 1 - (1 - a)(1 - b)
-//! Mask     = a * luma(b),  luma = 0.2126 r + 0.7152 g + 0.0722 b   (Rec.709 linear)
 //! Max      = max(a, b)
+//! Min      = min(a, b)
+//! Mask     = a · (alpha of b)              — an opaque b leaves a unchanged
+//! LumaKey  = b where luma(b) clears the key, else a; luma = Rec.709 linear
 //! opacity: out = a + (blended - a) * opacity      // = mix(a, blended, opacity)
 //! ```
+//!
+//! Those are the OPAQUE cases (both layers alpha 1), where premultiplied alpha
+//! reduces to the plain formulas. The `alpha_*` tests below cover partial alpha with
+//! the premultiplied formulas of `shaders/blend.wgsl` (LIVE-MODEL-SPEC 2b).
 //!
 //! The probe colors are deliberately **intermediate, per-channel-distinct, and
 //! chosen so a + b < 1** — no blend against black or against 1.0, where several
@@ -66,7 +73,15 @@ fn blended_ref(a: [f32; 3], b: [f32; 3], mode: BlendMode) -> [f32; 3] {
             BlendMode::Add => (a[i] + b[i]).clamp(0.0, 1.0),
             BlendMode::Multiply => a[i] * b[i],
             BlendMode::Screen => 1.0 - (1.0 - a[i]) * (1.0 - b[i]),
-            BlendMode::Mask => a[i] * luma(b),
+            BlendMode::Mask => a[i],
+            BlendMode::LumaKey => {
+                let [t, soft] = prisma_render::blend::DEFAULT_KEY;
+                if luma(b) >= t + soft {
+                    b[i]
+                } else {
+                    unreachable!("probe colours clear the default key")
+                }
+            }
             BlendMode::Max => a[i].max(b[i]),
             BlendMode::Subtract => (a[i] - b[i]).max(0.0),
             BlendMode::Min => a[i].min(b[i]),
@@ -180,6 +195,7 @@ fn every_blend_mode_matches_its_linear_definition() {
         BlendMode::Max,
         BlendMode::Subtract,
         BlendMode::Min,
+        BlendMode::LumaKey,
     ] {
         let px = blend_on_gpu(gpu, &tree, &comp, A, B, mode, 1.0);
         let want = blended_ref(A, B, mode);
@@ -284,4 +300,141 @@ fn stack_folds_bottom_to_top_and_order_matters() {
         linf(rev0, reference) > 0.1,
         "reversed stack should differ from forward; got {rev0:?} vs {reference:?}"
     );
+}
+
+// ---- Partial alpha (premultiplied; LIVE-MODEL-SPEC 2b) ----
+
+/// A 2×2 target filled with one PREMULTIPLIED colour (a clear, no effect involved).
+fn filled(gpu: &Gpu, c: [f32; 4]) -> wgpu::Texture {
+    let tex = create_render_target(gpu, 2, 2);
+    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut enc = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: None,
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color {
+                    r: c[0] as f64,
+                    g: c[1] as f64,
+                    b: c[2] as f64,
+                    a: c[3] as f64,
+                }),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    gpu.queue.submit([enc.finish()]);
+    tex
+}
+
+/// Blend premultiplied `b` onto premultiplied `a` and read one texel back (rgba).
+fn blend4(
+    gpu: &Gpu,
+    a: [f32; 4],
+    b: [f32; 4],
+    f: impl Fn(&Compositor, &wgpu::Texture, &wgpu::Texture, &wgpu::TextureView),
+) -> [f32; 4] {
+    let comp = Compositor::new(gpu);
+    let (ta, tb) = (filled(gpu, a), filled(gpu, b));
+    let out = create_render_target(gpu, 2, 2);
+    f(
+        &comp,
+        &ta,
+        &tb,
+        &out.create_view(&wgpu::TextureViewDescriptor::default()),
+    );
+    let px = read_rgba16f(gpu, &out, 2, 2)[0];
+    [
+        px[0].to_f32(),
+        px[1].to_f32(),
+        px[2].to_f32(),
+        px[3].to_f32(),
+    ]
+}
+
+#[track_caller]
+fn close4(got: [f32; 4], want: [f32; 4], ctx: &str) {
+    let d = (0..4).map(|i| (got[i] - want[i]).abs()).fold(0.0, f32::max);
+    assert!(d < EPS, "{ctx}: got {got:?}, want {want:?}");
+}
+
+// a: opaque (0.5, 0.4, 0.2). b: 50 % alpha, colour (0.6, 0.2, 0.8) → premultiplied.
+const A4: [f32; 4] = [0.5, 0.4, 0.2, 1.0];
+const B4: [f32; 4] = [0.3, 0.1, 0.4, 0.5];
+
+#[test]
+fn alpha_normal_is_alpha_over() {
+    let gpu = software_gpu();
+    let got = blend4(gpu, A4, B4, |c, a, b, o| {
+        c.blend(gpu, a, b, o, BlendMode::Normal, 1.0)
+    });
+    // b + a·(1 − αb)
+    close4(got, [0.3 + 0.25, 0.1 + 0.2, 0.4 + 0.1, 1.0], "Normal");
+    // Over a transparent base the source comes through as it is.
+    let clear = blend4(gpu, [0.0; 4], B4, |c, a, b, o| {
+        c.blend(gpu, a, b, o, BlendMode::Normal, 1.0)
+    });
+    close4(clear, B4, "Normal over transparent");
+}
+
+#[test]
+fn alpha_separable_modes_weight_by_alpha() {
+    let gpu = software_gpu();
+    // Add: (1−αb)·a + (1−αa)·b + αa·αb·min(ca + cb, 1); ca = a (opaque), cb = (0.6,0.2,0.8).
+    let got = blend4(gpu, A4, B4, |c, a, b, o| {
+        c.blend(gpu, a, b, o, BlendMode::Add, 1.0)
+    });
+    let m = [(0.5f32 + 0.6).min(1.0), 0.4 + 0.2, (0.2f32 + 0.8).min(1.0)];
+    close4(
+        got,
+        [
+            0.5 * 0.5 + 0.5 * m[0],
+            0.5 * 0.4 + 0.5 * m[1],
+            0.5 * 0.2 + 0.5 * m[2],
+            1.0,
+        ],
+        "Add",
+    );
+}
+
+#[test]
+fn alpha_mask_gates_by_the_sources_alpha() {
+    let gpu = software_gpu();
+    let got = blend4(gpu, A4, B4, |c, a, b, o| {
+        c.blend(gpu, a, b, o, BlendMode::Mask, 1.0)
+    });
+    close4(got, [0.25, 0.2, 0.1, 0.5], "Mask");
+}
+
+#[test]
+fn crossfade_mixes_all_four_channels() {
+    let gpu = software_gpu();
+    // A transparent incoming picture still fades the outgoing one out.
+    let got = blend4(gpu, A4, [0.0; 4], |c, a, b, o| {
+        c.crossfade(gpu, a, b, o, 0.25)
+    });
+    close4(got, [0.375, 0.3, 0.15, 0.75], "crossfade");
+}
+
+#[test]
+fn luma_key_keys_out_dark_sources() {
+    let gpu = software_gpu();
+    let key = [0.2, 0.1];
+    let dark = blend4(gpu, A4, [0.05, 0.05, 0.05, 1.0], |c, a, b, o| {
+        c.blend_keyed(gpu, a, b, o, BlendMode::LumaKey, 1.0, key)
+    });
+    close4(dark, A4, "below the key: the source vanishes");
+    let bright = blend4(gpu, A4, [0.9, 0.9, 0.9, 1.0], |c, a, b, o| {
+        c.blend_keyed(gpu, a, b, o, BlendMode::LumaKey, 1.0, key)
+    });
+    close4(bright, [0.9, 0.9, 0.9, 1.0], "above the key: Normal");
 }

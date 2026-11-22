@@ -514,6 +514,7 @@ fn track(
     TrackContent {
         zones: vec![zone],
         blend_mode: mode,
+        key: prisma_render::blend::DEFAULT_KEY,
         opacity,
         live: None,
         effects: vec![effect],

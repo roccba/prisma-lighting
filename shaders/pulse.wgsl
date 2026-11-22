@@ -19,9 +19,22 @@ struct Uniforms {
     ratio: f32,
     fade: f32,
     color_mode: f32,
+    // LIVE-MODEL-SPEC 2b: 0 = transparent background, 1 = black.
+    background: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
+
+// Background (LIVE-MODEL-SPEC 2b): `background` 0 = transparent — the picture gets an
+// alpha (a shape's coverage, a field's brightest channel) — 1 = black, opaque. Colour
+// is premultiplied either way, so over black it is the same picture.
+fn out_alpha(rgb: vec3<f32>, coverage: f32) -> vec4<f32> {
+    if (u.background < 0.5) {
+        return vec4<f32>(rgb, clamp(coverage, 0.0, 1.0));
+    }
+    return vec4<f32>(rgb, 1.0);
+}
+
 
 // The cell's colour table (a list, not parameters): `len` live colours, up to 255.
 // Same layout as color_scroll.wgsl.
@@ -109,5 +122,5 @@ fn fs() -> @location(0) vec4<f32> {
     }
 
     let color = pal_color(pal_index(u.color_mode, k, 0u, pal_len()));
-    return vec4<f32>(color * intensity, 1.0);
+    return out_alpha(color * intensity, intensity);
 }

@@ -429,6 +429,7 @@ fn neither_pixel_of_a_mixed_cell_is_dimmed_twice() {
             mode: BlendMode::Normal,
             opacity: 1.0,
             zone_scale: [0.5, 0.5, 0.5], // zone A dimmer
+            zone_opacity: 0.5,
             coverage: &cov_bufs[0],
         },
         ZoneComposite {
@@ -436,6 +437,7 @@ fn neither_pixel_of_a_mixed_cell_is_dimmed_twice() {
             mode: BlendMode::Add,
             opacity: 1.0,
             zone_scale: [1.0, 1.0, 1.0],
+            zone_opacity: 1.0,
             coverage: &cov_bufs[1],
         },
     ];
@@ -492,6 +494,7 @@ fn two_zones_run_unmistakably_different_effects_independently() {
             mode: BlendMode::Normal,
             opacity: 1.0,
             zone_scale: [1.0, 1.0, 1.0],
+            zone_opacity: 1.0,
             coverage: &cov_bufs[0],
         },
         ZoneComposite {
@@ -499,6 +502,7 @@ fn two_zones_run_unmistakably_different_effects_independently() {
             mode: BlendMode::Normal,
             opacity: 1.0,
             zone_scale: [1.0, 1.0, 1.0],
+            zone_opacity: 1.0,
             coverage: &cov_bufs[1],
         },
     ];
@@ -558,6 +562,7 @@ fn an_add_zone_brightens_the_zone_below_instead_of_occluding_it() {
                 mode: BlendMode::Normal,
                 opacity: 1.0,
                 zone_scale: [1.0, 1.0, 1.0],
+                zone_opacity: 1.0,
                 coverage: &cov_bufs[0],
             },
             ZoneComposite {
@@ -565,6 +570,7 @@ fn an_add_zone_brightens_the_zone_below_instead_of_occluding_it() {
                 mode,
                 opacity: 1.0,
                 zone_scale: [1.0, 1.0, 1.0],
+                zone_opacity: 1.0,
                 coverage: &cov_bufs[1],
             },
         ]

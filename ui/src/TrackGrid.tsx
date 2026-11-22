@@ -65,6 +65,8 @@ interface TrackGridProps {
   rev: number;
   /** Called after the grid changed what plays or what a clip holds. */
   onChanged: () => void;
+  /** Whether any clip is armed (the global bar shows "Desarmar" then). */
+  onArmedChange?: (anyArmed: boolean) => void;
 }
 
 const EMPTY: GridInfo = { tracks: [], scenes: [] };
@@ -92,7 +94,21 @@ const BLENDS: { value: BlendMode; label: string }[] = [
   { value: "Max", label: "Max" },
   { value: "Min", label: "Min" },
   { value: "Mask", label: "Mask" },
+  { value: "LumaKey", label: "Luma key" },
 ];
+
+/** A blend mode's label (the header and the popover use the same words). */
+function blendLabel(mode: BlendMode): string {
+  return BLENDS.find((b) => b.value === mode)?.label ?? mode;
+}
+
+/** A cell's state, in the words the whole UI uses (LIVE-MODEL-SPEC §7). */
+function cellState(cell: CellInfo): string {
+  if (!cell.effect_id) return "Vacía";
+  if (cell.active) return "En vivo";
+  if (cell.armed) return "Armada";
+  return "Cargada";
+}
 
 /** What a cell shows when it has no label colour: its effect's main colour, in the
  *  grid's 0–255 sRGB (the effect keeps it in linear light). */
@@ -133,7 +149,16 @@ interface ColorState {
   value: Rgb;
 }
 
-export function TrackGrid({ zones, selectedTrack, selectedCells, onSelect, armMode, rev, onChanged }: TrackGridProps) {
+export function TrackGrid({
+  zones,
+  selectedTrack,
+  selectedCells,
+  onSelect,
+  armMode,
+  rev,
+  onChanged,
+  onArmedChange,
+}: TrackGridProps) {
   const [g, setG] = useState<GridInfo>(EMPTY);
   const [menu, setMenu] = useState<CellMenuState | null>(null);
   const [headMenu, setHeadMenu] = useState<{ track: string; x: number; y: number } | null>(null);
@@ -173,6 +198,8 @@ export function TrackGrid({ zones, selectedTrack, selectedCells, onSelect, armMo
   }, [refresh, onChanged]);
 
   const track = (id: string) => g.tracks.find((t) => t.id === id);
+  const anyArmed = g.tracks.some((t) => t.armed !== null);
+  useEffect(() => onArmedChange?.(anyArmed), [anyArmed, onArmedChange]);
   const select = (id: string, cell: number | null) => onSelect(id, cell, track(id)?.zones[0] ?? null);
 
   // Always have a selected track while there are tracks: the first one by default, and
@@ -415,7 +442,7 @@ export function TrackGrid({ zones, selectedTrack, selectedCells, onSelect, armMo
             )}
             <span className="pr-thead-sub">→ {t.destination}</span>
             <span className="pr-thead-sub">
-              {t.blend_mode} · {transitionLabel(t.transition)}
+              {blendLabel(t.blend_mode)} · {transitionLabel(t.transition)}
               {t.launch === "arm" && <span className="pr-thead-arm"> · ARM</span>}
             </span>
             <button
@@ -486,7 +513,9 @@ export function TrackGrid({ zones, selectedTrack, selectedCells, onSelect, armMo
                   }
                   onPointerDown={(e) => {
                     if (e.button !== 0 || isEditing) return;
-                    if (e.shiftKey) play(t.id, row, true);
+                    // An armed cell: a click (with or without Shift) disarms it. Otherwise
+                    // Shift+click arms and a plain click only selects.
+                    if (cell.armed || e.shiftKey) play(t.id, row, true);
                     else select(t.id, row);
                   }}
                   onDoubleClick={(e) => {
@@ -512,7 +541,7 @@ export function TrackGrid({ zones, selectedTrack, selectedCells, onSelect, armMo
                   aria-pressed={selected}
                   title={
                     assigned
-                      ? `${title}${cell.name ? ` — ${cell.effect_name ?? ""}` : ""} (doble clic o Enter para activar, Shift+clic para armar)`
+                      ? `${title}${cell.name ? ` — ${cell.effect_name ?? ""}` : ""} · ${cellState(cell)} (doble clic o Enter: lanzar · Shift+clic: armar · clic en una armada: desarmar)`
                       : "Vacía — clic para seleccionarla y elegir un efecto"
                   }
                 >
@@ -695,9 +724,9 @@ export function TrackGrid({ zones, selectedTrack, selectedCells, onSelect, armMo
             patchTrack(settingsTrack.id, { transition, launch });
             setTrackBehaviour(settingsTrack.id, transition, launch).catch(() => {});
           }}
-          onBlend={(mode) => {
-            patchTrack(settingsTrack.id, { blend_mode: mode });
-            setTrackBlend(settingsTrack.id, mode).catch(() => {});
+          onBlend={(mode, threshold, softness) => {
+            patchTrack(settingsTrack.id, { blend_mode: mode, key_threshold: threshold, key_softness: softness });
+            setTrackBlend(settingsTrack.id, mode, threshold, softness).catch(() => {});
           }}
         />
       )}
@@ -723,7 +752,7 @@ function TrackSettings({
   track: TrackInfo;
   anchor: DOMRect;
   onChange: (t: TrackTransition, launch: LaunchMode) => void;
-  onBlend: (mode: BlendMode) => void;
+  onBlend: (mode: BlendMode, threshold: number, softness: number) => void;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -764,11 +793,41 @@ function TrackSettings({
         <Dropdown
           value={track.blend_mode}
           options={BLENDS}
-          onChange={(v) => onBlend(v as BlendMode)}
+          onChange={(v) => onBlend(v as BlendMode, track.key_threshold, track.key_softness)}
           minWidth={140}
           aria-label="Modo de mezcla"
         />
       </div>
+      {track.blend_mode === "LumaKey" && (
+        <>
+          <div className="pr-tsettings-row">
+            <span className="pr-tsettings-label">Umbral</span>
+            <NumberField
+              value={Math.round(track.key_threshold * 100)}
+              min={0}
+              max={100}
+              step={1}
+              width={60}
+              onChange={(v) => onBlend("LumaKey", v / 100, track.key_softness)}
+              aria-label="Umbral del key"
+            />
+            <span className="pr-tsettings-unit">%</span>
+          </div>
+          <div className="pr-tsettings-row">
+            <span className="pr-tsettings-label">Suavidad</span>
+            <NumberField
+              value={Math.round(track.key_softness * 100)}
+              min={0}
+              max={100}
+              step={1}
+              width={60}
+              onChange={(v) => onBlend("LumaKey", track.key_threshold, v / 100)}
+              aria-label="Suavidad del key"
+            />
+            <span className="pr-tsettings-unit">%</span>
+          </div>
+        </>
+      )}
       <div className="pr-tsettings-row">
         <span className="pr-tsettings-label">Transición</span>
         <NumberField

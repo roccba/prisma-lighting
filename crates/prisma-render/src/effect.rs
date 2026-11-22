@@ -16,7 +16,7 @@
 //! path and no lock touch the hot path: paths are resolved to handles **once**, at
 //! construction.
 
-use prisma_core::{ClockSnapshot, ParamDescriptor, ParamHandle, ParameterTree};
+use prisma_core::{ClockSnapshot, Curve, ParamDescriptor, ParamHandle, ParameterTree, RealRange};
 
 /// A channel of a compound colour control (option (a) grouping). Three scalar
 /// params tagged with the same colour group and distinct channels form one colour.
@@ -207,6 +207,25 @@ impl ParamSpec {
     }
 }
 
+/// The "Fondo" (background) choices: 0 = transparent (the effect writes alpha), 1 =
+/// black (opaque) — LIVE-MODEL-SPEC 2b.
+pub const BACKGROUND_CHOICES: &[&str] = &["Transparente", "Negro"];
+
+/// The `background` parameter every effect that can leave areas empty carries, LAST
+/// in its manifest (so it is the last f32 of its uniform). Default: transparent.
+pub fn background_param() -> ParamSpec {
+    ParamSpec::enum_choice(
+        "background",
+        ParamDescriptor::level(
+            "effect.background",
+            RealRange { min: 0.0, max: 1.0 },
+            Curve::Linear,
+            0.0,
+        ),
+        BACKGROUND_CHOICES,
+    )
+}
+
 /// Static description of an effect: its id, its parameters (order matters — it is
 /// the uniform layout), and its WGSL source. Built-in effects each provide one
 /// (see [`crate::effects`]).
@@ -223,6 +242,15 @@ pub struct EffectManifest {
     /// WGSL with a `Uniforms` block following the shared convention: `time`,
     /// `_pad0`, `resolution`, then one `f32` per param in `params` order.
     pub shader_source: &'static str,
+}
+
+impl EffectManifest {
+    /// Append the [`background_param`] (it must be the LAST param: its shader reads it
+    /// as the uniform's last f32).
+    pub fn with_background(mut self) -> Self {
+        self.params.push(background_param());
+        self
+    }
 }
 
 /// Most colours a palette holds (the shader's array length).

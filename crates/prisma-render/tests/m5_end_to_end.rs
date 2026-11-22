@@ -171,6 +171,7 @@ impl FrameContent for ZoneContent {
                         d * z.color_filter[1],
                         d * z.color_filter[2],
                     ],
+                    zone_opacity: d,
                     coverage: &self.coverage[s],
                 }
             })

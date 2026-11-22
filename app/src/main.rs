@@ -132,6 +132,8 @@ struct RequiresInfo {
 #[derive(Serialize)]
 struct EffectPanelInfo {
     track_id: Uuid,
+    /// The cell is armed for GO.
+    armed: bool,
     cell_index: Option<usize>,
     /// Whether `cell_index` is the zone's running cell — its edits drive the output live;
     /// any other cell's edits are only stored, for when it is played.
@@ -171,6 +173,7 @@ fn humanize(name: &str) -> String {
         "ratio" => Some("Proporción"),
         "fade_out" => Some("Difuminado"),
         "color_mode" => Some("Modo de color"),
+        "background" => Some("Fondo"),
         _ => None,
     } {
         return es.to_string();
@@ -2410,8 +2413,10 @@ fn main_effect_panel(
     draft: Option<String>,
 ) -> EffectPanelInfo {
     let show = state.show.lock().unwrap();
+    let armed_clip = armed_of(&state, track);
     let empty = |cell_index: Option<usize>, active: bool| EffectPanelInfo {
         track_id: track,
+        armed: false,
         cell_index,
         active,
         draft: false,
@@ -2496,6 +2501,7 @@ fn main_effect_panel(
         .map(|defaults| stored_palette.unwrap_or_else(|| defaults.to_vec()));
     EffectPanelInfo {
         track_id: track,
+        armed: index.is_some() && index == armed_clip,
         cell_index: index,
         active,
         draft: is_draft,
@@ -2598,6 +2604,9 @@ struct TrackInfo {
     /// The first destination zone's display colour (the header strip, the pads).
     color: [u8; 3],
     blend_mode: BlendMode,
+    /// `BlendMode::LumaKey`'s threshold and softness (linear luminance, 0..1).
+    key_threshold: f32,
+    key_softness: f32,
     opacity: f32,
     mute: bool,
     solo: bool,
@@ -2681,6 +2690,8 @@ fn main_grid(state: State<AppState>) -> GridInfo {
                     .and_then(zone)
                     .map_or([128, 128, 128], |z| z.display_color),
                 blend_mode: t.blend_mode,
+                key_threshold: t.key_threshold,
+                key_softness: t.key_softness,
                 opacity: live.map_or(t.opacity, |l| l.opacity),
                 mute: live.map_or(t.mute, |l| l.mute),
                 solo: live.map_or(t.solo, |l| l.solo),
@@ -2732,6 +2743,14 @@ fn main_launch_scene(state: State<AppState>, row: usize, arm: bool) {
         } else {
             e.launch_scene(row);
         }
+    }
+}
+
+/// Disarm every armed clip (`/arm/clear`).
+#[tauri::command]
+fn main_arm_clear(state: State<AppState>) {
+    if let Some(e) = state.engine.lock().unwrap().as_ref() {
+        e.clear_arm();
     }
 }
 
@@ -2799,12 +2818,29 @@ fn main_set_track_behaviour(
 
 /// How a track blends onto the tracks before it (the track popover). Live, no recompile.
 #[tauri::command]
-fn main_set_track_blend(state: State<AppState>, track: Uuid, mode: BlendMode) {
-    if let Some(t) = state.show.lock().unwrap().track_mut(track) {
+fn main_set_track_blend(
+    state: State<AppState>,
+    track: Uuid,
+    mode: BlendMode,
+    key_threshold: Option<f32>,
+    key_softness: Option<f32>,
+) {
+    let key = {
+        let mut show = state.show.lock().unwrap();
+        let Some(t) = show.track_mut(track) else {
+            return;
+        };
         t.blend_mode = mode;
-    }
+        if let Some(v) = key_threshold {
+            t.key_threshold = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = key_softness {
+            t.key_softness = v.clamp(0.0, 1.0);
+        }
+        [t.key_threshold, t.key_softness]
+    };
     with_track_engine(&state, track, |e, slot| {
-        e.set_track_blend(slot, mode);
+        e.set_track_blend(slot, mode, key);
     });
 }
 
@@ -3018,6 +3054,7 @@ fn main() {
             main_set_track_blend,
             main_stop_all,
             main_move_track,
+            main_arm_clear,
             main_grid,
             main_arm_cell,
             main_stop_track,

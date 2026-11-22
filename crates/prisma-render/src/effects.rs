@@ -253,6 +253,7 @@ pub fn color_scroll() -> EffectManifest {
         palette: Some(SCROLL_PALETTE),
         shader_source: COLOR_SCROLL_WGSL,
     }
+    .with_background()
 }
 
 /// Sum-of-sines plasma. `scale` sets the spatial frequency of the field and
@@ -287,6 +288,7 @@ pub fn plasma() -> EffectManifest {
         palette: None,
         shader_source: PLASMA_WGSL,
     }
+    .with_background()
 }
 
 /// A travelling sine along X. `frequency` is cycles across the matrix width,
@@ -322,6 +324,7 @@ pub fn wave() -> EffectManifest {
         palette: None,
         shader_source: WAVE_WGSL,
     }
+    .with_background()
 }
 
 /// Animated fractal value noise (§5.3 "Noise", the Perlin/Simplex entry). `scale`
@@ -356,6 +359,7 @@ pub fn noise() -> EffectManifest {
         palette: None,
         shader_source: NOISE_WGSL,
     }
+    .with_background()
 }
 
 /// Rising flames with a built-in fire colour ramp (§5.3 "Fire"). `intensity` scales
@@ -389,6 +393,7 @@ pub fn fire() -> EffectManifest {
         palette: None,
         shader_source: FIRE_WGSL,
     }
+    .with_background()
 }
 
 /// Concentric sine rings expanding from the matrix centre (§5.3 "Onda / radial").
@@ -423,6 +428,7 @@ pub fn radial() -> EffectManifest {
         palette: None,
         shader_source: RADIAL_WGSL,
     }
+    .with_background()
 }
 
 /// Scattered twinkling points (§5.3 "Sparkle / twinkle"). `density` controls how
@@ -456,6 +462,7 @@ pub fn sparkle() -> EffectManifest {
         palette: None,
         shader_source: SPARKLE_WGSL,
     }
+    .with_background()
 }
 
 /// The three `r`/`g`/`b` params of a single "color" group, defaulting to white. Effects
@@ -541,6 +548,7 @@ pub fn simple_shape() -> EffectManifest {
         palette: None,
         shader_source: SIMPLE_SHAPE_WGSL,
     }
+    .with_background()
 }
 
 /// Organic blobs that orbit and merge (§5.3, NEW-EFFECTS §3.3) — the inverse-square-sum
@@ -589,6 +597,7 @@ pub fn metaballs() -> EffectManifest {
         palette: None,
         shader_source: METABALLS_WGSL,
     }
+    .with_background()
 }
 
 /// Falling drops with trailing tails (§5.3, NEW-EFFECTS §3.1). `speed` is the fall rate,
@@ -645,6 +654,7 @@ pub fn drops() -> EffectManifest {
         palette: None,
         shader_source: DROPS_WGSL,
     }
+    .with_background()
 }
 
 /// Periodic radial particle bursts with gravity (§5.3, NEW-EFFECTS §3.4). `rate` is
@@ -700,6 +710,7 @@ pub fn explosions() -> EffectManifest {
         palette: None,
         shader_source: EXPLOSIONS_WGSL,
     }
+    .with_background()
 }
 
 /// The play modes of a colour table, in INDEX order (the shaders' `pal_index` switches
@@ -778,6 +789,7 @@ pub fn pulse() -> EffectManifest {
         palette: Some(WHITE_PALETTE),
         shader_source: PULSE_WGSL,
     }
+    .with_background()
 }
 
 /// The whole canvas cross-fading through the cell's colour TABLE, one colour per beat
@@ -889,6 +901,7 @@ pub fn bounce() -> EffectManifest {
         palette: Some(WHITE_PALETTE),
         shader_source: BOUNCE_WGSL,
     }
+    .with_background()
 }
 
 /// A flat linear-light color from three unit-range parameters `r`, `g`, `b`. The
@@ -947,6 +960,7 @@ pub fn gradient() -> EffectManifest {
         palette: None,
         shader_source: GRADIENT_WGSL,
     }
+    .with_background()
 }
 
 /// One entry in the effect catalogue: an effect the picker can offer, with a

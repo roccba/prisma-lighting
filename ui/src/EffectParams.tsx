@@ -386,7 +386,8 @@ function EffectHead({
 
   const [fade, setFade] = useState(panel.fade);
   useEffect(() => setFade(panel.fade), [panel.fade, index]);
-  const state = panel.draft ? "Vacía" : panel.active ? "En vivo" : "Sin activar";
+  // The cell states, the same words everywhere (LIVE-MODEL-SPEC §7).
+  const state = panel.draft ? "Vacía" : panel.active ? "En vivo" : panel.armed ? "Armada" : "Cargada";
   return (
     <div className="pr-params-head">
       <span className="pr-params-head-label">Celda {index + 1}</span>

@@ -80,6 +80,11 @@ impl ZoneDeck {
         self.armed
     }
 
+    /// Disarm (Esc, `/arm/clear`). Returns whether something was armed.
+    pub fn disarm(&mut self) -> bool {
+        self.armed.take().is_some()
+    }
+
     /// GO: play the armed clip as a latch (a new base, temporary clips forgotten) and
     /// disarm. [`DeckChange::None`] if nothing is armed — or if it is already the base.
     pub fn take_armed(&mut self) -> DeckChange {
@@ -277,5 +282,15 @@ mod tests {
         assert_eq!(d.release(1), DeckChange::None);
         assert_eq!(d.armed(), Some(2));
         assert_eq!(d.stop(), DeckChange::None, "already stopped");
+    }
+
+    #[test]
+    fn disarm_clears_the_arm_and_reports_it() {
+        let mut d = ZoneDeck::new(Some(0));
+        assert!(!d.disarm(), "nothing armed");
+        d.arm(3);
+        assert!(d.disarm());
+        assert_eq!(d.armed(), None);
+        assert_eq!(d.active(), Some(0), "disarming never touches what plays");
     }
 }

@@ -49,10 +49,10 @@ fn fs(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let u = (wx - pp.foot_origin.x) / pp.foot_size.x;
     let v = (wy - pp.foot_origin.y) / pp.foot_size.y;
 
-    // Outside the footprint: black. Coverage (applied in composite_zones) confines
-    // the zone precisely; this only needs to cover the footprint superset.
+    // Outside the footprint: transparent. Coverage (applied in composite_zones)
+    // confines the zone precisely; this only needs to cover the footprint superset.
     if (u < 0.0 || u >= 1.0 || v < 0.0 || v >= 1.0) {
-        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
     // Nearest source texel. With mapping_size == foot_size and identity origin,

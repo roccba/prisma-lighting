@@ -25,16 +25,24 @@ pub fn blend_code(mode: BlendMode) -> u32 {
         BlendMode::Add => 1,
         BlendMode::Multiply => 2,
         BlendMode::Screen => 3,
-        // PROVISIONAL: Mask is a luminance key (see shaders/blend.wgsl). Revisit at
-        // M10 when alpha-carrying media exists — operators will expect alpha gating.
+        // Mask gates what is below by the source's ALPHA (LIVE-MODEL-SPEC 2b); the
+        // luminance key is its own mode, LumaKey.
         BlendMode::Mask => 4,
         BlendMode::Max => 5,
         BlendMode::Subtract => 6,
         BlendMode::Min => 7,
+        BlendMode::LumaKey => 8,
     }
 }
 
-/// CPU mirror of the `BlendParams` uniform (`shaders/blend.wgsl`). 32 bytes.
+/// The shader's internal crossfade code (not a [`BlendMode`]): a linear mix of both
+/// premultiplied pictures, for clip transitions. See `shaders/blend.wgsl`.
+const CROSSFADE_CODE: u32 = 9;
+
+/// The default luminance key, `[threshold, softness]` in linear luminance.
+pub const DEFAULT_KEY: [f32; 2] = [0.05, 0.1];
+
+/// CPU mirror of the `BlendParams` uniform (`shaders/blend.wgsl`). 48 bytes.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BlendParams {
@@ -42,7 +50,10 @@ struct BlendParams {
     opacity: f32,
     use_mask: u32,
     _pad0: u32,
+    /// rgb = zone dimmer × colour filter, a = zone dimmer (its opacity).
     zone_scale: [f32; 4],
+    /// LumaKey: x = threshold, y = softness.
+    key: [f32; 4],
 }
 
 /// One source layer to fold into a stack: its rendered texture, how it blends onto
@@ -63,6 +74,9 @@ pub struct ZoneComposite<'a> {
     pub opacity: f32,
     /// The zone's `dimmer × color_filter`, in linear light.
     pub zone_scale: [f32; 3],
+    /// The zone's dimmer: on overlapped cells it is an OPACITY (scales alpha too),
+    /// so a lowered upper zone reveals the one below (LIVE-MODEL-SPEC 2b).
+    pub zone_opacity: f32,
     /// Per-cell mask of the cells this zone's member pixels occupy. Outside it the
     /// zone leaves the accumulator untouched, which is what keeps zones
     /// independent. Build with [`crate::overlap::zone_cell_coverage`].
@@ -216,13 +230,54 @@ impl Compositor {
         mode: BlendMode,
         opacity: f32,
     ) {
+        self.blend_keyed(gpu, dst, src, out, mode, opacity, DEFAULT_KEY);
+    }
+
+    /// [`blend`](Self::blend) with an explicit luminance key `[threshold, softness]`
+    /// (read only by [`BlendMode::LumaKey`]).
+    #[allow(clippy::too_many_arguments)]
+    pub fn blend_keyed(
+        &self,
+        gpu: &crate::Gpu,
+        dst: &wgpu::Texture,
+        src: &wgpu::Texture,
+        out: &wgpu::TextureView,
+        mode: BlendMode,
+        opacity: f32,
+        key: [f32; 2],
+    ) {
         self.blend_inner(
             gpu,
             dst,
             src,
             out,
-            mode,
+            blend_code(mode),
             opacity,
+            key,
+            None,
+            &self.dummy_mask,
+            &self.dummy_mask,
+        );
+    }
+
+    /// A clip transition: `out = mix(dst, src, t)` on all four premultiplied channels.
+    /// Unlike `Normal` at opacity `t`, transparent areas of `src` still fade `dst` out.
+    pub fn crossfade(
+        &self,
+        gpu: &crate::Gpu,
+        dst: &wgpu::Texture,
+        src: &wgpu::Texture,
+        out: &wgpu::TextureView,
+        t: f32,
+    ) {
+        self.blend_inner(
+            gpu,
+            dst,
+            src,
+            out,
+            CROSSFADE_CODE,
+            t,
+            DEFAULT_KEY,
             None,
             &self.dummy_mask,
             &self.dummy_mask,
@@ -242,6 +297,7 @@ impl Compositor {
         mode: BlendMode,
         opacity: f32,
         zone_scale: [f32; 3],
+        zone_opacity: f32,
         cell_mask: &wgpu::Buffer,
         coverage: &wgpu::Buffer,
     ) {
@@ -250,9 +306,10 @@ impl Compositor {
             dst,
             src,
             out,
-            mode,
+            blend_code(mode),
             opacity,
-            Some(zone_scale),
+            DEFAULT_KEY,
+            Some([zone_scale[0], zone_scale[1], zone_scale[2], zone_opacity]),
             cell_mask,
             coverage,
         );
@@ -265,22 +322,24 @@ impl Compositor {
         dst: &wgpu::Texture,
         src: &wgpu::Texture,
         out: &wgpu::TextureView,
-        mode: BlendMode,
+        mode: u32,
         opacity: f32,
-        zone_scale: Option<[f32; 3]>,
+        key: [f32; 2],
+        zone_scale: Option<[f32; 4]>,
         cell_mask: &wgpu::Buffer,
         coverage: &wgpu::Buffer,
     ) {
-        let scale = zone_scale.unwrap_or([1.0, 1.0, 1.0]);
+        let scale = zone_scale.unwrap_or([1.0; 4]);
         gpu.queue.write_buffer(
             &self.uniform,
             0,
             bytemuck::bytes_of(&BlendParams {
-                mode: blend_code(mode),
+                mode,
                 opacity,
                 use_mask: u32::from(zone_scale.is_some()),
                 _pad0: 0,
-                zone_scale: [scale[0], scale[1], scale[2], 1.0],
+                zone_scale: scale,
+                key: [key[0], key[1], 0.0, 0.0],
             }),
         );
         let dst_view = dst.create_view(&wgpu::TextureViewDescriptor::default());
@@ -410,6 +469,7 @@ impl Compositor {
                 zone.mode,
                 zone.opacity,
                 zone.zone_scale,
+                zone.zone_opacity,
                 cell_mask,
                 zone.coverage,
             );
@@ -450,6 +510,7 @@ impl Compositor {
                 zone.mode,
                 zone.opacity,
                 zone.zone_scale,
+                zone.zone_opacity,
                 cell_mask,
                 zone.coverage,
             );
@@ -463,6 +524,7 @@ impl Compositor {
             last.mode,
             last.opacity,
             last.zone_scale,
+            last.zone_opacity,
             cell_mask,
             last.coverage,
         );

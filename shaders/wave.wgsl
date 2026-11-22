@@ -11,9 +11,25 @@ struct Uniforms {
     resolution: vec2<f32>,
     frequency: f32,
     speed: f32,
+    // LIVE-MODEL-SPEC 2b: 0 = transparent background, 1 = black.
+    background: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
+
+// Background (LIVE-MODEL-SPEC 2b): `background` 0 = transparent — the picture gets an
+// alpha (a shape's coverage, a field's brightest channel) — 1 = black, opaque. Colour
+// is premultiplied either way, so over black it is the same picture.
+fn out_alpha(rgb: vec3<f32>, coverage: f32) -> vec4<f32> {
+    if (u.background < 0.5) {
+        return vec4<f32>(rgb, clamp(coverage, 0.0, 1.0));
+    }
+    return vec4<f32>(rgb, 1.0);
+}
+
+fn field_out(rgb: vec3<f32>) -> vec4<f32> {
+    return out_alpha(rgb, max(rgb.r, max(rgb.g, rgb.b)));
+}
 
 const TAU: f32 = 6.283185307179586;
 
@@ -34,5 +50,5 @@ fn fs(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let span = max(u.resolution.x - 1.0, 1.0);
     let x = (frag.x - 0.5) / span;
     let n = 0.5 + 0.5 * sin((x * u.frequency + u.time * u.speed) * TAU);
-    return vec4<f32>(n, n, n, 1.0);
+    return field_out(vec3<f32>(n));
 }

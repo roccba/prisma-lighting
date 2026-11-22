@@ -105,6 +105,8 @@ pub struct TrackContent {
     /// Zone slots, in destination order.
     pub zones: Vec<usize>,
     pub blend_mode: BlendMode,
+    /// `[threshold, softness]` for `BlendMode::LumaKey`.
+    pub key: [f32; 2],
     /// `0.0..=1.0`. Used when there is no [`live`](Self::live) binding.
     pub opacity: f32,
     /// The track's live controls in the Parameter Tree, read every frame. `None` =
@@ -125,6 +127,7 @@ impl TrackContent {
             .map(|(slot, effect)| TrackContent {
                 zones: vec![slot],
                 blend_mode: BlendMode::Normal,
+                key: prisma_render::blend::DEFAULT_KEY,
                 opacity: 1.0,
                 live: None,
                 effects: vec![effect],
@@ -207,6 +210,7 @@ pub fn build_track_effects(
             TrackContent {
                 zones,
                 blend_mode: track.blend_mode,
+                key: [track.key_threshold, track.key_softness],
                 opacity: track.opacity,
                 live: live.get(t).cloned(),
                 effects,
@@ -335,7 +339,12 @@ pub enum ZoneCommand {
     SetPalette { track: usize, colors: Vec<[f32; 3]> },
     /// Change how a track blends in every zone it reaches (the track popover). Live:
     /// no recompile, nothing reallocated.
-    SetBlend { track: usize, mode: BlendMode },
+    SetBlend {
+        track: usize,
+        mode: BlendMode,
+        /// `[threshold, softness]` for `BlendMode::LumaKey`.
+        key: [f32; 2],
+    },
     /// Several commands applied at the SAME frame boundary, in order — what makes a
     /// scene launch or GO land on every track in one frame.
     Batch(Vec<ZoneCommand>),
@@ -485,6 +494,8 @@ struct Instance {
     /// Its track slot (for the track's per-frame opacity / mute / solo).
     track: usize,
     blend_mode: BlendMode,
+    /// The luminance key `[threshold, softness]`, read by `BlendMode::LumaKey`.
+    key: [f32; 2],
     /// What plays now (the incoming side of a crossfade).
     effect: Option<EffectInstance>,
     /// Animation phase of `effect` in show-ns, integrated from the zone's signed speed.
@@ -593,7 +604,7 @@ impl Instance {
         };
         let below: &wgpu::Texture = match &mut self.below {
             Below::Silence => {
-                clear_black(gpu, &t.tex_out);
+                clear_transparent(gpu, &t.tex_out);
                 &t.tex_out
             }
             Below::One(src) => render_src(gpu, clock, Some(src), &t.tex_out, t, (w, h)),
@@ -601,7 +612,7 @@ impl Instance {
                 let a = render_src(gpu, clock, out.as_mut(), &t.tex_out, t, (w, h));
                 let b = render_src(gpu, clock, inn.as_mut(), &t.tex_in, t, (w, h));
                 let p = fade.eased(clock);
-                compositor.blend(gpu, a, b, &view(&t.tex_below), BlendMode::Normal, p);
+                compositor.crossfade(gpu, a, b, &view(&t.tex_below), p);
                 self.below_rendered = true;
                 &t.tex_below
             }
@@ -611,16 +622,11 @@ impl Instance {
                 let c = phase_clock(clock, self.phase_ns);
                 effect.render(gpu, &c, &view(&t.tex), w, h);
             }
-            None => clear_black(gpu, &t.tex),
+            None => clear_transparent(gpu, &t.tex),
         }
-        compositor.blend(
-            gpu,
-            below,
-            &t.tex,
-            &view(&t.tex_mix),
-            BlendMode::Normal,
-            outer.eased(clock),
-        );
+        // A crossfade, not alpha-over: transparent areas of the incoming clip still
+        // fade the outgoing one out.
+        compositor.crossfade(gpu, below, &t.tex, &view(&t.tex_mix), outer.eased(clock));
         Some(&t.tex_mix)
     }
 }
@@ -642,7 +648,7 @@ fn render_src<'t>(
         }
         Some(Src::Frozen) => &targets.tex_frozen,
         None => {
-            clear_black(gpu, target);
+            clear_transparent(gpu, target);
             target
         }
     }
@@ -708,8 +714,16 @@ struct TrackSlot {
 #[derive(Clone, Copy)]
 struct TrackFrame {
     opacity: f32,
-    /// Not muted, and not silenced by another track's solo.
-    audible: bool,
+    /// How present the track is: 1 = audible, 0 = muted or silenced by another
+    /// track's solo. Multiplies the opacity; a track at 0 is skipped. Mute and solo
+    /// are instant today, so this is 0 or 1 — the seam a mute/solo fade would ramp.
+    presence: f32,
+}
+
+impl TrackFrame {
+    fn audible(&self) -> bool {
+        self.presence > 0.0
+    }
 }
 
 /// The per-zone compositor. Implements [`FrameContent`]; install it in place of
@@ -805,6 +819,7 @@ impl ZoneCompositor {
                 per_zone[zone].push(Instance {
                     track: t,
                     blend_mode: track.blend_mode,
+                    key: track.key,
                     effect,
                     phase_ns: PHASE_BIAS_NS,
                     below: Below::Silence,
@@ -856,7 +871,7 @@ impl ZoneCompositor {
         let track_frame = vec![
             TrackFrame {
                 opacity: 1.0,
-                audible: true,
+                presence: 1.0,
             };
             track_slots.len()
         ];
@@ -959,10 +974,12 @@ impl ZoneCompositor {
                     }
                 }
             }
-            ZoneCommand::SetBlend { track, mode } => {
+            ZoneCommand::SetBlend { track, mode, key } => {
                 for k in 0..count(&self.tracks, track) {
                     let a = self.tracks[track].at[k];
-                    self.slots[a.zone].instances[a.index].blend_mode = mode;
+                    let inst = &mut self.slots[a.zone].instances[a.index];
+                    inst.blend_mode = mode;
+                    inst.key = key;
                 }
             }
             ZoneCommand::Batch(cmds) => {
@@ -985,14 +1002,18 @@ impl ZoneCompositor {
             *frame = match &t.live {
                 None => TrackFrame {
                     opacity: t.opacity,
-                    audible: !any_solo,
+                    presence: if any_solo { 0.0 } else { 1.0 },
                 },
                 Some(l) => {
                     let mute = l.mute.read_bool().unwrap_or(false);
                     let solo = l.solo.read_bool().unwrap_or(false);
                     TrackFrame {
                         opacity: l.opacity.read_real().unwrap_or(t.opacity).clamp(0.0, 1.0),
-                        audible: !mute && (!any_solo || solo),
+                        presence: if !mute && (!any_solo || solo) {
+                            1.0
+                        } else {
+                            0.0
+                        },
                     }
                 }
             };
@@ -1004,7 +1025,7 @@ impl ZoneCompositor {
         self.slots[s]
             .instances
             .iter()
-            .any(|i| i.has_content() && self.track_frame[i.track].audible)
+            .any(|i| i.has_content() && self.track_frame[i.track].audible())
     }
 
     /// Render zone `s`'s tracks into its `zone_tex`: straight in when one plain track
@@ -1021,14 +1042,15 @@ impl ZoneCompositor {
             fold: (a, b),
             ..
         } = &mut self.slots[s];
-        let shows = |i: &Instance| i.has_content() && frames[i.track].audible;
+        let shows = |i: &Instance| i.has_content() && frames[i.track].audible();
         let playing = instances.iter().filter(|i| shows(i)).count();
         let Some(last) = instances.iter().rposition(shows) else {
             return;
         };
 
         let only = &instances[last];
-        let plain = only.blend_mode == BlendMode::Normal && frames[only.track].opacity >= 1.0;
+        let f = frames[only.track];
+        let plain = only.blend_mode == BlendMode::Normal && f.opacity * f.presence >= 1.0;
         if playing == 1 && plain && only.fade.is_none() && !force_fold {
             let inst = &mut instances[last];
             if let Some(effect) = inst.effect.as_mut() {
@@ -1038,21 +1060,22 @@ impl ZoneCompositor {
             return;
         }
 
-        clear_black(gpu, a);
+        clear_transparent(gpu, a);
         let mut acc: &wgpu::Texture = a;
         let mut other: &wgpu::Texture = b;
         for (k, inst) in instances.iter_mut().enumerate() {
-            if !(inst.has_content() && frames[inst.track].audible) {
+            if !(inst.has_content() && frames[inst.track].audible()) {
                 continue;
             }
-            let (mode, opacity) = (inst.blend_mode, frames[inst.track].opacity);
+            let f = frames[inst.track];
+            let (mode, opacity, key) = (inst.blend_mode, f.opacity * f.presence, inst.key);
             let Some(tex) = inst.render(gpu, compositor, clock, *mapping) else {
                 continue;
             };
             if k == last {
-                compositor.blend(gpu, acc, tex, &view(zone_tex), mode, opacity);
+                compositor.blend_keyed(gpu, acc, tex, &view(zone_tex), mode, opacity, key);
             } else {
-                compositor.blend(gpu, acc, tex, &view(other), mode, opacity);
+                compositor.blend_keyed(gpu, acc, tex, &view(other), mode, opacity, key);
                 std::mem::swap(&mut acc, &mut other);
             }
         }
@@ -1070,6 +1093,15 @@ fn phase_clock(clock: &ClockSnapshot, phase_ns: f64) -> ClockSnapshot {
 }
 
 /// A zone's linear-light scale for the compositor: `dimmer × color_filter`.
+/// A zone's opacity on overlapped cells: its dimmer × its presence (LIVE-MODEL-SPEC
+/// 2b). Presence is 1 for every zone that is composited at all — a muted or
+/// solo-silenced zone is not composited (`contributes_pixels`) — so it is the seam a
+/// mute/solo fade would ramp; there are no such fades yet.
+fn zone_opacity(zones: &ZoneStates, slot: usize) -> f32 {
+    let presence = 1.0;
+    zones.get(slot).dimmer() * presence
+}
+
 fn zone_scale(zones: &ZoneStates, slot: usize) -> [f32; 3] {
     let z = zones.get(slot);
     let d = z.dimmer();
@@ -1159,11 +1191,11 @@ impl FrameContent for ZoneCompositor {
         //    (via cell_mask); elsewhere it is deferred to the output stage (§5.2.1).
         let Some((&last, rest)) = self.contrib.split_last() else {
             // Nothing contributes: the world framebuffer is black this frame.
-            clear_black(gpu, target);
+            clear_transparent(gpu, target);
             return;
         };
 
-        clear_black(gpu, &self.ping);
+        clear_transparent(gpu, &self.ping);
         let mut acc: &wgpu::Texture = &self.ping;
         let mut other: &wgpu::Texture = &self.pong;
         for &slot in rest {
@@ -1177,6 +1209,7 @@ impl FrameContent for ZoneCompositor {
                 zs.blend_mode,
                 1.0,
                 zone_scale(zones, s),
+                zone_opacity(zones, s),
                 &self.cell_mask,
                 &zs.coverage,
             );
@@ -1193,15 +1226,18 @@ impl FrameContent for ZoneCompositor {
             zs.blend_mode,
             1.0,
             zone_scale(zones, s),
+            zone_opacity(zones, s),
             &self.cell_mask,
             &zs.coverage,
         );
     }
 }
 
-/// Clear an `Rgba16Float` texture to linear-light black — the fold's base and the
-/// no-content frame. A bare render pass with a clear load op; no allocation.
-fn clear_black(gpu: &Gpu, texture: &wgpu::Texture) {
+/// Clear an `Rgba16Float` texture to transparent black (premultiplied 0,0,0,0) — the
+/// fold's base, a missing side of a crossfade, and the no-content frame. Read as rgb
+/// it is black, so the master buffer sees no difference. A bare render pass with a
+/// clear load op; no allocation.
+fn clear_transparent(gpu: &Gpu, texture: &wgpu::Texture) {
     let v = view(texture);
     let mut encoder = gpu
         .device
@@ -1215,7 +1251,7 @@ fn clear_black(gpu: &Gpu, texture: &wgpu::Texture) {
             depth_slice: None,
             resolve_target: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                 store: wgpu::StoreOp::Store,
             },
         })],

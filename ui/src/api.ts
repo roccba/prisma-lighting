@@ -426,7 +426,16 @@ export interface CellInfo {
 }
 
 /** How a track blends onto the ones before it (the Rust enum's names). */
-export type BlendMode = "Normal" | "Add" | "Subtract" | "Multiply" | "Screen" | "Max" | "Min" | "Mask";
+export type BlendMode =
+  | "Normal"
+  | "Add"
+  | "Subtract"
+  | "Multiply"
+  | "Screen"
+  | "Max"
+  | "Min"
+  | "Mask"
+  | "LumaKey";
 
 export type TimeBase = "seconds" | "beats";
 export type Easing = "linear" | "ease_in" | "ease_out" | "ease_in_out";
@@ -448,6 +457,9 @@ export interface TrackInfo {
   /** The first destination zone's display colour (sRGB 0–255). */
   color: [number, number, number];
   blend_mode: BlendMode;
+  /** LumaKey: where the source starts to show, and how far above it it is full (0..1). */
+  key_threshold: number;
+  key_softness: number;
   opacity: number;
   mute: boolean;
   solo: boolean;
@@ -545,8 +557,15 @@ export const setTrackSolo = (track: string, on: boolean) => invoke<void>("main_s
 export const setTrackBehaviour = (track: string, transition: TrackTransition, launch: LaunchMode) =>
   invoke<void>("main_set_track_behaviour", { track, transition, launch });
 
-export const setTrackBlend = (track: string, mode: BlendMode) =>
-  invoke<void>("main_set_track_blend", { track, mode });
+export const setTrackBlend = (
+  track: string,
+  mode: BlendMode,
+  keyThreshold: number | null = null,
+  keySoftness: number | null = null,
+) => invoke<void>("main_set_track_blend", { track, mode, keyThreshold, keySoftness });
+
+/** Disarm every armed clip (`/arm/clear`). */
+export const armClear = () => invoke<void>("main_arm_clear");
 
 /** Stop every track (each with its transition; a second press during the fades cuts). */
 export const stopAll = () => invoke<void>("main_stop_all");
@@ -601,6 +620,8 @@ export interface ParamInfo {
  *  empty (or the zone has no cell to show). */
 export interface EffectPanelInfo {
   track_id: string;
+  /** The cell is armed for GO. */
+  armed: boolean;
   cell_index: number | null;
   /** Whether `cell_index` is the zone's running cell (its edits drive the output live). */
   active: boolean;

@@ -887,6 +887,11 @@ impl EngineHandle {
         self.fire(self.grid.tracks.get(slot).map(|t| &t.stop))
     }
 
+    /// Disarm every armed clip (`/arm/clear`).
+    pub fn clear_arm(&self) -> bool {
+        self.fire(self.grid.arm_clear.as_ref())
+    }
+
     /// Stop every track (`/tracks/stop`), each with its transition; a second Stop All
     /// during the fades cuts them.
     pub fn stop_all(&self) -> bool {
@@ -916,11 +921,21 @@ impl EngineHandle {
         }
     }
 
-    /// Change a track's blend mode, live (applied at the next frame boundary).
-    pub fn set_track_blend(&self, slot: usize, mode: prisma_patch::BlendMode) -> bool {
+    /// Change a track's blend mode (and, for `LumaKey`, its key `[threshold,
+    /// softness]`), live (applied at the next frame boundary).
+    pub fn set_track_blend(
+        &self,
+        slot: usize,
+        mode: prisma_patch::BlendMode,
+        key: [f32; 2],
+    ) -> bool {
         match self.zone_commands.as_ref() {
             Some(sender) if slot < self.grid.tracks.len() => {
-                sender.send(crate::zone_content::ZoneCommand::SetBlend { track: slot, mode })
+                sender.send(crate::zone_content::ZoneCommand::SetBlend {
+                    track: slot,
+                    mode,
+                    key,
+                })
             }
             _ => false,
         }

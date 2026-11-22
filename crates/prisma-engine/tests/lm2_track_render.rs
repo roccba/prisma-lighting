@@ -151,6 +151,7 @@ fn track(zone: usize, live: Option<TrackLive>, effect: Option<EffectInstance>) -
     TrackContent {
         zones: vec![zone],
         blend_mode: BlendMode::Normal,
+        key: prisma_render::blend::DEFAULT_KEY,
         opacity: 1.0,
         live,
         effects: vec![effect],

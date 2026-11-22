@@ -18,6 +18,7 @@
 //! /scene/{i}/arm                 trigger  arm row i on every track that has a clip there
 //! /arm/go                        trigger  play every armed clip, all in the same frame
 //! /tracks/stop                   trigger  stop every track (each with its transition)
+//! /arm/clear                     trigger  disarm every armed clip
 //! ```
 //!
 //! The [`ClipController`] thread subscribes to those, runs each track's
@@ -144,6 +145,8 @@ pub struct GridParams {
     pub go: Option<ParamHandle>,
     /// `/tracks/stop`; `None` before a show registered it.
     pub stop_all: Option<ParamHandle>,
+    /// `/arm/clear`; `None` before a show registered it.
+    pub arm_clear: Option<ParamHandle>,
 }
 
 /// Register every track's, scene's and GO's parameters. A track's opacity / mute /
@@ -218,6 +221,7 @@ pub fn register_clips(tree: &ParameterTree, patch: &Patch, show: &Show) -> GridP
         scene_arm: scene("arm"),
         go: Some(tree.register("/arm/go", ParamDescriptor::trigger("arm.go"))),
         stop_all: Some(tree.register("/tracks/stop", ParamDescriptor::trigger("tracks.stop"))),
+        arm_clear: Some(tree.register("/arm/clear", ParamDescriptor::trigger("arm.clear"))),
     }
 }
 
@@ -264,6 +268,7 @@ enum Action {
     SceneArm(usize),
     Go,
     StopAll,
+    ArmClear,
 }
 
 impl Action {
@@ -320,6 +325,9 @@ impl ClipController {
         }
         if let Some(stop_all) = &grid.stop_all {
             route(stop_all, Action::StopAll);
+        }
+        if let Some(arm_clear) = &grid.arm_clear {
+            route(arm_clear, Action::ArmClear);
         }
         // Subscribe, then prime every trigger cursor at its current count, so nothing
         // fired before start is replayed and nothing fired after is missed.
@@ -380,6 +388,7 @@ impl ClipController {
                             Action::SceneArm(row) => ctl.scene(row, true),
                             Action::Go => ctl.go(),
                             Action::StopAll => ctl.stop_all(),
+                            Action::ArmClear => ctl.arm_clear(),
                         }
                     }
                 }
@@ -501,6 +510,16 @@ impl Controller {
             batch.extend(self.commands_for(slot, change));
         }
         self.send_batch(batch);
+    }
+
+    /// Disarm everything (Esc, `/arm/clear`).
+    fn arm_clear(&mut self) {
+        for slot in 0..self.tracks.len() {
+            if self.decks[slot].disarm() {
+                self.host.armed_changed(self.tracks[slot].track, None);
+                self.publish_states(slot);
+            }
+        }
     }
 
     /// GO: every armed clip plays, in one frame.

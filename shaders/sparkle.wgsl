@@ -16,9 +16,22 @@ struct Uniforms {
     resolution: vec2<f32>,
     density: f32,
     speed: f32,
+    // LIVE-MODEL-SPEC 2b: 0 = transparent background, 1 = black.
+    background: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
+
+// Background (LIVE-MODEL-SPEC 2b): `background` 0 = transparent — the picture gets an
+// alpha (a shape's coverage, a field's brightest channel) — 1 = black, opaque. Colour
+// is premultiplied either way, so over black it is the same picture.
+fn out_alpha(rgb: vec3<f32>, coverage: f32) -> vec4<f32> {
+    if (u.background < 0.5) {
+        return vec4<f32>(rgb, clamp(coverage, 0.0, 1.0));
+    }
+    return vec4<f32>(rgb, 1.0);
+}
+
 
 const TAU: f32 = 6.283185307179586;
 
@@ -53,7 +66,7 @@ fn fs(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     // density also raises the active fraction so the field fills in.
     let active_cut = clamp(1.0 - u.density * 0.05, 0.3, 0.95);
     if (h.x < active_cut) {
-        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+        return out_alpha(vec3<f32>(0.0), 0.0);
     }
 
     // Per-cell phase and rate give each sparkle its own twinkle clock.
@@ -62,5 +75,5 @@ fn fs(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let s = 0.5 + 0.5 * sin(u.time * u.speed * rate + phase);
     // Sharpen the pulse so sparkles read as brief flashes, not slow breathing.
     let v = pow(s, 6.0);
-    return vec4<f32>(v, v, v, 1.0);
+    return out_alpha(vec3<f32>(v), v);
 }

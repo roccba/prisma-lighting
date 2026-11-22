@@ -3,6 +3,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  armClear,
   armGo,
   clockInfo,
   mainZones,
@@ -105,6 +106,20 @@ function MainWindowBody() {
   };
   // The global "Modo armar" (LIVE-MODEL-SPEC §7): while on, every play gesture arms.
   const [armMode, setArmMode] = useState(false);
+  // Whether any clip is armed: shows "Desarmar" beside GO, and makes Esc disarm all.
+  const [anyArmed, setAnyArmed] = useState(false);
+  const armedRef = useRef(false);
+  armedRef.current = anyArmed;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || !armedRef.current || e.defaultPrevented) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      armClear().catch(() => {});
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const refreshZones = () =>
     mainZones()
@@ -445,7 +460,7 @@ function MainWindowBody() {
                   MIDI Learn
                 </button>
               )}
-              <TransportBar armMode={armMode} onArmMode={setArmMode} />
+              <TransportBar armMode={armMode} onArmMode={setArmMode} anyArmed={anyArmed} />
             </>
           }
         />
@@ -465,6 +480,7 @@ function MainWindowBody() {
                 armMode={armMode}
                 rev={gridRev}
                 onChanged={bumpGrid}
+                onArmedChange={setAnyArmed}
               />
             </section>
             <section className="pr-region pr-region-preview">
@@ -532,7 +548,15 @@ function MainWindowBody() {
 
 // --- The global bar (LIVE-MODEL-SPEC §7): tempo, tap, arm mode, GO ----------------------
 
-function TransportBar({ armMode, onArmMode }: { armMode: boolean; onArmMode: (on: boolean) => void }) {
+function TransportBar({
+  armMode,
+  onArmMode,
+  anyArmed,
+}: {
+  armMode: boolean;
+  onArmMode: (on: boolean) => void;
+  anyArmed: boolean;
+}) {
   const [bpm, setBpmState] = useState(120);
   const read = () =>
     clockInfo()
@@ -581,6 +605,11 @@ function TransportBar({ armMode, onArmMode }: { armMode: boolean; onArmMode: (on
       >
         Modo armar
       </button>
+      {anyArmed && (
+        <button type="button" className="pr-btn" onClick={() => armClear().catch(() => {})} title="Desarmar todo (Esc)">
+          Desarmar
+        </button>
+      )}
       <button type="button" className="pr-btn pr-go-btn" onClick={() => armGo().catch(() => {})} title="Lanzar todo lo armado">
         GO
       </button>
