@@ -216,6 +216,9 @@ pub struct ZoneLiveReadout {
     pub strobe_on: bool,
     /// Strobe speed, normalized `0..=1` over its 1–25 Hz range (the UI slider's scale).
     pub strobe_rate: f32,
+    /// White temperature: automatic, or the fixed kelvin.
+    pub white_auto: bool,
+    pub white_kelvin: f32,
 }
 
 /// A snapshot of a track's live controls (LIVE-MODEL-SPEC §5).
@@ -752,6 +755,8 @@ impl EngineHandle {
                 blackout: false,
                 strobe_on: false,
                 strobe_rate: 0.4,
+                white_auto: true,
+                white_kelvin: 4000.0,
             };
         }
         let z = self.live.zone(slot);
@@ -762,7 +767,22 @@ impl EngineHandle {
             blackout: z.blackout.read_real().unwrap_or(0.0) > 0.5,
             strobe_on: z.strobe.on.read_bool().unwrap_or(false),
             strobe_rate: z.strobe.rate.read_norm().unwrap_or(0.4),
+            white_auto: z.white.auto.read_bool().unwrap_or(true),
+            white_kelvin: z.white.kelvin.read_real().unwrap_or(4000.0),
         }
+    }
+
+    /// A zone's white temperature (fixtures with two whites): automatic, or `kelvin`.
+    /// Read by the output stage on its next frame.
+    pub fn set_zone_white(&self, slot: usize, auto: bool, kelvin: f32) {
+        if slot >= self.live.zone_count() {
+            return;
+        }
+        let w = &self.live.zone(slot).white;
+        let src = ui_control_source();
+        self.tree
+            .write_real(&w.auto, if auto { 1.0 } else { 0.0 }, src);
+        self.tree.write_real(&w.kelvin, kelvin, src);
     }
 
     /// The producer for effect swaps (M8-PARTA §3), present only when a show is

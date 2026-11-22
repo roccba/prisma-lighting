@@ -38,7 +38,7 @@ pub const CHANNELS_PER_UNIVERSE: usize = 512;
 pub use error::PatchError;
 pub use fixture::{
     ColorOrder, ComponentSet, Fixture, FixtureProfile, GammaCalibration, Pixel, PixelRole,
-    WireOrder,
+    WhiteMode, WhiteProfile, WireOrder,
 };
 pub use geometry::{cell_of, Rect, WorldTransform};
 pub use index::{LayoutGeneration, PatchIndex, ZoneMembership};

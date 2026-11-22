@@ -52,6 +52,7 @@ fn tube_type() -> FixtureType {
         color_order: prisma_patch::ColorOrder::Grb,
         arrangement: FixtureArrangement::Strip,
         roles: Vec::new(),
+        white: prisma_patch::WhiteProfile::default(),
     }
 }
 

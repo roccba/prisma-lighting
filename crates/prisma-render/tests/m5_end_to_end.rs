@@ -82,6 +82,7 @@ fn build_patch() -> Patch {
                 name: "rgb".into(),
                 components: ComponentSet::Rgb,
                 gamma: GammaCalibration::default(),
+                white: prisma_patch::WhiteProfile::default(),
             },
             pixels: (0..WIDTH)
                 .map(|i| Pixel {

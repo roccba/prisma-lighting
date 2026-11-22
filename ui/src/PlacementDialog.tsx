@@ -73,7 +73,7 @@ const STEP: Record<Rotation, [number, number]> = {
   R315: [1, -1],
 };
 
-const componentCount = (t: FixtureType) => (t.components === "Rgbw" ? 4 : 3);
+const componentCount = (t: FixtureType) => (t.components === "Rgbww" ? 5 : t.components === "Rgbw" ? 4 : 3);
 
 /** One entry of the "Producto" list: a built-in (standard) fixture or one of the user's. */
 interface Product {

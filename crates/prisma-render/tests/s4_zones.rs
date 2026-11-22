@@ -57,6 +57,7 @@ fn build_patch(width: u32, xs: &[f32], zones: &[(&str, Vec<u32>, i32, BlendMode)
                 name: "rgb".into(),
                 components: ComponentSet::Rgb,
                 gamma: GammaCalibration::default(),
+                white: prisma_patch::WhiteProfile::default(),
             },
             pixels: xs
                 .iter()

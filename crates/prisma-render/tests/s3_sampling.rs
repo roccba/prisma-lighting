@@ -130,6 +130,9 @@ fn each_pixel_gathers_its_own_cell() {
         let offset = index.pixel_component_offset(global) as usize;
         let n = index.pixel_component_count(global) as usize;
         for (k, &want) in expected.iter().take(n).enumerate() {
+            // The white slot (RGBW) is not the render's: the output stage derives
+            // whites from R, G, B, so the gather writes 0 there — never the alpha.
+            let want = if k >= 3 { 0.0 } else { want };
             assert_component(
                 &master,
                 offset,
@@ -183,6 +186,9 @@ fn lighting_one_zone_touches_only_its_member_pixels() {
         let n = index.pixel_component_count(global) as usize;
         let expected = pattern(global, 0);
         for (k, &want) in expected.iter().take(n).enumerate() {
+            // The white slot (RGBW) is not the render's: the output stage derives
+            // whites from R, G, B, so the gather writes 0 there — never the alpha.
+            let want = if k >= 3 { 0.0 } else { want };
             assert_component(&master, offset, k, want, "sector-left member");
             lit_components.insert(offset + k);
         }
@@ -214,6 +220,7 @@ fn two_pixels_one_cell() -> Patch {
                 name: "rgb".into(),
                 components: ComponentSet::Rgb,
                 gamma: GammaCalibration::default(),
+                white: prisma_patch::WhiteProfile::default(),
             },
             pixels: vec![
                 Pixel {

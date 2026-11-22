@@ -49,6 +49,7 @@ fn two_pixel_patch(gamma: f32) -> Patch {
                 name: "rgb".into(),
                 components: ComponentSet::Rgb,
                 gamma: GammaCalibration { gamma },
+                white: prisma_patch::WhiteProfile::default(),
             },
             pixels: (0..2)
                 .map(|i| Pixel {

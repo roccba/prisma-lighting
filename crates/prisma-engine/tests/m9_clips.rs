@@ -38,6 +38,7 @@ fn patch() -> Patch {
                 name: "rgb".into(),
                 components: ComponentSet::Rgb,
                 gamma: GammaCalibration::default(),
+                white: prisma_patch::WhiteProfile::default(),
             },
             pixels: (0..4)
                 .map(|i| Pixel {

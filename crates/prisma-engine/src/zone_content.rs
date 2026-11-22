@@ -244,6 +244,8 @@ pub fn seed_live_from_show(tree: &ParameterTree, live: &LiveParams, patch: &Patc
         tree.write_real(&h.speed, l.speed_multiplier, src);
         tree.write_real(&h.solo, if l.solo { 1.0 } else { 0.0 }, src);
         tree.write_real(&h.blackout, if l.blackout { 1.0 } else { 0.0 }, src);
+        tree.write_real(&h.white.auto, if l.white_auto { 1.0 } else { 0.0 }, src);
+        tree.write_real(&h.white.kelvin, l.white_kelvin, src);
     }
 }
 

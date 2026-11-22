@@ -85,13 +85,16 @@ fn lighting_sector_b_applies_gamma_and_leaves_tube_a_dark() {
         "tube A and the gap before tube B must stay dark when only sector-b is lit"
     );
 
-    // Tube B pixel 0 R is channel 20 (index 19). gamma 2.2 darkens a mid value:
-    // 200 → round(255*(200/255)^2.2) = 149 (well away from a rounding boundary),
-    // strictly between 0 and the raw 200 — proof the LUT ran, not identity.
+    // Tube B is RGBW with the default white mode, Extract: the white takes the common
+    // part min(R, G, B) = 100 and R keeps 200 − 100 = 100 (the master buffer's own W
+    // slot is never read — whites are derived from RGB at the output stage). Then gamma
+    // 2.2 darkens both: 100 → round(255*(100/255)^2.2) = 33, strictly between 0 and
+    // the raw 100 — proof the LUT ran, not identity.
     let encoded_r = dmx.data[19];
     assert!(
-        encoded_r > 0 && encoded_r < SOLID[0],
-        "gamma should darken R=200, got {encoded_r}"
+        encoded_r > 0 && encoded_r < 100,
+        "gamma should darken R=100, got {encoded_r}"
     );
-    assert_eq!(encoded_r, 149, "gamma 2.2 on R=200");
+    assert_eq!(encoded_r, 33, "R after extraction, gamma 2.2");
+    assert_eq!(dmx.data[22], 33, "W = min(R, G, B) = 100, gamma 2.2");
 }

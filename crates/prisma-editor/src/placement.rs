@@ -53,6 +53,10 @@ pub struct FixtureType {
     /// unconsumed in M7** — see [`PixelRole`]. `#[serde(default)]` for older libraries.
     #[serde(default)]
     pub roles: Vec<PixelRole>,
+    /// How the white channel(s) are driven (RGBW / RGBWW), copied into each placed
+    /// fixture's profile. `#[serde(default)]` = Extract with default temperatures.
+    #[serde(default)]
+    pub white: prisma_patch::WhiteProfile,
 }
 
 /// **Fixture rotation** — which way a fixture's pixels run from its first pixel (the
@@ -367,6 +371,7 @@ pub fn plan(spec: &PlacementSpec) -> Result<Vec<Fixture>, PlacementError> {
                 name: spec.fixture_type.name.clone(),
                 components: spec.fixture_type.components,
                 gamma: GammaCalibration::default(),
+                white: spec.fixture_type.white,
             },
             pixels,
             zone: spec.zone,
@@ -449,6 +454,7 @@ pub fn builtin_fixture_types() -> Vec<FixtureType> {
         color_order: ColorOrder::Grb,
         arrangement: FixtureArrangement::Strip,
         roles: Vec::new(),
+        white: prisma_patch::WhiteProfile::default(),
     };
     vec![
         tube("Tube 30px (WS2812 GRB)", 30),
@@ -461,6 +467,7 @@ pub fn builtin_fixture_types() -> Vec<FixtureType> {
             color_order: ColorOrder::Grb,
             arrangement: FixtureArrangement::Strip,
             roles: Vec::new(),
+            white: prisma_patch::WhiteProfile::default(),
         },
     ]
 }
@@ -478,6 +485,7 @@ mod tests {
                 color_order: ColorOrder::Rgb,
                 arrangement: FixtureArrangement::Strip,
                 roles: Vec::new(),
+                white: prisma_patch::WhiteProfile::default(),
             },
             start_number: 1,
             rotation: Rotation::R90,

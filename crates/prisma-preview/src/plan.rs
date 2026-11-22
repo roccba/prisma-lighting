@@ -172,16 +172,14 @@ impl PreviewPlan {
     /// Sample one pixel as **linear-light** RGB, with the output stage's flat
     /// parameters applied (§5.2 step 6) and no transfer curve.
     ///
-    /// # White folds into RGB
+    /// # Whites are not read
     ///
-    /// A `W` component is added to all three channels: a white emitter puts white
-    /// light into the room, and the preview shows light. It is added **after** its
-    /// own scaling, which carries the dimmer but not the colour filter — matching
-    /// exactly what `W` gets on the wire (a colour filter is meaningless for a
-    /// white emitter, §5.2 step 6). Preview and wire therefore agree about white
-    /// too, not just about RGB.
+    /// The engine renders RGB only; a fixture's whites are derived from that RGB at
+    /// the output stage (LIVE-MODEL-SPEC, whites). In `Extract` mode the white LED
+    /// takes over the common part, so the light in the room is the RGB asked for —
+    /// which is what the preview shows. The master buffer's white slots hold nothing.
     ///
-    /// Values are **not clamped**: an `Add`-blended zone or a folded `W` can exceed
+    /// Values are **not clamped**: an `Add`-blended zone can exceed
     /// `1.0`, and clamping belongs to the single quantization step, exactly as on
     /// the wire. Out-of-range reads yield `0.0` (M1's bounds-safety stance).
     #[inline]
@@ -196,12 +194,6 @@ impl PreviewPlan {
         let mut rgb = [0.0f32; 3];
         for (channel, out) in rgb.iter_mut().enumerate() {
             *out = scaled(pixel.src[channel], channel, master, overlap, flat);
-        }
-        let white = scaled(pixel.src[3], 3, master, overlap, flat);
-        if white != 0.0 {
-            for c in rgb.iter_mut() {
-                *c += white;
-            }
         }
         rgb
     }

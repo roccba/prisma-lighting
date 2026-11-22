@@ -29,6 +29,7 @@ fn sample_patch() -> (Patch, Uuid, Uuid) {
             name: "WS2812 GRB".into(),
             components: ComponentSet::Rgb,
             gamma: GammaCalibration::default(),
+            white: prisma_patch::WhiteProfile::default(),
         },
         pixels: (0..3)
             .map(|i| Pixel {
@@ -49,6 +50,7 @@ fn sample_patch() -> (Patch, Uuid, Uuid) {
             name: "SK6812 RGBW".into(),
             components: ComponentSet::Rgbw,
             gamma: GammaCalibration { gamma: 2.2 },
+            white: prisma_patch::WhiteProfile::default(),
         },
         pixels: (0..2)
             .map(|i| Pixel {
@@ -312,6 +314,7 @@ fn color_order_permutations_are_correct() {
         name: "p".into(),
         components: ComponentSet::Rgb,
         gamma: GammaCalibration::default(),
+        white: prisma_patch::WhiteProfile::default(),
     };
     assert_eq!(profile.wire_order(ColorOrder::Grb).as_slice(), &[1, 0, 2]);
 
@@ -320,6 +323,7 @@ fn color_order_permutations_are_correct() {
         name: "p".into(),
         components: ComponentSet::Rgbw,
         gamma: GammaCalibration::default(),
+        white: prisma_patch::WhiteProfile::default(),
     };
     assert_eq!(rgbw.wire_order(ColorOrder::Grb).as_slice(), &[1, 0, 2, 3]);
 }

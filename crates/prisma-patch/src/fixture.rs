@@ -19,6 +19,9 @@ pub enum ComponentSet {
     Rgb,
     /// Red, Green, Blue, White — 4 components. White is canonical index 3.
     Rgbw,
+    /// Red, Green, Blue, warm White, cool White — 5 components. Warm is canonical
+    /// index 3, cool 4.
+    Rgbww,
 }
 
 impl ComponentSet {
@@ -29,6 +32,69 @@ impl ComponentSet {
         match self {
             ComponentSet::Rgb => 3,
             ComponentSet::Rgbw => 4,
+            ComponentSet::Rgbww => 5,
+        }
+    }
+
+    /// How many white emitters a pixel has (0, 1 or 2).
+    #[inline]
+    pub const fn whites(self) -> u8 {
+        self.count() - 3
+    }
+}
+
+/// How the output stage drives a fixture's white channel(s) from the engine's RGB
+/// (LIVE-MODEL-SPEC, whites). The engine renders RGB only; whites are derived per
+/// pixel at the output stage, after the flat parameters, in linear light.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WhiteMode {
+    /// Whites at 0: the fixture is driven as RGB.
+    Off,
+    /// `white = min(R, G, B)`, subtracted from R, G and B (the white LED takes over
+    /// the common part).
+    #[default]
+    Extract,
+    /// `white = min(R, G, B)`, added on top of R, G and B (brighter, less exact).
+    Add,
+}
+
+/// A profile's white emitters: the mode and their colour temperatures, in kelvin.
+/// RGBW uses `kelvin`; RGBWW splits the white between `warm_kelvin` and
+/// `cool_kelvin` by the colour temperature asked for (the zone's, or the colour's own
+/// in automatic mode).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WhiteProfile {
+    #[serde(default)]
+    pub mode: WhiteMode,
+    /// The single white's temperature (RGBW).
+    #[serde(default = "default_white_kelvin")]
+    pub kelvin: f32,
+    /// The warm white's temperature (RGBWW).
+    #[serde(default = "default_warm_kelvin")]
+    pub warm_kelvin: f32,
+    /// The cool white's temperature (RGBWW).
+    #[serde(default = "default_cool_kelvin")]
+    pub cool_kelvin: f32,
+}
+
+fn default_white_kelvin() -> f32 {
+    4000.0
+}
+fn default_warm_kelvin() -> f32 {
+    2700.0
+}
+fn default_cool_kelvin() -> f32 {
+    6500.0
+}
+
+impl Default for WhiteProfile {
+    fn default() -> Self {
+        WhiteProfile {
+            mode: WhiteMode::Extract,
+            kelvin: default_white_kelvin(),
+            warm_kelvin: default_warm_kelvin(),
+            cool_kelvin: default_cool_kelvin(),
         }
     }
 }
@@ -72,7 +138,7 @@ impl ColorOrder {
 /// to decide, per DMX channel, which byte of the canonical master buffer to pull.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WireOrder {
-    entries: [u8; 4],
+    entries: [u8; 5],
     len: u8,
 }
 
@@ -138,6 +204,9 @@ pub struct FixtureProfile {
     pub components: ComponentSet,
     #[serde(default)]
     pub gamma: GammaCalibration,
+    /// White channel(s): how they are derived from RGB (ignored for `Rgb`).
+    #[serde(default)]
+    pub white: WhiteProfile,
 }
 
 impl FixtureProfile {
@@ -154,12 +223,17 @@ impl FixtureProfile {
         let rgb = order.rgb_permutation();
         match self.components {
             ComponentSet::Rgb => WireOrder {
-                entries: [rgb[0], rgb[1], rgb[2], 0],
+                entries: [rgb[0], rgb[1], rgb[2], 0, 0],
                 len: 3,
             },
             ComponentSet::Rgbw => WireOrder {
-                entries: [rgb[0], rgb[1], rgb[2], 3],
+                entries: [rgb[0], rgb[1], rgb[2], 3, 0],
                 len: 4,
+            },
+            // Whites last, warm then cool (arbitrary white placement is deferred).
+            ComponentSet::Rgbww => WireOrder {
+                entries: [rgb[0], rgb[1], rgb[2], 3, 4],
+                len: 5,
             },
         }
     }

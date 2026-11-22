@@ -54,6 +54,7 @@ fn two_pixel_patch(gamma: f32, components: ComponentSet, order: ColorOrder) -> P
                 name: "p".into(),
                 components,
                 gamma: GammaCalibration { gamma },
+                white: prisma_patch::WhiteProfile::default(),
             },
             pixels: (0..2)
                 .map(|i| Pixel {
@@ -273,48 +274,41 @@ fn colour_order_is_a_wire_fact_and_never_reaches_the_preview() {
 }
 
 #[test]
-fn white_folds_into_rgb_carrying_the_dimmer_but_not_the_colour_filter() {
-    // A white emitter puts white light in the room, so the preview adds W to all
-    // three channels. It is scaled by the dimmer alone — a colour filter has no
-    // meaning for a white emitter (§5.2 step 6) — which is exactly what W gets on
-    // the wire. So preview and wire agree about white too.
+fn the_preview_shows_the_rgb_asked_for_and_the_wire_derives_the_white() {
+    // The engine is RGB: the preview shows the RGB asked for (flat parameters applied)
+    // and never reads the master buffer's white slot. The wire derives the white from
+    // that same RGB (Extract: W = min(R, G, B), subtracted), so the light in the room
+    // is the same colour the preview shows.
     let patch = two_pixel_patch(1.0, ComponentSet::Rgbw, ColorOrder::Rgb);
     let index = patch.compile().unwrap();
     let preview = PreviewPlan::compile(&patch, &index);
     let snapshot = split_snapshot(0, 4);
 
-    let master = master_of(&[0.25, 0.125, 0.0625, 0.5, 0.0, 0.0, 0.0, 0.0]);
+    // A warm grey; the W slot holds garbage that must reach neither output.
+    let master = master_of(&[0.5, 0.375, 0.25, 0.9, 0.0, 0.0, 0.0, 0.0]);
     let mut flat = FlatParams::identity(2);
-    // Blue filtered to zero, so a tinted white would be visible as a zero blue.
-    flat.set_zone(0, 0.5, [1.0, 0.5, 0.0]);
+    flat.set_zone(0, 0.5, [1.0, 1.0, 1.0]);
 
     let mut out = Vec::new();
     preview.sample_into(&master, Some(&snapshot), &flat, &mut out);
-
-    let white = 0.5 * 0.5; // dimmer only
+    let rgb = [0.25, 0.1875, 0.125];
     assert_eq!(
-        out[0],
-        [
-            0.25 * (0.5 * 1.0) + white,
-            0.125 * (0.5 * 0.5) + white,
-            0.0625 * (0.5 * 0.0) + white,
-        ]
-    );
-    assert!(
-        out[0][2] > 0.0,
-        "blue is filtered out of the emitters, but the white emitter still lights"
+        out[0], rgb,
+        "the preview shows the dimmed RGB, no white folded in"
     );
 
     let plan = OutputPlan::compile(&patch, &index).unwrap();
     let data = wire(&index, plan, &master, Some(&snapshot), &flat);
+    let w = 0.125;
     assert_eq!(
-        data[2], 0,
-        "the blue emitter is filtered to zero on the wire"
-    );
-    assert_eq!(
-        data[3],
-        wire_code(white),
-        "the white emitter carries the dimmer only — same as the preview folds in"
+        &data[..4],
+        &[
+            wire_code(rgb[0] - w),
+            wire_code(rgb[1] - w),
+            wire_code(rgb[2] - w),
+            wire_code(w)
+        ],
+        "the wire moves min(R, G, B) to the white emitter"
     );
 }
 

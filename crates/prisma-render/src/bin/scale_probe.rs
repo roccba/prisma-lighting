@@ -118,6 +118,7 @@ fn build_patch(pixels: u32) -> Patch {
                 name: "rgb".into(),
                 components: ComponentSet::Rgb,
                 gamma: GammaCalibration::default(),
+                white: prisma_patch::WhiteProfile::default(),
             },
             pixels: pixel_defs,
             zone: Uuid::nil(),

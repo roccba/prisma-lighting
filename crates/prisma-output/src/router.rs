@@ -299,6 +299,7 @@ mod tests {
                     name: "p".into(),
                     components: ComponentSet::Rgb,
                     gamma: GammaCalibration::default(),
+                    white: prisma_patch::WhiteProfile::default(),
                 },
                 pixels: vec![Pixel {
                     index: 0,

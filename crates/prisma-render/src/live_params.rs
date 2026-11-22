@@ -39,7 +39,7 @@ use std::time::Instant;
 use prisma_core::descriptor::{Curve, ParamDescriptor, RealRange};
 use prisma_core::zone::ZoneStates;
 use prisma_core::{ParamHandle, ParameterTree};
-use prisma_output::plan::FlatParams;
+use prisma_output::plan::{FlatParams, ZoneWhite};
 use prisma_output::scheduler::FlatParamSource;
 use prisma_patch::Patch;
 
@@ -72,7 +72,23 @@ pub struct ZoneHandles {
     pub solo: ParamHandle,
     pub blackout: ParamHandle,
     pub strobe: StrobeHandles,
+    /// "Temperatura de blanco" for fixtures with two whites: automatic (follow the
+    /// colour) and the fixed temperature used when it is off.
+    pub white: WhiteHandles,
 }
+
+/// A zone's white-temperature controls.
+#[derive(Clone)]
+pub struct WhiteHandles {
+    /// Toggle: on = follow the colour asked for.
+    pub auto: ParamHandle,
+    /// Level in kelvin, [`WHITE_KELVIN_MIN`]..[`WHITE_KELVIN_MAX`].
+    pub kelvin: ParamHandle,
+}
+
+/// The white-temperature range, in kelvin.
+pub const WHITE_KELVIN_MIN: f32 = 2000.0;
+pub const WHITE_KELVIN_MAX: f32 = 10000.0;
 
 /// Handles for the master section.
 #[derive(Clone)]
@@ -252,6 +268,24 @@ impl LiveParams {
                             ParamDescriptor::unit_level("zone.strobe.duty", 0.5),
                         ),
                     },
+                    white: WhiteHandles {
+                        auto: tree.register(
+                            &format!("{base}/white/auto"),
+                            ParamDescriptor::toggle("zone.white.auto", true),
+                        ),
+                        kelvin: tree.register(
+                            &format!("{base}/white/temp"),
+                            ParamDescriptor::level(
+                                "zone.white.temp",
+                                RealRange {
+                                    min: WHITE_KELVIN_MIN,
+                                    max: WHITE_KELVIN_MAX,
+                                },
+                                Curve::Linear,
+                                (4000.0 - WHITE_KELVIN_MIN) / (WHITE_KELVIN_MAX - WHITE_KELVIN_MIN),
+                            ),
+                        ),
+                    },
                 }
             })
             .collect();
@@ -355,6 +389,13 @@ impl FlatParamSource for LiveParams {
                 slot,
                 z.dimmer.read_real().unwrap_or(0.0) * gate,
                 self.zone_color(slot),
+            );
+            into.set_zone_white(
+                slot,
+                ZoneWhite {
+                    auto: z.white.auto.read_bool().unwrap_or(true),
+                    kelvin: z.white.kelvin.read_real().unwrap_or(4000.0),
+                },
             );
         }
     }

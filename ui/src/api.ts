@@ -90,7 +90,21 @@ export interface SelectionAggregate {
   channel_max: number;
 }
 
-export type ComponentSet = "Rgb" | "Rgbw";
+export type ComponentSet = "Rgb" | "Rgbw" | "Rgbww";
+
+/** How a profile drives its white channel(s) from RGB at the output stage. */
+export type WhiteMode = "off" | "extract" | "add";
+
+/** A profile's whites: mode and temperatures (kelvin). RGBW uses `kelvin`; RGBWW
+ *  splits between `warm_kelvin` and `cool_kelvin`. */
+export interface WhiteProfile {
+  mode: WhiteMode;
+  kelvin: number;
+  warm_kelvin: number;
+  cool_kelvin: number;
+}
+
+export const DEFAULT_WHITE: WhiteProfile = { mode: "extract", kelvin: 4000, warm_kelvin: 2700, cool_kelvin: 6500 };
 export type ColorOrder = "Rgb" | "Rbg" | "Grb" | "Gbr" | "Brg" | "Bgr";
 
 /** Physical pixel layout of a fixture type (§3.2). Only `Strip` in M7. */
@@ -119,6 +133,8 @@ export interface FixtureType {
   color_order: ColorOrder;
   arrangement: FixtureArrangement;
   roles: PixelRole[];
+  /** How its white channel(s) are driven (RGBW / RGBWW). */
+  white: WhiteProfile;
 }
 
 /** The operator's reusable fixture library (§3.2), stored in its own file. */
@@ -235,6 +251,11 @@ export interface ZoneInfo {
   blackout: boolean;
   strobe_on: boolean;
   strobe_rate: number; // 0..1 over 1–25 Hz
+  /** White temperature for two-white fixtures: automatic, or `white_kelvin`. */
+  white_auto: boolean;
+  white_kelvin: number;
+  /** The zone has RGBWW fixtures (only then is the white control shown). */
+  has_dual_white: boolean;
 }
 
 /** Every zone of the running show, in slot order, with live controls. */
@@ -264,6 +285,10 @@ export const setZoneStrobeOn = (zone: string, on: boolean) =>
 /** Set a zone's strobe speed in Hz (1–25). */
 export const setZoneStrobeRate = (zone: string, rate: number) =>
   invoke<void>("main_set_zone_strobe_rate", { zone, rate });
+
+/** A zone's white temperature (RGBWW): automatic, or a fixed `kelvin`. */
+export const setZoneWhite = (zone: string, auto: boolean, kelvin: number) =>
+  invoke<void>("main_set_zone_white", { zone, auto, kelvin });
 
 // --- Global operation bar (M8 step 6) ---
 

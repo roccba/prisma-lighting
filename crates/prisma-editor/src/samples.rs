@@ -81,6 +81,7 @@ fn tube(
             name: "60px WS2812 (GRB)".into(),
             components: ComponentSet::Rgb,
             gamma: GammaCalibration::default(),
+            white: prisma_patch::WhiteProfile::default(),
         },
         pixels,
         zone,

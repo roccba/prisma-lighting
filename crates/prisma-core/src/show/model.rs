@@ -212,6 +212,16 @@ pub struct ZoneLive {
     pub speed_multiplier: f32,
     pub solo: bool,
     pub blackout: bool,
+    /// "Temperatura de blanco" (fixtures with two whites): follow the colour asked for…
+    #[serde(default = "default_true")]
+    pub white_auto: bool,
+    /// …or this fixed temperature, in kelvin.
+    #[serde(default = "default_white_kelvin")]
+    pub white_kelvin: f32,
+}
+
+fn default_white_kelvin() -> f32 {
+    4000.0
 }
 
 impl Default for ZoneLive {
@@ -222,6 +232,8 @@ impl Default for ZoneLive {
             speed_multiplier: 1.0,
             solo: false,
             blackout: false,
+            white_auto: true,
+            white_kelvin: default_white_kelvin(),
         }
     }
 }

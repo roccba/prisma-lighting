@@ -602,6 +602,8 @@ input, textarea, [contenteditable="true"] {
 
 /* Footer: solo / mute · strobe trigger · strobe rate. */
 .pr-zonecard-footer { display: flex; align-items: center; gap: 4px; }
+.pr-zonecard-white { display: flex; align-items: center; gap: 6px; }
+.pr-zonecard-faderval.is-off { opacity: .45; }
 .pr-zonecard-sm { width: 24px; height: 22px; padding: 0; font-size: var(--fs-small); flex: 0 0 auto; }
 
 /* --- Per-zone strobe (§3.6): a trigger button + a 0..1 rate slider, both in the footer --- */

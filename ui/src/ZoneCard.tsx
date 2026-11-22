@@ -8,6 +8,7 @@ import {
   setZoneSpeed,
   setZoneStrobeOn,
   setZoneStrobeRate,
+  setZoneWhite,
   type ZoneInfo,
 } from "./api";
 import { strobeHz } from "./strobe";
@@ -73,6 +74,19 @@ export function ZoneCard({ zone, slot, selected, onSelect, registerPreview }: Zo
   const [strobeLatched, setStrobeLatched] = useState(false);
   const [strobeRemote, setStrobeRemote] = useState(zone.strobe_on);
   useEffect(() => setStrobeRate(zone.strobe_rate), [zone.strobe_rate]);
+
+  // "Temperatura de blanco" (RGBWW fixtures only): A = follow the colour asked for, or a
+  // fixed temperature in kelvin (drag the value). Shown only when the zone has them.
+  const [whiteAuto, setWhiteAuto] = useState(zone.white_auto);
+  const [whiteKelvin, setWhiteKelvin] = useState(zone.white_kelvin);
+  useEffect(() => setWhiteAuto(zone.white_auto), [zone.white_auto]);
+  useEffect(() => setWhiteKelvin(zone.white_kelvin), [zone.white_kelvin]);
+  const changeWhite = (auto: boolean, kelvin: number) => {
+    const k = Math.round(Math.max(2000, Math.min(10000, kelvin)) / 50) * 50;
+    setWhiteAuto(auto);
+    setWhiteKelvin(k);
+    setZoneWhite(zone.id, auto, k).catch(() => {});
+  };
   useEffect(() => setStrobeRemote(zone.strobe_on), [zone.strobe_on]);
   const strobeOn = strobeHeld || strobeLatched || strobeRemote;
 
@@ -255,6 +269,33 @@ export function ZoneCard({ zone, slot, selected, onSelect, registerPreview }: Zo
           {Math.round(strobeHz(strobeRate))}
         </span>
       </div>
+      {zone.has_dual_white && (
+        <div className="pr-zonecard-white" onPointerDown={(e) => e.stopPropagation()}>
+          <span className="pr-zonecard-faderlbl" title="Temperatura de blanco">BLANCO</span>
+          <button
+            type="button"
+            className={`pr-btn pr-zonecard-sm${whiteAuto ? " is-active" : ""}`}
+            onClick={() => changeWhite(!whiteAuto, whiteKelvin)}
+            title="Automático: el blanco sigue el color pedido"
+          >
+            A
+          </button>
+          <span
+            className={`pr-zonecard-faderval${whiteAuto ? " is-off" : ""}`}
+            title="Temperatura de blanco fija (arrastrá para cambiarla)"
+            onPointerDown={scrubHandler(() => ({
+              get: () => whiteKelvin,
+              set: (v: number) => changeWhite(false, v),
+              min: 2000,
+              max: 10000,
+              perPixel: 25,
+              step: 50,
+            }))}
+          >
+            {whiteKelvin}K
+          </span>
+        </div>
+      )}
     </div>
   );
 }

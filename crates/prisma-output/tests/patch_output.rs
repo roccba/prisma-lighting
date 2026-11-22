@@ -43,6 +43,7 @@ fn grb_patch() -> Patch {
                 name: "WS2812 GRB".into(),
                 components: ComponentSet::Rgb,
                 gamma: GammaCalibration::default(), // gamma 1.0 = identity
+                white: prisma_patch::WhiteProfile::default(),
             },
             pixels: vec![
                 Pixel {

@@ -52,6 +52,7 @@ fn rig(zones: usize, per_zone: u32) -> Patch {
                 name: "rgb".into(),
                 components: ComponentSet::Rgb,
                 gamma: GammaCalibration::default(),
+                white: prisma_patch::WhiteProfile::default(),
             },
             pixels: (0..width)
                 .map(|i| Pixel {

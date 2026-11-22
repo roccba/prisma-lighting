@@ -36,6 +36,11 @@ use std::collections::HashMap;
 /// universe). Encodes as `0`.
 const SRC_NONE: u32 = u32::MAX;
 
+/// Sentinel: a pixel without white emitters.
+const WHITE_NONE: u16 = u16::MAX;
+/// Sentinel: a pixel whose fixture belongs to no zone.
+const ZONE_NONE: u16 = u16::MAX;
+
 /// Sentinel LUT id meaning "identity" (pass the value through, no gamma).
 const LUT_IDENTITY: u16 = u16::MAX;
 
@@ -43,6 +48,15 @@ const LUT_IDENTITY: u16 = u16::MAX;
 /// master buffer, and which gamma LUT to apply.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ChannelMap {
+    /// The pixel's first component offset (its R) — what a white-capable pixel's
+    /// channels share, so the encoder derives the whole pixel once.
+    pixel: u32,
+    /// Index into [`OutputPlan::whites`] for a pixel with white emitters, else
+    /// [`WHITE_NONE`] (a plain RGB pixel: each channel is read as it is).
+    white: u16,
+    /// The pixel's zone slot (its fixture's zone), for the zone's white temperature;
+    /// [`ZONE_NONE`] if the fixture has none.
+    zone: u16,
     /// Component (f16 element) offset into the canonical master buffer, or
     /// [`SRC_NONE`].
     src: u32,
@@ -56,6 +70,9 @@ struct ChannelMap {
 
 impl ChannelMap {
     const GAP: ChannelMap = ChannelMap {
+        pixel: SRC_NONE,
+        white: WHITE_NONE,
+        zone: ZONE_NONE,
         src: SRC_NONE,
         lut: LUT_IDENTITY,
         channel: 0,
@@ -112,6 +129,26 @@ fn quantize_linear(v: f32) -> usize {
 pub struct FlatParams {
     master: [f32; 4],
     zones: Vec<[f32; 4]>,
+    /// Each zone's white temperature, for fixtures with two whites (RGBWW).
+    zone_white: Vec<ZoneWhite>,
+}
+
+/// A zone's live "Temperatura de blanco": automatic (follow the colour asked for)
+/// or a fixed temperature in kelvin. Read by RGBWW fixtures to split their white
+/// between the warm and the cool emitter.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ZoneWhite {
+    pub auto: bool,
+    pub kelvin: f32,
+}
+
+impl Default for ZoneWhite {
+    fn default() -> Self {
+        ZoneWhite {
+            auto: true,
+            kelvin: 4000.0,
+        }
+    }
 }
 
 #[inline]
@@ -131,7 +168,21 @@ impl FlatParams {
         Self {
             master: [1.0; 4],
             zones: vec![[1.0; 4]; zone_count],
+            zone_white: vec![ZoneWhite::default(); zone_count],
         }
+    }
+
+    /// Set one zone's white temperature (out-of-range slots are ignored).
+    pub fn set_zone_white(&mut self, slot: usize, white: ZoneWhite) {
+        if let Some(z) = self.zone_white.get_mut(slot) {
+            *z = white;
+        }
+    }
+
+    /// A zone's white temperature; automatic for an unknown slot.
+    #[inline]
+    pub fn zone_white(&self, slot: usize) -> ZoneWhite {
+        self.zone_white.get(slot).copied().unwrap_or_default()
     }
 
     pub fn set_master(&mut self, dimmer: f32, color: [f32; 3]) {
@@ -225,6 +276,72 @@ pub fn scale_component(
     lin * flat.master_scale(channel)
 }
 
+/// The colour temperature (kelvin) of a linear-light sRGB colour: its CIE xy
+/// chromaticity through McCamy's approximation, clamped to 1000–25000 K. Black has
+/// no temperature: neutral D65 (6504 K) is returned.
+pub fn color_temperature(rgb: [f32; 3]) -> f32 {
+    let [r, g, b] = rgb;
+    let x = 0.4124 * r + 0.3576 * g + 0.1805 * b;
+    let y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    let z = 0.0193 * r + 0.1192 * g + 0.9505 * b;
+    let sum = x + y + z;
+    if sum <= 1e-6 {
+        return 6504.0;
+    }
+    let (cx, cy) = (x / sum, y / sum);
+    let n = (cx - 0.3320) / (0.1858 - cy);
+    let cct = 449.0 * n * n * n + 3525.0 * n * n + 6823.3 * n + 5520.33;
+    cct.clamp(1000.0, 25000.0)
+}
+
+/// Derive a pixel's wire components from its RGB (linear light, flat parameters
+/// already applied): `[R, G, B, W1, W2]` — W1 is the single white (RGBW) or the warm
+/// one (RGBWW), W2 the cool one. `whites` is how many white emitters the pixel has.
+///
+/// - `Off`: whites 0, RGB as is.
+/// - `Extract`: `w = min(R, G, B)` goes to the white(s) and is subtracted from RGB.
+/// - `Add`: `w = min(R, G, B)` goes to the white(s), RGB as is.
+///
+/// Two whites split `w` by temperature, interpolated in mireds (perceptually even):
+/// the zone's fixed temperature, or — in automatic mode — the colour's own.
+pub fn derive_whites(
+    rgb: [f32; 3],
+    whites: u8,
+    profile: &prisma_patch::WhiteProfile,
+    zone: ZoneWhite,
+) -> [f32; 5] {
+    use prisma_patch::WhiteMode;
+    let [r, g, b] = rgb;
+    if whites == 0 || profile.mode == WhiteMode::Off {
+        return [r, g, b, 0.0, 0.0];
+    }
+    let w = r.min(g).min(b).max(0.0);
+    let base = match profile.mode {
+        WhiteMode::Extract => [r - w, g - w, b - w],
+        _ => [r, g, b],
+    };
+    if whites == 1 {
+        return [base[0], base[1], base[2], w, 0.0];
+    }
+    let kelvin = if zone.auto {
+        color_temperature(rgb)
+    } else {
+        zone.kelvin
+    };
+    let mired = |k: f32| 1.0e6 / k.max(1.0);
+    let (mw, mc, m) = (
+        mired(profile.warm_kelvin),
+        mired(profile.cool_kelvin),
+        mired(kelvin),
+    );
+    let cool = if (mw - mc).abs() < 1e-6 {
+        0.5
+    } else {
+        ((mw - m) / (mw - mc)).clamp(0.0, 1.0)
+    };
+    [base[0], base[1], base[2], w * (1.0 - cool), w * cool]
+}
+
 /// A patch compiled into per-universe, per-channel wire instructions, tagged with
 /// the [`LayoutGeneration`] it was built against.
 #[derive(Debug, Clone)]
@@ -233,6 +350,9 @@ pub struct OutputPlan {
     universes: Vec<UniversePlan>,
     /// Interned gamma LUTs, referenced by [`ChannelMap::lut`].
     luts: Vec<GammaLut>,
+    /// White profiles of the fixtures that have whites, referenced by
+    /// [`ChannelMap::white`], with their white count.
+    whites: Vec<(prisma_patch::WhiteProfile, u8)>,
 }
 
 /// Errors from compiling a patch into an [`OutputPlan`].
@@ -302,6 +422,10 @@ impl OutputPlan {
         let plan = &self.universes[index];
         out.clear();
         out.reserve(plan.channel.len());
+        // A white-capable pixel is derived once, then each of its (consecutive)
+        // channels reads its component from here.
+        let mut cached_pixel = SRC_NONE;
+        let mut cached = [0.0f32; 5];
         for map in plan.channel.iter() {
             if map.src == SRC_NONE {
                 out.push(0);
@@ -327,8 +451,30 @@ impl OutputPlan {
 
             // --- Flat parameters, in linear light, BEFORE gamma (§5.2 step 6) ---
             //
-            // Shared with the preview by construction — see [`scale_component`].
-            let lin = scale_component(raw, map.src as usize, channel, overlap, flat);
+            // Shared with the preview by construction — see [`scale_component`]. A
+            // pixel with whites scales its RGB the same way, then derives the whites
+            // from that RGB (the engine renders RGB only; the white slots of the
+            // master buffer are never read).
+            let lin = if map.white == WHITE_NONE {
+                scale_component(raw, map.src as usize, channel, overlap, flat)
+            } else {
+                if map.pixel != cached_pixel {
+                    let comp = |k: usize| {
+                        let src = map.pixel as usize + k;
+                        let v = master.get(src).map(|h| h.to_f32()).unwrap_or(0.0);
+                        scale_component(v, src, k, overlap, flat)
+                    };
+                    let (profile, whites) = &self.whites[map.white as usize];
+                    let zone = if map.zone == ZONE_NONE {
+                        ZoneWhite::default()
+                    } else {
+                        flat.zone_white(map.zone as usize)
+                    };
+                    cached = derive_whites([comp(0), comp(1), comp(2)], *whites, profile, zone);
+                    cached_pixel = map.pixel;
+                }
+                cached[channel.min(4)]
+            };
 
             // --- Then, and only then, the single quantization to the wire ---
             //
@@ -354,9 +500,22 @@ impl OutputPlan {
         // (ascending port address) so transport wiring is stable.
         let mut by_universe: HashMap<u16, Vec<ChannelMap>> = HashMap::new();
         let mut lut_interner = LutInterner::new();
+        let mut whites: Vec<(prisma_patch::WhiteProfile, u8)> = Vec::new();
 
         for fixture in &patch.fixtures {
             let lut = lut_interner.intern(fixture.profile.gamma.gamma);
+            let n_whites = fixture.profile.components.whites();
+            let white = if n_whites == 0 {
+                WHITE_NONE
+            } else {
+                whites.push((fixture.profile.white, n_whites));
+                (whites.len() - 1) as u16
+            };
+            let zone = patch
+                .zones
+                .iter()
+                .position(|z| z.id == fixture.zone)
+                .map_or(ZONE_NONE, |slot| slot as u16);
             for pixel in &fixture.pixels {
                 let global = index.global_index(fixture.id, pixel.index).ok_or(
                     PlanError::UnresolvedPixel {
@@ -381,6 +540,9 @@ impl OutputPlan {
                         channels.resize(c + 1, ChannelMap::GAP);
                     }
                     channels[c] = ChannelMap {
+                        pixel: base,
+                        white,
+                        zone,
                         src: base + canonical as u32,
                         lut,
                         channel: canonical,
@@ -402,6 +564,7 @@ impl OutputPlan {
             generation: index.generation(),
             universes,
             luts: lut_interner.into_luts(),
+            whites,
         })
     }
 
@@ -416,6 +579,9 @@ impl OutputPlan {
             .map(|u| {
                 let channel = (0..u.channel_count)
                     .map(|c| ChannelMap {
+                        pixel: SRC_NONE,
+                        white: WHITE_NONE,
+                        zone: ZONE_NONE,
                         src: (u.source_offset + c) as u32,
                         lut: LUT_IDENTITY,
                         // A layout-less byte range: we cannot know which channel
@@ -434,6 +600,7 @@ impl OutputPlan {
             generation: LayoutGeneration::NONE,
             universes,
             luts: Vec::new(),
+            whites: Vec::new(),
         }
     }
 }
@@ -514,6 +681,7 @@ mod tests {
                 name: "p".into(),
                 components: ComponentSet::Rgb,
                 gamma: GammaCalibration { gamma },
+                white: prisma_patch::WhiteProfile::default(),
             },
             pixels: vec![Pixel {
                 index: 0,
@@ -546,6 +714,118 @@ mod tests {
         let mut out = Vec::new();
         plan.encode_into(0, &master, None, &FlatParams::identity(0), None, &mut out);
         assert_eq!(out, vec![20, 10, 30], "GRB wire order");
+    }
+
+    /// A one-pixel fixture with whites, at universe 1 channel 1.
+    fn white_fixture(components: ComponentSet, mode: prisma_patch::WhiteMode) -> Fixture {
+        let mut f = rgb_fixture(Uuid::from_u128(1), 1, 1, ColorOrder::Rgb, 1.0);
+        f.profile.components = components;
+        f.profile.white.mode = mode;
+        f
+    }
+
+    /// Encode one white-capable pixel whose master buffer holds `rgb` (its white
+    /// slots hold garbage, which must never reach the wire).
+    fn encode_white(fixture: Fixture, rgb: [u8; 3]) -> Vec<u8> {
+        let whites = fixture.profile.components.whites() as usize;
+        let patch = Patch {
+            id: Uuid::from_u128(0),
+            name: "t".into(),
+            matrix_size: [1, 1, 1],
+            fixtures: vec![fixture],
+            zones: vec![],
+        };
+        let index = patch.compile().unwrap();
+        let plan = OutputPlan::compile(&patch, &index).unwrap();
+        let mut bytes = rgb.to_vec();
+        bytes.extend(std::iter::repeat_n(77u8, whites));
+        let mut out = Vec::new();
+        plan.encode_into(
+            0,
+            &norm(&bytes),
+            None,
+            &FlatParams::identity(0),
+            None,
+            &mut out,
+        );
+        out
+    }
+
+    #[test]
+    fn rgbw_extract_moves_the_common_part_to_white() {
+        use prisma_patch::WhiteMode;
+        let white = encode_white(
+            white_fixture(ComponentSet::Rgbw, WhiteMode::Extract),
+            [255, 255, 255],
+        );
+        assert_eq!(white, vec![0, 0, 0, 255], "pure white: RGB 0, white full");
+        let red = encode_white(
+            white_fixture(ComponentSet::Rgbw, WhiteMode::Extract),
+            [255, 0, 0],
+        );
+        assert_eq!(red, vec![255, 0, 0, 0], "pure red: white 0");
+        let pink = encode_white(
+            white_fixture(ComponentSet::Rgbw, WhiteMode::Extract),
+            [255, 102, 102],
+        );
+        assert_eq!(pink, vec![153, 0, 0, 102], "the common part moves to white");
+    }
+
+    #[test]
+    fn rgbw_add_and_off_modes() {
+        use prisma_patch::WhiteMode;
+        let add = encode_white(
+            white_fixture(ComponentSet::Rgbw, WhiteMode::Add),
+            [255, 102, 102],
+        );
+        assert_eq!(
+            add,
+            vec![255, 102, 102, 102],
+            "Add keeps RGB and adds the white"
+        );
+        let off = encode_white(
+            white_fixture(ComponentSet::Rgbw, WhiteMode::Off),
+            [255, 255, 255],
+        );
+        assert_eq!(off, vec![255, 255, 255, 0], "Off leaves the white dark");
+    }
+
+    #[test]
+    fn rgbww_splits_white_by_colour_temperature() {
+        use prisma_patch::WhiteMode;
+        let fixture = || white_fixture(ComponentSet::Rgbww, WhiteMode::Extract);
+        // A warm white (linear ~2900 K) loads the warm channel; a cool one the cool.
+        let warm = encode_white(fixture(), [255, 150, 60]);
+        assert!(warm[3] > warm[4], "warm white → warm channel: {warm:?}");
+        let cool = encode_white(fixture(), [200, 225, 255]);
+        assert!(cool[4] > cool[3], "cool white → cool channel: {cool:?}");
+        // Red: no white at all.
+        assert_eq!(encode_white(fixture(), [255, 0, 0]), vec![255, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_zones_fixed_temperature_overrides_the_colours() {
+        let profile = prisma_patch::WhiteProfile::default();
+        let warm_zone = ZoneWhite {
+            auto: false,
+            kelvin: profile.warm_kelvin,
+        };
+        let out = derive_whites([1.0, 1.0, 1.0], 2, &profile, warm_zone);
+        assert!(
+            (out[3] - 1.0).abs() < 1e-5 && out[4].abs() < 1e-5,
+            "all warm: {out:?}"
+        );
+        let cool_zone = ZoneWhite {
+            auto: false,
+            kelvin: profile.cool_kelvin,
+        };
+        let out = derive_whites([1.0, 1.0, 1.0], 2, &profile, cool_zone);
+        assert!(
+            out[3].abs() < 1e-5 && (out[4] - 1.0).abs() < 1e-5,
+            "all cool: {out:?}"
+        );
+        // Neutral (D65) white in automatic mode sits at the cool end (6500 K).
+        assert!((color_temperature([1.0, 1.0, 1.0]) - 6504.0).abs() < 60.0);
     }
 
     #[test]
@@ -581,6 +861,7 @@ mod tests {
                 name: "rgb".into(),
                 components: ComponentSet::Rgb,
                 gamma: GammaCalibration::default(),
+                white: prisma_patch::WhiteProfile::default(),
             },
             pixels: (0..2)
                 .map(|i| Pixel {

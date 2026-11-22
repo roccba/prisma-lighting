@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   addFixtureType,
+  DEFAULT_WHITE,
   getLibrary,
   removeFixtureType,
   updateFixtureType,
@@ -8,6 +9,7 @@ import {
   type ComponentSet,
   type FixtureLibrary,
   type FixtureType,
+  type WhiteMode,
 } from "./api";
 
 // Fixture library manager (§3.2): a simple CRUD over the operator's reusable pixel-LED
@@ -27,6 +29,7 @@ const builtin = (name: string, pixel_count: number, components: ComponentSet, co
   color_order,
   arrangement: "Strip",
   roles: [],
+  white: DEFAULT_WHITE,
 });
 export const BUILTIN_FIXTURES: FixtureType[] = [
   builtin("Píxel RGB", 1, "Rgb", "Rgb"),
@@ -37,16 +40,23 @@ export const BUILTIN_FIXTURES: FixtureType[] = [
   builtin("Tubo GRB 20", 20, "Rgb", "Grb"),
   builtin("Tubo RGBW 20", 20, "Rgbw", "Rgb"),
   builtin("Tubo GRBW 20", 20, "Rgbw", "Grb"),
+  builtin("Píxel RGBWW", 1, "Rgbww", "Rgb"),
+  builtin("Tubo RGBWW 20", 20, "Rgbww", "Rgb"),
 ];
 
 /** One readable line per fixture: its size and the channel order on the wire, e.g.
  *  "20 píxeles · orden GRBW" (an RGBW fixture sends its colour order, then white). */
 const fixtureMeta = (t: FixtureType) =>
   `${t.pixel_count} ${t.pixel_count === 1 ? "píxel" : "píxeles"} · orden ${t.color_order.toUpperCase()}${
-    t.components === "Rgbw" ? "W" : ""
+    t.components === "Rgbww" ? " + blanco cálido y frío" : t.components === "Rgbw" ? "W" : ""
   }`;
 
-const COMPONENTS: ComponentSet[] = ["Rgb", "Rgbw"];
+const COMPONENTS: ComponentSet[] = ["Rgb", "Rgbw", "Rgbww"];
+const WHITE_MODES: { value: WhiteMode; label: string }[] = [
+  { value: "extract", label: "Extraer (blanco = mín RGB, se resta)" },
+  { value: "add", label: "Sumar (blanco = mín RGB, sin restar)" },
+  { value: "off", label: "Apagado" },
+];
 const COLOR_ORDERS: ColorOrder[] = ["Rgb", "Rbg", "Grb", "Gbr", "Brg", "Bgr"];
 
 interface Props {
@@ -61,6 +71,7 @@ function blankType(): FixtureType {
     color_order: "Grb",
     arrangement: "Strip",
     roles: [],
+    white: DEFAULT_WHITE,
   };
 }
 
@@ -157,6 +168,57 @@ export function LibraryManager({ onClose }: Props) {
                 </select>
               </label>
             </div>
+            {form.value.components !== "Rgb" && (
+              <div className="field-row">
+                <label className="field">
+                  <span>Blanco</span>
+                  <select
+                    value={(form.value.white ?? DEFAULT_WHITE).mode}
+                    onChange={(e) => set({ white: { ...(form.value.white ?? DEFAULT_WHITE), mode: e.target.value as WhiteMode } })}
+                  >
+                    {WHITE_MODES.map((m) => (<option key={m.value} value={m.value}>{m.label}</option>))}
+                  </select>
+                </label>
+                {form.value.components === "Rgbw" ? (
+                  <label className="field">
+                    <span>Temperatura del blanco (K)</span>
+                    <input
+                      type="number"
+                      min={1500}
+                      max={12000}
+                      step={100}
+                      value={(form.value.white ?? DEFAULT_WHITE).kelvin}
+                      onChange={(e) => set({ white: { ...(form.value.white ?? DEFAULT_WHITE), kelvin: parseInt(e.target.value, 10) || 4000 } })}
+                    />
+                  </label>
+                ) : (
+                  <>
+                    <label className="field">
+                      <span>Blanco cálido (K)</span>
+                      <input
+                        type="number"
+                        min={1500}
+                        max={12000}
+                        step={100}
+                        value={(form.value.white ?? DEFAULT_WHITE).warm_kelvin}
+                        onChange={(e) => set({ white: { ...(form.value.white ?? DEFAULT_WHITE), warm_kelvin: parseInt(e.target.value, 10) || 2700 } })}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Blanco frío (K)</span>
+                      <input
+                        type="number"
+                        min={1500}
+                        max={12000}
+                        step={100}
+                        value={(form.value.white ?? DEFAULT_WHITE).cool_kelvin}
+                        onChange={(e) => set({ white: { ...(form.value.white ?? DEFAULT_WHITE), cool_kelvin: parseInt(e.target.value, 10) || 6500 } })}
+                      />
+                    </label>
+                  </>
+                )}
+              </div>
+            )}
             <div className="modal-foot">
               <button className="btn" onClick={() => setForm(null)}>Cancelar</button>
               <div className="spacer" />

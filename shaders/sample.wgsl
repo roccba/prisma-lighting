@@ -34,7 +34,7 @@ struct PixelSample {
     cell_x: i32,
     cell_y: i32,
     // Component offset into the master buffer, and how many components this pixel
-    // has (3 = RGB, 4 = RGBW). Component k takes texel channel k.
+    // has (3 = RGB, 4 = RGBW, 5 = RGBWW). Components 0–2 take texel R, G, B.
     offset: u32,
     components: u32,
 };
@@ -60,5 +60,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (s.components > 0u) { master[s.offset + 0u] = c.r; }
     if (s.components > 1u) { master[s.offset + 1u] = c.g; }
     if (s.components > 2u) { master[s.offset + 2u] = c.b; }
-    if (s.components > 3u) { master[s.offset + 3u] = c.a; }
+    // White slots (RGBW, RGBWW) are not the render's: the engine is RGB, and the
+    // output stage derives the whites from R, G, B per fixture profile. Never the
+    // framebuffer's alpha (which is coverage, LIVE-MODEL-SPEC 2b).
+    if (s.components > 3u) { master[s.offset + 3u] = 0.0; }
+    if (s.components > 4u) { master[s.offset + 4u] = 0.0; }
 }

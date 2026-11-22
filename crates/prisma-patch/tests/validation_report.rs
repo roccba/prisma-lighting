@@ -16,6 +16,7 @@ fn profile() -> FixtureProfile {
         name: "RGB".into(),
         components: ComponentSet::Rgb,
         gamma: GammaCalibration::default(),
+        white: prisma_patch::WhiteProfile::default(),
     }
 }
 

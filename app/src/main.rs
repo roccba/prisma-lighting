@@ -55,6 +55,12 @@ struct ZoneInfo {
     strobe_on: bool,
     /// Strobe speed, `0..=1` over 1–25 Hz.
     strobe_rate: f32,
+    /// White temperature (fixtures with two whites): automatic, or `white_kelvin`.
+    white_auto: bool,
+    white_kelvin: f32,
+    /// The zone has fixtures with two whites (RGBWW): only then does the card show
+    /// the white-temperature control.
+    has_dual_white: bool,
 }
 
 /// One scene-grid cell of the selected zone (M8 step 4): empty (assignable) or an
@@ -308,6 +314,7 @@ fn empty_patch() -> Patch {
             color_order: prisma_patch::ColorOrder::Rgb,
             arrangement: prisma_editor::FixtureArrangement::Strip,
             roles: Vec::new(),
+            white: prisma_patch::WhiteProfile::default(),
         },
         start_number: 1,
         rotation: prisma_editor::Rotation::R0,
@@ -558,6 +565,8 @@ fn fold_live_into_show(engine: &EngineHandle, show: &mut Show) {
             .read_real()
             .map(|v| v > 0.5)
             .unwrap_or(zs.live.blackout);
+        zs.live.white_auto = z.white.auto.read_bool().unwrap_or(zs.live.white_auto);
+        zs.live.white_kelvin = z.white.kelvin.read_real().unwrap_or(zs.live.white_kelvin);
     }
     // Tracks, by the slot order the engine was assembled in.
     for (slot, t) in show.tracks.iter_mut().enumerate() {
@@ -1335,19 +1344,24 @@ fn main_zones(state: State<AppState>) -> Vec<ZoneInfo> {
     // Identity comes from the show's embedded patch (the single source of truth, so a
     // hot patch edit is reflected here); the live controls come from the engine. Collect
     // identity first, then drop the show lock before taking the engine lock.
-    let metas: Vec<(Uuid, String, [u8; 3])> = {
+    let metas: Vec<(Uuid, String, [u8; 3], bool)> = {
         let show = state.show.lock().unwrap();
         show.patch
             .zones
             .iter()
-            .map(|z| (z.id, z.name.clone(), z.display_color))
+            .map(|z| {
+                let dual = show.patch.fixtures.iter().any(|f| {
+                    f.zone == z.id && f.profile.components == prisma_patch::ComponentSet::Rgbww
+                });
+                (z.id, z.name.clone(), z.display_color, dual)
+            })
             .collect()
     };
     let guard = state.engine.lock().unwrap();
     metas
         .into_iter()
         .enumerate()
-        .map(|(slot, (id, name, color))| {
+        .map(|(slot, (id, name, color, has_dual_white))| {
             let live = guard
                 .as_ref()
                 .map(|e| e.zone_live(slot))
@@ -1358,6 +1372,8 @@ fn main_zones(state: State<AppState>) -> Vec<ZoneInfo> {
                     blackout: false,
                     strobe_on: false,
                     strobe_rate: 0.4,
+                    white_auto: true,
+                    white_kelvin: 4000.0,
                 });
             ZoneInfo {
                 id,
@@ -1369,6 +1385,9 @@ fn main_zones(state: State<AppState>) -> Vec<ZoneInfo> {
                 blackout: live.blackout,
                 strobe_on: live.strobe_on,
                 strobe_rate: live.strobe_rate,
+                white_auto: live.white_auto,
+                white_kelvin: live.white_kelvin,
+                has_dual_white,
             }
         })
         .collect()
@@ -1440,6 +1459,17 @@ fn main_set_zone_strobe_rate(state: State<AppState>, zone: Uuid, rate: f32) {
     };
     if let Some(engine) = state.engine.lock().unwrap().as_ref() {
         engine.set_zone_strobe_rate(slot, rate);
+    }
+}
+
+/// Set a zone's white temperature: automatic (follow the colour), or `kelvin`.
+#[tauri::command]
+fn main_set_zone_white(state: State<AppState>, zone: Uuid, auto: bool, kelvin: f32) {
+    let Some(slot) = zone_slot(&state, zone) else {
+        return;
+    };
+    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        engine.set_zone_white(slot, auto, kelvin);
     }
 }
 
@@ -3055,6 +3085,7 @@ fn main() {
             main_stop_all,
             main_move_track,
             main_arm_clear,
+            main_set_zone_white,
             main_grid,
             main_arm_cell,
             main_stop_track,
