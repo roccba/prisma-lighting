@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { useMidiLearn } from "./midiLearn";
 import {
   assignCell,
   assignCellSilent,
@@ -150,6 +152,11 @@ function TapButton({ onBpm, disabled }: { onBpm: (bpm: number) => void; disabled
  *  while writing every change straight to the engine; the value box edits the same value. */
 function ScalarRow({ trackId, param, disabled }: { trackId: string; param: ParamInfo; disabled?: boolean }) {
   const write = usePanelWrites(trackId);
+  // The device knob that drives this parameter while the clip is selected, if one is mapped.
+  const { mappings } = useMidiLearn();
+  const knob = param.knob ?? null;
+  const knobMapped =
+    knob !== null && mappings.some((m) => "selected_param" in m.target && m.target.selected_param === knob);
   const [value, setValue] = useState(param.value_norm);
   useEffect(() => setValue(param.value_norm), [param.value_norm]);
 
@@ -161,7 +168,11 @@ function ScalarRow({ trackId, param, disabled }: { trackId: string; param: Param
   const fader = <Fader value={value} onChange={change} aria-label={param.label} />;
   return (
     <div className={disabled ? "pr-param-off" : undefined}>
-      <ParamField label={param.label} value={<ValueBox param={param} valueNorm={value} onCommit={change} />}>
+      <ParamField
+        label={param.label}
+        badge={knobMapped ? knob + 1 : null}
+        value={<ValueBox param={param} valueNorm={value} onCommit={change} />}
+      >
         {param.role === "bpm" ? (
           <div className="pr-field-bpm">
             {fader}
@@ -549,6 +560,19 @@ export function EffectParams({ trackId, cell, rev, onGridChange }: EffectParamsP
       live = false;
     };
   }, [trackId, cell, rev, draftEffect]);
+
+  // A controller's knobs drive the selected clip's parameters (`/select/param/*`): follow
+  // them. `midi-applied` is coalesced (≤ 20/s, always once after the last move).
+  useEffect(() => {
+    const un = listen("midi-applied", () => {
+      effectPanel(trackId, cell, draftEffect)
+        .then(setPanel)
+        .catch(() => {});
+    });
+    return () => {
+      un.then((f) => f()).catch(() => {});
+    };
+  }, [trackId, cell, draftEffect]);
 
   // Keep the loaded values current with every write, so a control mounted later (the
   // Tabla de color, the Caja de Fader, a re-rendered row) starts from the real value.

@@ -233,17 +233,17 @@ fn pads_play_clips_through_the_tree() {
         wire(120, 136) && active() == Some(0)
     });
 
-    // Phase 1 MIDI bridge: a grid pad learned on `ZoneSub::Cell(1)` of zone slot 0
-    // plays clip 1 of that zone's home track (here: white, over the held grey).
+    // A grid pad learned on track slot 0's clip 1 plays it (here: white, over the held
+    // grey).
     engine.tree().write_real(&hold0, 0.0, midi);
     wait_for("hold released", || active() == Some(2));
     let midi_rt = engine.midi();
-    midi_rt.arm_learn(prisma_core::MapTarget::ZoneSlot {
+    midi_rt.arm_learn(prisma_core::MapTarget::TrackSlot {
         slot: 0,
-        sub: prisma_core::ZoneSub::Cell(1),
+        sub: prisma_core::TrackSub::Clip(1),
     });
     midi_rt.feed(&[0x90, 33, 127]); // learned as a latch → launches clip 1
-    wait_for("the pad latched the home track's clip 1", || {
+    wait_for("the pad latched the track's clip 1", || {
         wire(250, 255) && active() == Some(1)
     });
 

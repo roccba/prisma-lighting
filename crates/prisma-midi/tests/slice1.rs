@@ -120,7 +120,7 @@ fn learn_binds_the_next_fader_and_it_drives_the_dimmer() {
     // The notice carries a persistable profile that round-trips through JSON.
     let profile = learned.lock().unwrap().clone().expect("learned notice");
     let reloaded = load_mappings(&save_mappings(&profile).unwrap()).unwrap();
-    assert_eq!(reloaded, profile);
+    assert_eq!(reloaded, *profile);
     assert_eq!(
         reloaded.for_target(&zone_dimmer(1)).unwrap().control,
         cc(1, 7)

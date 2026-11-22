@@ -13,10 +13,9 @@
 //! the renderer folds them in track order with each track's blend mode and opacity.
 //! *Selected* (a UI state) is not modelled here at all — it never changes output.
 //!
-//! **Phase 1 bridge.** A new show gets one track per zone ([`Show::new`]), and the
-//! per-zone UI and MIDI grid pads reach a zone's content through
-//! [`Show::home_track`] until the vertical track grid (phase 2) and the track MIDI
-//! targets (phase 3) replace them.
+//! A new show gets one track per zone ([`Show::new`]); [`Show::home_track`] finds a
+//! zone's own track. The grid UI and MIDI address tracks directly (by id, and by slot in
+//! the controller's bank window).
 //!
 //! # Embedded patch (M8-SPEC §5)
 //!
@@ -694,10 +693,8 @@ impl Show {
         self.tracks.iter_mut().find(|t| t.id == track_id)
     }
 
-    /// **Phase 1 bridge** (LIVE-MODEL-SPEC §8): the zone's own track — the first
-    /// whose destination is exactly that one zone. The per-zone UI and the
-    /// `ZoneSub::Cell` MIDI pads reach a zone's clips through it until phases 2–3
-    /// address tracks directly. `None` if no track targets the zone alone.
+    /// The zone's own track — the first whose destination is exactly that one zone
+    /// (the one [`Show::new`] created for it). `None` if no track targets the zone alone.
     pub fn home_track(&self, zone_id: Uuid) -> Option<&Track> {
         self.tracks
             .iter()

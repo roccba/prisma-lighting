@@ -14,27 +14,26 @@
 //! APC40 entering Ableton mode), or a fader left somewhere else while the UI moved the
 //! value, never makes the rig jump. Once engaged the control follows; if anything else
 //! changes the value afterwards (the UI, a show load, another control), it lets go and
-//! must pick the value up again. The state lives in the [`Binding`], so a rebind (a
-//! recompile, a Learn) starts every control disengaged — the values may have changed.
+//! must pick the value up again. The state lives in the [`Binding`]; a rebind keeps it
+//! for controls that still drive the same parameter of the same tree (a bank move, a
+//! Learn elsewhere), and a recompile starts every control disengaged — the values may
+//! have changed.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use prisma_core::{
-    priority, ControlKind, ControlMode, ControllerMappings, LedStyle, MapTarget, MidiControl,
-    ParamHandle, ParamKind, ParameterTree, ResponseCurve, SlotIds, SourceId, Takeover,
-    WriteOutcome,
-};
-use uuid::Uuid;
-
 use crate::message::{EventKind, MidiEvent};
+use prisma_core::{
+    priority, ControlKind, ControlMode, ControllerMappings, LedStyle, MidiControl, ParamHandle,
+    ParamKind, ParameterTree, ResponseCurve, SlotIds, SourceId, Takeover, WriteOutcome,
+};
 
 /// One mapping with its target already resolved.
 struct Resolved {
     handle: ParamHandle,
-    /// What the control's LED shows: a grid cell's `state`, otherwise `handle` itself.
+    /// What the control's LED shows: a grid clip's `state`, otherwise `handle` itself.
     feedback: ParamHandle,
-    /// Whether `feedback` is a cell state (empty / assigned / running).
+    /// Whether `feedback` is a clip state (empty / loaded / live / armed).
     cell: bool,
     led: Option<LedStyle>,
     mode: ControlMode,
@@ -51,10 +50,11 @@ pub struct FeedbackTarget {
     pub control: MidiControl,
     /// The parameter whose value the LED shows.
     pub handle: ParamHandle,
-    /// `handle` is a grid cell's state (three levels), not an on/off value.
+    /// `handle` is a grid clip's state (four levels), not an on/off value.
     pub cell: bool,
     pub led: Option<LedStyle>,
-    /// The zone slot the control drives, for a default colour.
+    /// The zone slot the control drives (a clip: its track's first destination zone),
+    /// for a default colour.
     pub zone: Option<u16>,
 }
 
@@ -146,20 +146,6 @@ pub fn source_for(control: MidiControl) -> SourceId {
     )
 }
 
-/// The zone slot a target belongs to: a [`MapTarget::ZoneSlot`] directly, or a literal
-/// `/zone/{uuid}/…` path by that uuid's position. Globals (`/master/*`, `/clock/*`)
-/// belong to no zone.
-fn zone_slot_of(target: &MapTarget, ids: &SlotIds) -> Option<u16> {
-    match target {
-        MapTarget::ZoneSlot { slot, .. } => Some(*slot),
-        MapTarget::Path(path) => {
-            let id = path.strip_prefix("/zone/")?.split('/').next()?;
-            let id = Uuid::parse_str(id).ok()?;
-            ids.zones.iter().position(|z| *z == id).map(|i| i as u16)
-        }
-    }
-}
-
 impl Binding {
     /// Resolve every mapping against `tree`. Mappings whose target does not exist in
     /// this tree (a zone slot past the end, a path nothing registered) are skipped —
@@ -188,7 +174,7 @@ impl Binding {
                     mode: m.mode,
                     curve: m.curve,
                     takeover: m.takeover,
-                    zone: zone_slot_of(&m.target, ids),
+                    zone: m.target.zone_slot(ids),
                 },
             );
         }
@@ -196,6 +182,25 @@ impl Binding {
             tree,
             table,
             pickup: HashMap::new(),
+        }
+    }
+
+    /// Keep `prev`'s soft-takeover state for every control that still drives the same
+    /// parameter of the same tree — a bank move or a Learn elsewhere must not make a
+    /// knob that did not change target pick its value up again. A new tree (a
+    /// recompile) or a new target starts disengaged, as the values may differ.
+    pub fn carry_pickup_from(&mut self, prev: &Binding) {
+        if !Arc::ptr_eq(&self.tree, &prev.tree) {
+            return;
+        }
+        for (control, state) in &prev.pickup {
+            let same = match (self.table.get(control), prev.table.get(control)) {
+                (Some(now), Some(before)) => now.handle.id() == before.handle.id(),
+                _ => false,
+            };
+            if same {
+                self.pickup.insert(*control, *state);
+            }
         }
     }
 

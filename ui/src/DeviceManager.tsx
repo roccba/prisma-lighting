@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { midiReconnect, midiSetInput, midiStatus, type MidiStatus, type ZoneInfo } from "./api";
+import { emit } from "@tauri-apps/api/event";
+import { midiLoadDeviceDefaults, midiReconnect, midiSetInput, midiStatus, type MidiStatus, type ZoneInfo } from "./api";
 import { ArtNetTab } from "./ArtNetTab";
 import { Check } from "./Check";
 import { Search } from "./icons";
@@ -23,6 +24,23 @@ interface DeviceManagerProps {
 function MidiTab({ onClose }: { onClose: () => void }) {
   const [status, setStatus] = useState<MidiStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [loaded, setLoaded] = useState<string | null>(null);
+
+  // "Cargar mapeos del perfil": the device's defaults, only for controls (and targets)
+  // that are not mapped yet — never overwriting what the operator learned.
+  const loadDefaults = async () => {
+    setBusy(true);
+    try {
+      const r = await midiLoadDeviceDefaults();
+      setStatus((s) => (s ? { ...s, mappings: r.mappings } : s));
+      setLoaded(r.added === 0 ? "No había controles libres: no se cambió nada." : `Se agregaron ${r.added} mapeos.`);
+      emit("midi-mappings-changed").catch(() => {});
+    } catch (e) {
+      setLoaded(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   useEffect(() => {
     midiStatus().then(setStatus).catch(() => {});
@@ -89,6 +107,7 @@ function MidiTab({ onClose }: { onClose: () => void }) {
           </div>
           <div className="pr-artnet-messages">
             {status?.connected && <div className="pr-artnet-note">Perfil: {status.device}</div>}
+            {loaded && <div className="pr-artnet-note">{loaded}</div>}
             {status?.error && <div className="pr-artnet-warn">{status.error}</div>}
             <div className="pr-artnet-note">Las asignaciones se hacen y se quitan con MIDI Learn (Ctrl+M) en la ventana principal.</div>
           </div>
@@ -96,6 +115,17 @@ function MidiTab({ onClose }: { onClose: () => void }) {
             <button className="pr-btn" type="button" disabled={busy} onClick={() => run(midiReconnect)} title="Buscar dispositivos MIDI y reconectar">
               <Search size={15} /> Buscar
             </button>
+            {status?.connected && (status.device_defaults ?? 0) > 0 && (
+              <button
+                className="pr-btn"
+                type="button"
+                disabled={busy}
+                onClick={loadDefaults}
+                title="Agrega los mapeos del perfil del dispositivo a los controles que todavía no tienen asignación. No reemplaza nada."
+              >
+                Cargar mapeos del perfil
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -123,7 +153,7 @@ export function DeviceManager({ onClose }: DeviceManagerProps) {
 
   return (
     <div className="pr-picker-backdrop" onPointerDown={onClose}>
-      <div className="pr-picker pr-devmgr" onPointerDown={(e) => e.stopPropagation()}>
+      <div className="pr-picker pr-devmgr" role="dialog" aria-label="Gestor de dispositivos" onPointerDown={(e) => e.stopPropagation()}>
         <div className="pr-picker-head">Gestor de dispositivos</div>
 
         <div className="pr-devmgr-tabs">

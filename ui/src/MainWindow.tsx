@@ -6,17 +6,23 @@ import {
   armClear,
   armGo,
   clockInfo,
+  controlKeys,
+  mainKey,
+  mainSelect,
   mainZones,
   newShow,
   openEditor,
   openShow,
+  mainLastSaved,
   recoveryInfo,
   saveShow,
   setBpm,
   tap,
-  type RecoveryInfo,
+  type KeyBinding,
   type ZoneInfo,
 } from "./api";
+import { ControlDialog } from "./ControlDialog";
+import { comboOf, focusKind, isBound, isModifierOnly, isReserved } from "./keyboard";
 import { DeviceManager } from "./DeviceManager";
 import { MenuBar, type MenuDef } from "./MenuBar";
 import { EffectParams } from "./EffectParams";
@@ -24,10 +30,10 @@ import { GlobalBar } from "./GlobalBar";
 import { LargePreview } from "./LargePreview";
 import { PreviewStreamProvider } from "./previewStream";
 import { TrackGrid } from "./TrackGrid";
-import { loadPaneHeight, savePaneHeight, Splitter } from "./Splitter";
+import { DENSITY_LABEL, densityVars, loadDensity, saveDensity, type Density } from "./density";
 import { scrubHandler } from "./scrub";
 import { ZoneRow } from "./ZoneRow";
-import { MidiLearnProvider, useMidiLearn } from "./midiLearn";
+import { LearnTarget, MidiLearnProvider, useMidiLearn } from "./midiLearn";
 
 // The M8 main operation window (M8-SPEC §3). Step 3 builds the FIXED layout skeleton
 // and the populated zone row; the scene grid, large preview, parameter panel and
@@ -42,10 +48,8 @@ import { MidiLearnProvider, useMidiLearn } from "./midiLearn";
 
 const PRISMA_FILTERS = [{ name: "Prisma show", extensions: ["prisma"] }];
 
-/** The bottom work row's height: default (px), floor, and where it is remembered. */
-const WORKROW_DEFAULT = 200;
-const WORKROW_MIN = 120;
-const WORKROW_KEY = "prisma-workrow-h";
+/** Where "parameter panel hidden" is remembered (per machine). */
+const PANEL_HIDDEN_KEY = "prisma-panel-hidden";
 
 export default function MainWindow() {
   return (
@@ -59,7 +63,23 @@ function MainWindowBody() {
   const learn = useMidiLearn();
   const [zones, setZones] = useState<ZoneInfo[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Notices and errors go to the status line in the menu bar (never a floating box over
+  // the controls) and clear themselves after a few seconds.
+  const [status, setStatus] = useState<{ text: string; error: boolean } | null>(null);
+  const statusTimer = useRef<number | undefined>(undefined);
+  const showStatus = useCallback((text: string, error = false, ms?: number) => {
+    setStatus({ text, error });
+    window.clearTimeout(statusTimer.current);
+    statusTimer.current = window.setTimeout(() => setStatus(null), ms ?? (error ? 8000 : 4000));
+  }, []);
+  const setError = useCallback((msg: string) => showStatus(`Error: ${msg}`, true), [showStatus]);
+  // The last opened / saved show, for Archivo → "Abrir el último guardado".
+  const [lastSaved, setLastSaved] = useState<string | null>(null);
+  const refreshLastSaved = useCallback(() => {
+    mainLastSaved()
+      .then(setLastSaved)
+      .catch(() => {});
+  }, []);
   // Whether the device-manager modal (network output) is open.
   const [deviceMgrOpen, setDeviceMgrOpen] = useState(false);
   // Colour theme (dark default), persisted per-viewer and applied as data-theme on <html>.
@@ -70,16 +90,20 @@ function MainWindowBody() {
       return "dark";
     }
   });
-  // Boot recovery (autosave): shown until dismissed, with a way back to the last save.
-  const [recovery, setRecovery] = useState<RecoveryInfo | null>(null);
+  // Boot recovery (autosave): said once in the status line.
   useEffect(() => {
+    refreshLastSaved();
     recoveryInfo()
-      .then((r) => setRecovery(r))
+      .then((r) => {
+        if (r)
+          showStatus(
+            r.last_saved ? "Sesión recuperada · Archivo → Abrir el último guardado para volver a lo guardado" : "Sesión recuperada",
+            false,
+            8000,
+          );
+      })
       .catch(() => {});
-  }, []);
-  // Transient toast for menu entries whose feature is not built yet.
-  const [notice, setNotice] = useState<string | null>(null);
-  const noticeTimer = useRef<number | undefined>(undefined);
+  }, [refreshLastSaved, showStatus]);
   // Bumped whenever the selected zone's active cell changes (fire / assign / clear), so
   // the effect parameter panel re-fetches the now-active effect and its values. The
   // large preview follows the stream on its own and needs no signal.
@@ -90,35 +114,120 @@ function MainWindowBody() {
   // state only: they pick what the parameter panel edits and what its GO plays, and never
   // change output by themselves (selected ≠ active). A track with no entry shows its running
   // clip. Selecting a track also points the large preview at its zone.
+  // The selection also lives in the engine (`/select/track`, `/select/clip`) so the keyboard
+  // and a controller move the same one and the knobs follow it: a click here sends it; a
+  // change from elsewhere arrives as `selection-changed` (handled in the grid, which knows
+  // each track's zone) with `fromEngine` set, and is only shown, never sent back.
   const [selectedTrack, setSelectedTrack] = useState<string | null>(null);
   const [selectedCells, setSelectedCells] = useState<Record<string, number>>({});
-  const onSelectTrack = useCallback((track: string, cell: number | null, zone: string | null) => {
-    setSelectedTrack(track);
-    if (cell !== null) setSelectedCells((m) => ({ ...m, [track]: cell }));
-    if (zone) setSelected(zone);
-  }, []);
-  // The bottom work row's height (effect parameters | master): the operator drags the
-  // splitter above it; small by default so the grid gets the room. Persisted per viewer.
-  const [workrowH, setWorkrowH] = useState(() => loadPaneHeight(WORKROW_KEY, WORKROW_DEFAULT));
-  const changeWorkrowH = (h: number) => {
-    setWorkrowH(h);
-    savePaneHeight(WORKROW_KEY, h);
+  const onSelectTrack = useCallback(
+    (track: string, cell: number | null, zone: string | null, fromEngine = false) => {
+      setSelectedTrack(track);
+      setSelectedCells((m) => {
+        if (cell !== null) return { ...m, [track]: cell };
+        if (!fromEngine || !(track in m)) return m;
+        // The engine selected the track's running clip: forget the remembered one.
+        const next = { ...m };
+        delete next[track];
+        return next;
+      });
+      if (zone) setSelected(zone);
+      if (!fromEngine) mainSelect(track, cell).catch(() => {});
+    },
+    [],
+  );
+  const selectionRef = useRef({ selectedTrack, selectedCells });
+  selectionRef.current = { selectedTrack, selectedCells };
+  // Layout is fixed: the density (Compacta / Normal / Grande) sets the size of the grid's
+  // cells and footer and the parameter panel's height; the grid takes the rest and shows
+  // the whole rows that fit. The panel can be hidden (button, Tab) to give the grid its
+  // rows. Both remembered per machine, never in the show.
+  const [density, setDensityState] = useState<Density>(loadDensity);
+  const setDensity = (d: Density) => {
+    setDensityState(d);
+    saveDensity(d);
   };
+  const [panelHidden, setPanelHidden] = useState(() => {
+    try {
+      return localStorage.getItem(PANEL_HIDDEN_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(PANEL_HIDDEN_KEY, panelHidden ? "1" : "0");
+    } catch {
+      /* storage may be unavailable */
+    }
+  }, [panelHidden]);
+  const togglePanel = useCallback(() => setPanelHidden((h) => !h), []);
+  const togglePanelRef = useRef(togglePanel);
+  togglePanelRef.current = togglePanel;
   // The global "Modo armar" (LIVE-MODEL-SPEC §7): while on, every play gesture arms.
   const [armMode, setArmMode] = useState(false);
   // Whether any clip is armed: shows "Desarmar" beside GO, and makes Esc disarm all.
   const [anyArmed, setAnyArmed] = useState(false);
-  const armedRef = useRef(false);
-  armedRef.current = anyArmed;
+  // The "Control" dialog (keyboard shortcuts).
+  const [controlOpen, setControlOpen] = useState(false);
+
+  // Keyboard shortcuts (LIVE-MODEL-SPEC §8.2): GO, Desarmar, Stop todo, blackout, scenes,
+  // grid navigation. Whether a key does anything is decided in Rust (`main_key` →
+  // `keys::dispatch`) from the combo and the focused element's kind, so a shortcut never
+  // fires while typing in a text or numeric field. Here we only skip what Rust cannot see
+  // (Learn mode, an open menu or dialog — Esc and arrows belong to them) and stop the
+  // browser's own action for a bound key (Space scrolling, Enter clicking a button).
+  const keysRef = useRef<KeyBinding[]>([]);
+  const reloadKeys = useCallback(() => {
+    controlKeys()
+      .then((k) => (keysRef.current = k))
+      .catch(() => {});
+  }, []);
+  useEffect(() => reloadKeys(), [reloadKeys]);
+  const learnRef = useRef(false);
+  learnRef.current = learn.active;
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || !armedRef.current || e.defaultPrevented) return;
-      const el = e.target as HTMLElement | null;
-      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
-      armClear().catch(() => {});
+    const blocked = () =>
+      learnRef.current ||
+      document.querySelector('[role="dialog"], [role="menu"], [role="listbox"], .pr-midimenu, .pr-dirmenu-pop, .pr-menu-drop') !== null;
+    const shortcut = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.repeat || isModifierOnly(e) || blocked()) return null;
+      const combo = comboOf(e);
+      if (isReserved(combo) || !isBound(keysRef.current, combo)) return null;
+      const focus = focusKind(document.activeElement);
+      return focus === "other" ? { combo, focus } : null;
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    const onDown = (e: KeyboardEvent) => {
+      const hit = shortcut(e);
+      if (!hit) return;
+      e.preventDefault();
+      // Tree paths run in the engine; a window action (`ui:…`) comes back to run here.
+      mainKey(hit.combo, hit.focus)
+        .then((path) => {
+          if (path === "ui:panel") togglePanelRef.current();
+        })
+        .catch(() => {});
+    };
+    // A focused button activates on Space's keyup: stop that too for a bound Space.
+    const onUp = (e: KeyboardEvent) => {
+      if (shortcut(e)) e.preventDefault();
+    };
+    window.addEventListener("keydown", onDown);
+    window.addEventListener("keyup", onUp);
+    return () => {
+      window.removeEventListener("keydown", onDown);
+      window.removeEventListener("keyup", onUp);
+    };
+  }, []);
+
+  // A device connected for the first time to an empty profile got its default mappings.
+  useEffect(() => {
+    const un = listen<{ device: string; added: number }>("midi-seeded", (e) =>
+      showNotice(`${e.payload.device}: se cargaron ${e.payload.added} mapeos del perfil`, 5000),
+    );
+    return () => {
+      un.then((f) => f()).catch(() => {});
+    };
   }, []);
 
   const refreshZones = () =>
@@ -193,8 +302,12 @@ function MainWindowBody() {
   useEffect(() => {
     const un = listen("layout-changed", () => {
       refreshZones();
+      refreshLastSaved();
       setSelectedCells({}); // a new show / edited rig: old cell indices mean nothing
       setGridRev((r) => r + 1);
+      // The new engine's tree starts with nothing selected: give it ours back.
+      const track = selectionRef.current.selectedTrack;
+      if (track) mainSelect(track, null).catch(() => {});
     });
     return () => {
       un.then((f) => f()).catch(() => {});
@@ -275,11 +388,7 @@ function MainWindowBody() {
     }
   }, [theme]);
 
-  const showNotice = (msg: string) => {
-    setNotice(msg);
-    window.clearTimeout(noticeTimer.current);
-    noticeTimer.current = window.setTimeout(() => setNotice(null), 2500);
-  };
+  const showNotice = (msg: string, ms?: number) => showStatus(msg, false, ms);
 
   // If applying the editor's edits to the live show fails (e.g. on editor close), the
   // backend keeps the previous layout running (fail-safe) and emits this — surface it so
@@ -369,6 +478,14 @@ function MainWindowBody() {
         { kind: "action", label: "Nueva configuración", shortcut: "Ctrl+N", onSelect: doNewShow },
         { kind: "action", label: "Abrir configuración…", shortcut: "Ctrl+O", onSelect: doOpenShow },
         { kind: "action", label: "Guardar configuración…", shortcut: "Ctrl+S", onSelect: doSaveShow },
+        {
+          kind: "action",
+          label: "Abrir el último guardado",
+          disabled: !lastSaved,
+          onSelect: () => {
+            if (lastSaved) openShow(lastSaved).catch((e) => setError(String(e)));
+          },
+        },
         { kind: "divider" },
         {
           kind: "submenu",
@@ -396,6 +513,17 @@ function MainWindowBody() {
             { kind: "action", label: "Oscuro", checked: theme === "dark", onSelect: () => setTheme("dark") },
           ],
         },
+        {
+          kind: "submenu",
+          label: "Densidad de la grilla",
+          children: (["compact", "normal", "large"] as Density[]).map((d) => ({
+            kind: "action" as const,
+            label: DENSITY_LABEL[d],
+            checked: density === d,
+            onSelect: () => setDensity(d),
+          })),
+        },
+        { kind: "action", label: "Panel de parámetros", shortcut: "Tab", checked: !panelHidden, onSelect: togglePanel },
         { kind: "divider" },
         { kind: "action", label: "Pantalla completa", shortcut: "F11", onSelect: toggleFullscreen },
       ],
@@ -412,6 +540,7 @@ function MainWindowBody() {
           checked: followFocus,
           onSelect: () => setFollowFocus((v) => !v),
         },
+        { kind: "action", label: "Control…", onSelect: () => setControlOpen(true) },
         { kind: "divider" },
         {
           kind: "submenu",
@@ -444,11 +573,22 @@ function MainWindowBody() {
 
   return (
     <PreviewStreamProvider>
-      <div className="pr-mainwin" style={revealed ? undefined : { visibility: "hidden" }}>
+      <div
+        className="pr-mainwin"
+        style={{ ...densityVars(density), ...(revealed ? {} : { visibility: "hidden" }) } as React.CSSProperties}
+      >
         <MenuBar
           menus={menus}
           right={
             <>
+              <span
+                className={`pr-statusline${status?.error ? " is-error" : ""}`}
+                role="status"
+                aria-live="polite"
+                title={status?.text}
+              >
+                {status?.text ?? ""}
+              </span>
               {learn.active && (
                 <button
                   className="pr-learn-ind"
@@ -481,6 +621,7 @@ function MainWindowBody() {
                 rev={gridRev}
                 onChanged={bumpGrid}
                 onArmedChange={setAnyArmed}
+                density={density}
               />
             </section>
             <section className="pr-region pr-region-preview">
@@ -490,18 +631,31 @@ function MainWindowBody() {
                 <div className="pr-placeholder-body">Seleccioná una zona</div>
               )}
             </section>
+            {/* With the panel hidden the master column moves up here, so the master and
+                blackout never disappear with it. */}
+            {panelHidden && (
+              <section className="pr-region pr-workrow-master">
+                <GlobalBar />
+              </section>
+            )}
           </div>
 
-          {/* Bottom work row — FIXED size (no resize): the effect parameters on the left
-              (a swappable slot: groups will share it later) and the master on the right. */}
-          <Splitter
-            value={workrowH}
-            onChange={changeWorkrowH}
-            min={WORKROW_MIN}
-            max={Math.max(WORKROW_MIN, Math.round(window.innerHeight * 0.6))}
-            invert
-          />
-          <div className="pr-workrow" style={{ height: workrowH }}>
+          {/* The parameter panel's show / hide handle. */}
+          <div className="pr-panelbar">
+            <button
+              type="button"
+              className="pr-btn pr-panelbar-btn"
+              onClick={togglePanel}
+              title={panelHidden ? "Mostrar el panel de parámetros (Tab)" : "Ocultar el panel de parámetros (Tab)"}
+              aria-expanded={!panelHidden}
+            >
+              {panelHidden ? "▴ Panel" : "▾ Panel"}
+            </button>
+          </div>
+          {/* Bottom work row — FIXED height set by the density: the effect parameters on the
+              left (a swappable slot: groups will share it later) and the master on the right. */}
+          {!panelHidden && (
+          <div className="pr-workrow">
             <section className="pr-region pr-workrow-panel">
               {selectedTrack ? (
                 <EffectParams trackId={selectedTrack} cell={selectedCell} rev={gridRev} onGridChange={bumpGrid} />
@@ -514,33 +668,18 @@ function MainWindowBody() {
               <GlobalBar />
             </section>
           </div>
+          )}
         </div>
 
-        {error && <div className="pr-mainwin-error">Error: {error}</div>}
-        {notice && <div className="pr-toast">{notice}</div>}
-        {recovery && (
-          <div className="pr-recovery" role="status">
-            <span>Sesión recuperada</span>
-            {recovery.last_saved && (
-              <button
-                type="button"
-                className="pr-btn"
-                onClick={() => {
-                  const path = recovery.last_saved;
-                  setRecovery(null);
-                  if (path) openShow(path).catch((e) => setError(String(e)));
-                }}
-                title={recovery.last_saved}
-              >
-                Abrir el último guardado
-              </button>
-            )}
-            <button type="button" className="pr-btn" onClick={() => setRecovery(null)} aria-label="Cerrar">
-              ×
-            </button>
-          </div>
-        )}
         {deviceMgrOpen && <DeviceManager onClose={() => setDeviceMgrOpen(false)} zones={zones} />}
+        {controlOpen && (
+          <ControlDialog
+            onClose={() => {
+              setControlOpen(false);
+              reloadKeys();
+            }}
+          />
+        )}
       </div>
     </PreviewStreamProvider>
   );
@@ -557,6 +696,7 @@ function TransportBar({
   onArmMode: (on: boolean) => void;
   anyArmed: boolean;
 }) {
+  const learnActive = useMidiLearn().active;
   const [bpm, setBpmState] = useState(120);
   const read = () =>
     clockInfo()
@@ -605,14 +745,18 @@ function TransportBar({
       >
         Modo armar
       </button>
-      {anyArmed && (
-        <button type="button" className="pr-btn" onClick={() => armClear().catch(() => {})} title="Desarmar todo (Esc)">
-          Desarmar
-        </button>
+      {(anyArmed || learnActive) && (
+        <LearnTarget target={{ path: "/arm/clear" }} name="Desarmar" className="pr-learn-compact">
+          <button type="button" className="pr-btn" onClick={() => armClear().catch(() => {})} title="Desarmar todo (Esc)">
+            Desarmar
+          </button>
+        </LearnTarget>
       )}
-      <button type="button" className="pr-btn pr-go-btn" onClick={() => armGo().catch(() => {})} title="Lanzar todo lo armado">
-        GO
-      </button>
+      <LearnTarget target={{ path: "/arm/go" }} name="GO" className="pr-learn-compact">
+        <button type="button" className="pr-btn pr-go-btn" onClick={() => armGo().catch(() => {})} title="Lanzar todo lo armado (Espacio)">
+          GO
+        </button>
+      </LearnTarget>
     </div>
   );
 }

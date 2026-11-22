@@ -543,9 +543,14 @@ input, textarea, [contenteditable="true"] {
 /* Bottom work row: FIXED height, not resizable (console-style). The effect-parameters
    panel (a swappable slot — groups will share it later) sits left at a fixed width where
    every parameter fits without scrolling; the master strip sits right at a fixed width. */
-.pr-workrow { flex: 0 0 auto; display: flex; gap: 6px; min-height: 0; }
-/* The splitter above the work row sits inside the body's 6px gap: a thin, quiet grab bar. */
-.pr-mainwin-body > .pr-splitter-h { height: 6px; margin: -6px 0; background: transparent; border: 0; z-index: 1; }
+.pr-workrow { flex: 0 0 auto; display: flex; gap: 6px; min-height: 0; height: var(--workrow-h); }
+/* The parameter panel's show / hide handle, where the splitter used to be: a thin bar
+   with one small button. The panel's height is fixed by the density. */
+.pr-panelbar { flex: 0 0 auto; display: flex; justify-content: center; height: 14px; margin: -3px 0; }
+/* With the panel hidden the master column sits beside the preview at the SAME size it has
+   in the work row (the density's panel height), bottom-aligned — never stretched. */
+.pr-mainwin-mid > .pr-workrow-master { align-self: flex-end; height: var(--workrow-h); }
+.pr-panelbar-btn { height: 14px; min-width: 64px; padding: 0 10px; font-size: var(--fs-tiny); line-height: 1; color: var(--text-dim); }
 /* The params panel FILLS the row (minus the fixed master), so faders/controls use the
    width instead of leaving a gap. Its content is sized so the densest effect still fits. */
 .pr-workrow-panel { flex: 1 1 auto; min-width: 0; }
@@ -645,17 +650,6 @@ input, textarea, [contenteditable="true"] {
 .pr-master-strobe { flex: 0 0 auto; align-self: stretch; display: flex; align-items: center; gap: 8px; min-width: 0; }
 .pr-master-strobe-wrap { flex: 1 1 auto; min-width: 0; align-items: center; }
 
-.pr-mainwin-error { flex: 0 0 auto; color: var(--accent-text); background: var(--bg-panel); border-top: 1px solid var(--btn-border-dark); padding: 6px 10px; font-size: var(--fs-small); font-family: var(--font-mono); }
-
-/* Transient toast (bottom-centre) for not-yet-built menu actions. */
-.pr-toast {
-  position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
-  background: var(--bg-panel-2); border: 1px solid var(--btn-border); color: var(--text);
-  padding: 8px 16px; border-radius: var(--r-md); font-size: var(--fs-base);
-  box-shadow: 0 6px 16px rgba(0,0,0,.5); z-index: 200; pointer-events: none;
-}
-.pr-recovery { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 140; display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 14px; background: var(--menu-bg); border: 1px solid var(--accent); border-radius: var(--r-sm); box-shadow: 0 8px 18px rgba(0,0,0,.5); font-size: var(--fs-base); color: var(--text); }
-
 /* --- Scene grid + effect picker (M8 step 4, §3.3 / §4) --- */
 /* The wrap is a size container so cells can be sized from BOTH its width and height. */
 .pr-grid-wrap { flex: 1 1 auto; overflow: auto; padding: 8px; min-height: 0; container-type: size; }
@@ -728,18 +722,36 @@ input, textarea, [contenteditable="true"] {
    right. The same .pr-cell cells as the classic grid; the header reads like a zone card's
    title (neutral strip, zone colour as a 2px line); the footer carries stop, opacity and
    M / S / sel. The header and footer stay put while the clip rows scroll. --- */
-.pr-tgrid-wrap { flex: 1 1 auto; overflow-x: auto; overflow-y: hidden; padding: 8px; min-height: 0; position: relative; display: flex; flex-direction: column; gap: 5px; }
-.pr-tgrid-body { flex: 0 0 auto; overflow-y: scroll; overflow-x: hidden; width: 100%; min-width: max-content; scroll-snap-type: y mandatory; }
-.pr-tgrid-body .pr-tgrid > * { scroll-snap-align: start; }
-/* The body always shows its (14px, theme.css ::-webkit-scrollbar) scrollbar; head and foot
-   reserve the same width on the right so all three share one column grid. */
-.pr-tgrid-head, .pr-tgrid-foot { flex: 0 0 auto; grid-template-rows: auto; grid-auto-rows: auto; padding-right: 14px; box-sizing: border-box; }
-.pr-tgrid { --tgrid-col: 104px; --tgrid-add: 28px; --tgrid-scene: 76px; --tgrid-row: 52px;
-  --tgrid-head: 58px; display: grid; grid-auto-rows: var(--tgrid-row); gap: 5px; align-content: start; width: 100%; min-width: max-content; }
-.pr-tgrid-head { grid-template-rows: var(--tgrid-head); }
-.pr-tgrid > * { min-width: 0; }
+/* The track grid: ONE grid in ONE scroll box (both axes) — header, clip rows and footer
+   share columns and the horizontal scroll; the header sticks to the top, the footer to the
+   bottom. The scene column ("Escenas" … "Stop todo") is a separate column to the right,
+   outside the horizontal scroll so it never covers a track, its vertical scroll mirrored
+   from the tracks'. Sections are `display: contents`, so every cell is a grid item. Sizes
+   come from the density variables (--tgrid-row, --tgrid-col, --tgrid-head, --tfoot-h, set
+   on .pr-mainwin from density.ts). */
+.pr-tgrid-wrap { --tgrid-add: 28px; --tgrid-scene: 76px; flex: 1 1 auto; overflow: hidden; padding: 8px; min-height: 0; display: flex; flex-direction: column; }
+.pr-tgrid-frame { flex: 0 0 auto; display: flex; gap: 5px; min-height: 0; }
+.pr-tgrid-scroll { flex: 1 1 auto; min-width: 0; overflow: auto; scroll-snap-type: y mandatory;
+  scroll-padding-top: calc(var(--tgrid-head) + 5px); scroll-padding-bottom: calc(var(--tfoot-h) + 5px); }
+.pr-tgrid-scenes-col { flex: 0 0 var(--tgrid-scene); display: flex; flex-direction: column; box-sizing: border-box; min-height: 0; }
+.pr-tgrid-scenes { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.pr-tgrid-scenegrid { grid-template-columns: 1fr; }
+.pr-tgrid { position: relative; display: grid; gap: 5px; min-width: max-content; width: 100%; }
+.pr-tgrid-head, .pr-tgrid-body, .pr-tgrid-foot { display: contents; }
+.pr-tgrid-body > * { scroll-snap-align: start; }
+.pr-tgrid > * > * { min-width: 0; }
 .pr-tgrid-gap { pointer-events: none; }
-.pr-thead { position: relative; display: flex; flex-direction: column; justify-content: center; gap: 1px;
+/* Sticky edges cover the 5px gaps around them (outline in the panel colour), so what
+   scrolls under them never shows through. */
+.pr-tgrid-head > *, .pr-tgrid-foot > * { outline: 5px solid var(--bg-panel); }
+.pr-tgrid-head > * { position: sticky; top: 0; z-index: 3; }
+.pr-tgrid-foot > * { position: sticky; bottom: 0; z-index: 3; }
+.pr-tgrid-scene { display: flex; }
+.pr-tgrid-scene > * { flex: 1 1 auto; min-width: 0; }
+.pr-tgrid-scene .pr-scene-btn { width: 100%; }
+/* The controller's bank window over the cells it plays (absolutely placed in the grid). */
+.pr-tgrid-ring { position: absolute; inset: -3px; border: 2px solid var(--accent-bright); border-radius: var(--r-md); pointer-events: none; z-index: 1; }
+.pr-thead { position: relative; min-width: 0; overflow: hidden; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; gap: 1px;
   padding: 4px 18px 4px 6px; background: var(--header-bg); border: 1px solid var(--btn-border-dark); border-bottom: 2px solid transparent;
   border-radius: var(--r-sm) var(--r-sm) 0 0; cursor: pointer; user-select: none; }
 .pr-thead.is-selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
@@ -754,8 +766,8 @@ input, textarea, [contenteditable="true"] {
 .pr-scene-btn { height: 100%; padding: 0 6px; font-size: var(--fs-small); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; justify-content: flex-start; }
 .pr-cell.is-armed { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn) inset; animation: pr-armed-pulse 1s ease-in-out infinite; }
 @keyframes pr-armed-pulse { 50% { box-shadow: 0 0 0 1px var(--warn) inset, 0 0 6px var(--warn); } }
-.pr-tfoot { display: flex; flex-direction: column; align-items: center; gap: 4px;
-  padding: 4px 2px; background: var(--bg-panel); border: 1px solid var(--btn-border-dark); border-radius: 0 0 var(--r-sm) var(--r-sm); }
+.pr-tfoot { display: flex; flex-direction: column; align-items: center; gap: 4px; overflow: hidden; box-sizing: border-box;
+  padding: 5px 3px 7px; background: var(--bg-panel); border: 1px solid var(--btn-border-dark); border-radius: 0 0 var(--r-sm) var(--r-sm); }
 .pr-tfoot-all { justify-content: flex-end; }
 .pr-tfoot-stopall { width: 100%; height: 30px; font-size: var(--fs-small); font-weight: 700; }
 .pr-thead.is-dragging { opacity: .5; }
@@ -763,10 +775,16 @@ input, textarea, [contenteditable="true"] {
 .pr-thead.is-drop-after { box-shadow: 3px 0 0 var(--accent); }
 .pr-tfoot-stop { width: 100%; height: 22px; font-size: var(--fs-small); }
 .pr-tfoot-fader { display: flex; flex-direction: column; align-items: center; gap: 2px; }
-.pr-tfoot-fader .pr-fader { --pr-knob-h: 18px; width: 24px; height: 72px; }
+.pr-tfoot-fader .pr-fader { --pr-knob-h: 18px; width: 24px; height: var(--tfoot-fader, 72px); }
 .pr-tfoot-fader .pr-fader .pr-knob { width: 22px; height: 18px; padding: 3px; }
 .pr-tfoot-btns { display: flex; gap: 3px; }
-.pr-tfoot-btns .pr-zonecard-sm:last-child { width: 30px; }
+.pr-tfoot-btns > .pr-zonecard-sm:last-child,
+.pr-tfoot-btns > .pr-learn-host:last-child .pr-zonecard-sm { width: 30px; }
+/* Learn wrappers in the footer keep the controls' own sizing. */
+.pr-tfoot > .pr-learn-host:has(.pr-tfoot-stop),
+.pr-tfoot-all > .pr-learn-host { align-self: stretch; }
+.pr-learn-host > .pr-tfoot-stop,
+.pr-learn-host > .pr-tfoot-stopall { flex: 1 1 auto; }
 /* The track settings popover: a small floating form on the menu surface. */
 .pr-tsettings { position: fixed; z-index: 120; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; min-width: 260px;
   background: var(--menu-bg); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); box-shadow: 0 8px 18px rgba(0,0,0,.5); }
@@ -790,6 +808,14 @@ input, textarea, [contenteditable="true"] {
 .pr-devmgr { width: min(1000px, 94vw); height: min(560px, 86vh); max-width: none; display: flex; flex-direction: column; }
 .pr-devmgr > .pr-picker-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .pr-devmgr-tabs { display: flex; gap: 2px; padding: 6px 12px 0; border-bottom: 1px solid var(--divider); }
+/* Control dialog (keyboard shortcuts): the device manager's frame, a narrower body. */
+.pr-control { width: min(520px, 94vw); height: min(620px, 88vh); max-width: none; display: flex; flex-direction: column; }
+.pr-control-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.pr-control-table { width: 100%; }
+.pr-control-table td:nth-child(2) { width: 170px; }
+.pr-control-table td:nth-child(3) { width: 70px; text-align: right; }
+.pr-keycap { min-width: 140px; justify-content: center; font-family: var(--font-mono); }
+.pr-keycap.is-active { border-color: var(--accent); color: var(--accent-text); }
 .pr-devmgr-check { display: flex; align-items: center; gap: 7px; font-size: var(--fs-base); color: var(--text); cursor: pointer; }
 .pr-devmgr-check input { accent-color: var(--accent); }
 .pr-devmgr-field { display: flex; align-items: center; gap: 10px; }
@@ -841,6 +867,8 @@ input, textarea, [contenteditable="true"] {
    Inline (scalars): label · value box · control (the control is the flexible `1fr` cell,
    so a fader stretches to fill). Block (rose/colour/palette/dropdown): label above. */
 .pr-field { width: auto; min-width: 0; display: grid; grid-template-columns: 92px 52px 1fr; grid-template-areas: "label value control"; align-items: center; gap: 10px; }
+.pr-knob-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 14px; height: 14px; margin-right: 5px; padding: 0 3px;
+  border: 1px solid var(--learn); border-radius: 7px; color: var(--learn); font-family: var(--font-mono); font-size: var(--fs-tiny); line-height: 1; vertical-align: 1px; }
 .pr-field-label { grid-area: label; font-size: var(--fs-base); color: var(--text-label); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pr-field-control { grid-area: control; min-width: 0; }
 /* Compact fader for parameter rows: every part fits INSIDE its 40px box (knob 5–35,
@@ -1004,7 +1032,8 @@ body.is-picking, body.is-picking * { cursor: crosshair !important; user-select: 
    tooltip names the control. */
 .pr-learn-compact .pr-learn-badge { display: none; }
 /* A learnable grid cell: the wrapper is the grid item, the cell fills it. */
-.pr-learn-cell > .pr-cell { flex: 1 1 auto; }
+.pr-learn-cell > .pr-cell,
+.pr-learn-cell > .pr-scene-btn { flex: 1 1 auto; }
 
 /* MIDI Learn right-click menu (M9 Slice 3): button style, LED colour + motion, unmap. */
 .pr-midimenu {
@@ -1028,7 +1057,12 @@ body.is-picking, body.is-picking * { cursor: crosshair !important; user-select: 
 .pr-swatch-auto { background: var(--bg-input); color: var(--text-dim); font-size: 8px; line-height: 1; }
 
 /* MIDI Learn indicator: pinned to the menu bar's right end (no layout change on entry). */
-.pr-menubar-right { margin-left: auto; display: flex; align-items: center; padding-right: 8px; }
+.pr-menubar-right { margin-left: auto; display: flex; align-items: center; padding-right: 8px; min-width: 0; flex: 1 1 auto; justify-content: flex-end; }
+/* The status line: notices and errors in the menu bar's free space, never over controls;
+   they clear themselves after a few seconds. */
+.pr-statusline { flex: 1 1 auto; min-width: 0; margin: 0 14px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--fs-small); color: var(--text-label); }
+.pr-statusline.is-error { color: var(--danger); }
 .pr-learn-ind { display: inline-flex; align-items: center; gap: 7px; height: 22px; padding: 0 9px; background: transparent; border: 1px solid var(--learn); border-radius: var(--r-sm); color: var(--learn); font: inherit; font-size: var(--fs-small); cursor: pointer; }
 .pr-learn-ind:hover { background: var(--learn-soft); }
 .pr-learn-bar-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--learn); animation: pr-learn-pulse 1s ease-in-out infinite; }

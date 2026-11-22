@@ -13,6 +13,7 @@ import {
   type LedAnimation,
   type LedRate,
   type LedStyle,
+  type Bank,
   type MapTarget,
   type MidiMapping,
   type Takeover,
@@ -40,6 +41,11 @@ interface LearnCtx {
   unmap: (target: MapTarget) => void;
   /** Open the configuration menu for a mapped target at a screen position. */
   openConfig: (target: MapTarget, name: string, x: number, y: number) => void;
+  /** Where the controller's grid window sits: grid cells and scenes are learned
+   *  relative to it (the pad under the operator's finger). */
+  bank: Bank;
+  /** The connected device's grid window (tracks × rows), if it has one and banks. */
+  gridWindow: [number, number] | null;
 }
 
 interface ConfigAt {
@@ -58,15 +64,33 @@ export function MidiLearnProvider({ children }: { children: ReactNode }) {
   const [mappings, setMappings] = useState<MidiMapping[]>([]);
   const [palette, setPalette] = useState<string[]>([]);
   const [config, setConfig] = useState<ConfigAt | null>(null);
+  const [bank, setBank] = useState<Bank>({ track: 0, row: 0 });
+  const [gridWindow, setGridWindow] = useState<[number, number] | null>(null);
 
   const refresh = useCallback(() => {
     midiStatus()
       .then((s) => {
         setMappings(s.mappings);
         setPalette(s.palette);
+        setBank(s.bank);
+        setGridWindow(s.connected ? s.grid_window : null);
       })
       .catch(() => {});
   }, []);
+
+  // The bank buttons move the window; a device seeding its defaults adds mappings.
+  useEffect(() => {
+    refresh();
+    const subs = [
+      listen<Bank>("midi-bank", (e) => setBank(e.payload)),
+      listen("midi-seeded", refresh),
+      listen("midi-mappings-changed", refresh),
+      listen("midi-connected", refresh),
+    ];
+    return () => {
+      subs.forEach((u) => u.then((f) => f()).catch(() => {}));
+    };
+  }, [refresh]);
 
   const setActive = useCallback(
     (on: boolean) => {
@@ -122,7 +146,7 @@ export function MidiLearnProvider({ children }: { children: ReactNode }) {
   const configMapping = config ? mappings.find((m) => sameTarget(m.target, config.target)) : undefined;
 
   return (
-    <Ctx.Provider value={{ active, setActive, armed, justLearned, mappings, arm, unmap, openConfig }}>
+    <Ctx.Provider value={{ active, setActive, armed, justLearned, mappings, arm, unmap, openConfig, bank, gridWindow }}>
       {children}
       {config && configMapping && (
         <MappingMenu
@@ -214,7 +238,7 @@ const MODE_LABEL: Record<ControlMode, string> = {
 
 const MODE_HINT: Record<ControlMode, string> = {
   absolute: "La posición del control es el valor.",
-  latch: "Tocás y queda como el efecto de la zona (igual que clic en pantalla).",
+  latch: "Tocás y queda como el clip del track (igual que lanzarlo en pantalla).",
   trigger: "Un golpe: reinicia el efecto desde el principio, sin importar cuánto mantengas.",
   toggle: "Un toque lo activa; el siguiente vuelve a lo que había antes.",
   momentary: "Activo mientras mantenés; al soltar vuelve a lo que había antes.",
@@ -228,17 +252,30 @@ const RATES: { value: LedRate; label: string }[] = [
   { value: "n2", label: "1/2" },
 ];
 
-/** Which button styles make sense for a target: all four on a grid cell, on/off styles on
- *  a zone switch, none on a continuous control (fader). */
+/** Which button styles make sense for a target: all four on a grid clip, on/off styles on
+ *  a switch (solo, mute, blackout, strobe), none on a fader or a one-shot action (GO, stop,
+ *  a scene, select). */
 function modesFor(target: MapTarget): ControlMode[] {
+  const onOff: ControlMode[] = ["toggle", "momentary"];
   if ("path" in target) {
     const switches = ["/master/blackout", "/master/strobe/on"];
-    return switches.includes(target.path) ? ["toggle", "momentary"] : [];
+    return switches.includes(target.path) ? onOff : [];
   }
-  const sub = target.zone_slot.sub;
-  if (typeof sub === "object") return ["latch", "trigger", "toggle", "momentary"];
-  if (sub === "solo" || sub === "blackout" || sub === "strobe_on") return ["toggle", "momentary"];
+  if ("zone_slot" in target) {
+    const sub = target.zone_slot.sub;
+    return sub === "solo" || sub === "blackout" || sub === "strobe_on" ? onOff : [];
+  }
+  if ("track_slot" in target) {
+    const sub = target.track_slot.sub;
+    if (typeof sub === "object") return ["latch", "trigger", "toggle", "momentary"];
+    return sub === "mute" || sub === "solo" ? onOff : [];
+  }
   return [];
+}
+
+/** Whether a target is a grid clip (a pad with a four-state LED). */
+function isClip(target: MapTarget): boolean {
+  return "track_slot" in target && typeof target.track_slot.sub === "object";
 }
 
 function animKind(a: LedAnimation | undefined): "solid" | "pulse" | "blink" {
@@ -272,7 +309,7 @@ function MappingMenu({ at, mapping, palette, onChange, onTakeover, onUnmap, onCl
   // A fader / knob driving a continuous value (no button styles apply to it).
   const isContinuous = modes.length === 0 && "cc" in mapping.control.kind && mapping.mode === "absolute";
   const takeover: Takeover = mapping.takeover ?? "pickup";
-  const isCell = "zone_slot" in at.target && typeof at.target.zone_slot.sub === "object";
+  const isCell = isClip(at.target);
   const isNote = "note" in mapping.control.kind;
   const led: LedStyle = mapping.led ?? {};
   const [slot, setSlot] = useState<"on" | "idle">("on");
@@ -362,17 +399,17 @@ function MappingMenu({ at, mapping, palette, onChange, onTakeover, onUnmap, onCl
           {isCell && (
             <div className="pr-midimenu-seg">
               <button className={`pr-btn${slot === "on" ? " is-active" : ""}`} onClick={() => setSlot("on")}>
-                Activo
+                En vivo
               </button>
               <button className={`pr-btn${slot === "idle" ? " is-active" : ""}`} onClick={() => setSlot("idle")}>
-                Asignado
+                Cargada
               </button>
             </div>
           )}
           <div className="pr-swatches">
             <button
               className={`pr-swatch pr-swatch-auto${chosen === undefined ? " is-selected" : ""}`}
-              title={isCell ? "Automático: color de la zona" : "Automático"}
+              title={isCell ? "Automático: color de la zona del track" : "Automático"}
               onClick={() => setLed({ ...led, [slot]: undefined })}
             >
               A
@@ -388,7 +425,7 @@ function MappingMenu({ at, mapping, palette, onChange, onTakeover, onUnmap, onCl
             ))}
           </div>
 
-          <div className="pr-midimenu-label">Animación (activo)</div>
+          <div className="pr-midimenu-label">Animación (en vivo)</div>
           <div className="pr-midimenu-seg">
             {(["solid", "pulse", "blink"] as const).map((k) => (
               <button

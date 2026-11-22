@@ -3,22 +3,23 @@
 //! zone's colour. Byte seams only: no `midir`, no hardware, no engine (the clip
 //! parameters are registered here the way `prisma-engine::clips` registers them).
 //!
-//! Live model phase 1 bridge: a `ZoneSub::Cell(i)` pad on zone slot n drives clip i
-//! of that zone's home track (`/track/{id}/clip/{i}/…`).
+//! Since the live model a grid pad is a `TrackSlot { slot, Clip(i) }`: clip i of the
+//! bank window's track `slot` (`/track/{id}/clip/{i}/…`).
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use prisma_core::{
     ControlMode, ControllerMappings, Curve, LedAnimation, LedRate, LedStyle, ManualClock,
-    MapTarget, ParamDescriptor, ParameterTree, RealRange, SlotIds, SourceId, TreeConfig, ZoneSub,
+    MapTarget, ParamDescriptor, ParameterTree, RealRange, SlotIds, SourceId, TrackSub, TreeConfig,
+    ZoneSub,
 };
 use prisma_midi::{DeviceProfile, MidiOut, MidiRuntime};
 use uuid::Uuid;
 
 const CELLS: usize = 3;
 
-/// One zone and its home track, as the engine binds them.
+/// One zone and its track, as the engine binds them.
 struct Ids {
     zone: Uuid,
     track: Uuid,
@@ -34,7 +35,10 @@ impl Ids {
     fn slots(&self) -> SlotIds {
         SlotIds {
             zones: vec![self.zone],
-            tracks: vec![Some(self.track)],
+            tracks: vec![self.track],
+            track_zones: vec![Some(0)],
+            rows: CELLS as u16,
+            ..SlotIds::default()
         }
     }
 }
@@ -86,9 +90,9 @@ impl Wire {
 }
 
 fn cell(i: u16) -> MapTarget {
-    MapTarget::ZoneSlot {
+    MapTarget::TrackSlot {
         slot: 0,
-        sub: ZoneSub::Cell(i),
+        sub: TrackSub::Clip(i),
     }
 }
 

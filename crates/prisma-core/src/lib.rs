@@ -28,6 +28,7 @@ pub mod arbitration;
 pub mod clock;
 pub mod deck;
 pub mod descriptor;
+pub mod keys;
 pub mod mappings;
 pub mod notify;
 pub mod overlap;
@@ -43,10 +44,11 @@ pub mod zone;
 pub use clock::{ClockShared, ClockSnapshot, MasterClock, MAX_BPM, MIN_BPM};
 pub use deck::{DeckChange, ZoneDeck};
 pub use descriptor::{Curve, ParamDescriptor, ParamKind, RealRange};
+pub use keys::{default_bindings, dispatch, FocusKind, KeyBinding, KeyCombo};
 pub use mappings::{
-    load_mappings, save_mappings, ControlKind, ControlMode, ControllerMappings, LedAnimation,
+    load_mappings, save_mappings, Bank, ControlKind, ControlMode, ControllerMappings, LedAnimation,
     LedRate, LedStyle, MapTarget, MappingsError, MidiControl, MidiMapping, ResponseCurve, SlotIds,
-    Takeover, ZoneSub,
+    Takeover, TrackSub, ZoneSub,
 };
 pub use notify::{Filter, Subscription, SubscriptionCloser};
 pub use overlap::{OverlapSnapshot, NO_CELL, NO_ZONE};

@@ -20,6 +20,25 @@
 //! mapped is darkened. On a note-off the profile may ask for the LED to be re-sent
 //! ([`reaffirm_on_release`](crate::profile::LedSpec::reaffirm_on_release)).
 //!
+//! # Banks
+//!
+//! A device whose profile declares bank buttons ([`BankSpec`]) sees the track grid
+//! through a window (8 tracks × 5 rows on an APC40). The bank buttons move it a step at
+//! a time, or a whole window with the device's Shift held; they belong to the device and
+//! are never learned or mapped. The window position lives
+//! here, per runtime (the operator's hands, not the show): it survives recompiles,
+//! clamped to the new grid, and every move rebinds so track/scene targets re-resolve.
+//!
+//! # Device defaults
+//!
+//! A device profile may ship default mappings. [`seed_device_defaults`] applies them
+//! automatically only the first time that device connects to an **empty** profile;
+//! [`add_device_defaults`] (the "Cargar mapeos del perfil" button) adds the ones whose
+//! control and target are both free, never overwriting.
+//!
+//! [`seed_device_defaults`]: MidiRuntime::seed_device_defaults
+//! [`add_device_defaults`]: MidiRuntime::add_device_defaults
+//!
 //! # Threading
 //!
 //! `feed` runs on the MIDI input thread (a transport thread, §3.3). It takes the
@@ -34,13 +53,13 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 use prisma_core::{
-    ControlMode, ControllerMappings, MapTarget, MidiControl, MidiMapping, ParameterTree,
-    ResponseCurve, SlotIds, Takeover,
+    Bank, ControlMode, ControllerMappings, KeyBinding, MapTarget, MidiControl, MidiMapping,
+    ParameterTree, ResponseCurve, SlotIds, Takeover,
 };
 
 use crate::feedback::{send_led, Feedback, MidiOut};
 use crate::message::{EventKind, MidiEvent};
-use crate::profile::{DeviceProfile, LedLevel};
+use crate::profile::{BankMove, DeviceProfile, LedLevel};
 use crate::resolver::Binding;
 
 /// Something the runtime reports to its host (the app), off the lock.
@@ -50,7 +69,7 @@ pub enum MidiNotice {
     /// persist; `mapping` is the binding just created.
     Learned {
         mapping: MidiMapping,
-        profile: ControllerMappings,
+        profile: Box<ControllerMappings>,
     },
     /// A mapped control wrote the tree (the UI refreshes what it shows). Emitted for
     /// accepted writes only; the host coalesces. `zone` is the zone slot the control
@@ -60,6 +79,8 @@ pub enum MidiNotice {
         control: MidiControl,
         zone: Option<u16>,
     },
+    /// A bank button moved the controller's grid window.
+    Bank(Bank),
 }
 
 /// Host callback for [`MidiNotice`]s.
@@ -80,16 +101,79 @@ struct State {
     /// Note controls the last feedback drove, kept across an unbind so a rebuild can
     /// darken the ones no longer mapped.
     lit: HashSet<MidiControl>,
+    /// Where the controller's grid window sits (see the module docs).
+    bank: Bank,
+    /// The device's Shift button is held: bank presses move a whole window.
+    shift: bool,
 }
 
 impl State {
     fn rebuild(&mut self) {
         self.feedback = None; // stop the old thread before its binding goes away
-        self.binding = self
-            .tree
-            .as_ref()
-            .map(|(tree, zones)| Binding::compile(Arc::clone(tree), zones, &self.profile));
+        self.bank = self.clamped(self.bank);
+        let bank = self.bank;
+        let prev = self.binding.take();
+        self.binding = self.tree.as_mut().map(|(tree, ids)| {
+            ids.bank = bank;
+            let mut next = Binding::compile(Arc::clone(tree), ids, &self.profile);
+            if let Some(prev) = &prev {
+                next.carry_pickup_from(prev);
+            }
+            next
+        });
         self.restart_feedback();
+    }
+
+    /// `bank` kept inside the grid: the window never shows fewer tracks or rows than it
+    /// fits (unless the grid has fewer).
+    fn clamped(&self, bank: Bank) -> Bank {
+        let Some((_, ids)) = &self.tree else {
+            return bank;
+        };
+        let (cols, rows) = self.device.window();
+        let max_track = (ids.tracks.len() as u16).saturating_sub(cols);
+        let max_row = ids.rows.saturating_sub(rows);
+        Bank {
+            track: bank.track.min(max_track),
+            row: bank.row.min(max_row),
+        }
+    }
+
+    /// Apply a bank button: a step, or a whole window with Shift held. Returns the new
+    /// window if it moved.
+    fn move_bank(&mut self, m: BankMove) -> Option<Bank> {
+        let spec = self.device.surface.bank.as_ref()?;
+        let (t, r) = if self.shift {
+            self.device.window()
+        } else {
+            (spec.track_step.max(1), spec.row_step.max(1))
+        };
+        let b = self.bank;
+        let next = match m {
+            BankMove::Up => Bank {
+                row: b.row.saturating_sub(r),
+                ..b
+            },
+            BankMove::Down => Bank {
+                row: b.row.saturating_add(r),
+                ..b
+            },
+            BankMove::Left => Bank {
+                track: b.track.saturating_sub(t),
+                ..b
+            },
+            BankMove::Right => Bank {
+                track: b.track.saturating_add(t),
+                ..b
+            },
+        };
+        let next = self.clamped(next);
+        if next == b {
+            return None;
+        }
+        self.bank = next;
+        self.rebuild();
+        Some(next)
     }
 
     /// Send the device's connect messages (a mode handshake), before any LED.
@@ -155,6 +239,8 @@ impl MidiRuntime {
                 feedback: None,
                 zone_colours: Arc::new(Vec::new()),
                 lit: HashSet::new(),
+                bank: Bank::default(),
+                shift: false,
             })),
             listener: Arc::new(Mutex::new(None)),
         }
@@ -165,8 +251,9 @@ impl MidiRuntime {
         *self.listener.lock() = listener;
     }
 
-    /// Bind to a running tree, with its zones (and their home tracks) in slot order.
-    /// Recompiles every mapping's target against it (slot → uuid → handle, once).
+    /// Bind to a running tree, with its zones and tracks in slot order. Recompiles
+    /// every mapping's target against it (slot → uuid → handle, once). The bank window
+    /// is kept, clamped to the new grid.
     pub fn bind(&self, tree: Arc<ParameterTree>, ids: impl Into<SlotIds>) {
         let mut s = self.state.lock();
         s.tree = Some((tree, ids.into()));
@@ -196,13 +283,72 @@ impl MidiRuntime {
         s.restart_feedback();
     }
 
-    /// Set the connected device's profile (LED semantics). Repaints every mapped LED.
+    /// Set the connected device's profile (LED semantics, bank buttons). Rebinds (the
+    /// window size may differ) and repaints every mapped LED.
     pub fn set_device(&self, device: DeviceProfile) {
         let mut s = self.state.lock();
         s.feedback = None;
         s.device = Arc::new(device);
         s.handshake();
-        s.restart_feedback();
+        s.rebuild();
+    }
+
+    /// Where the controller's grid window sits.
+    pub fn bank(&self) -> Bank {
+        self.state.lock().bank
+    }
+
+    /// First connection of a device to an empty profile: apply the device's default
+    /// mappings and remember the device, so it never happens again by itself. Returns
+    /// the updated profile (to persist) and how many mappings were added; `None` when
+    /// nothing was done — the device has no defaults, the profile already has mappings,
+    /// or this device was seeded before.
+    pub fn seed_device_defaults(&self) -> Option<(ControllerMappings, usize)> {
+        let mut s = self.state.lock();
+        let name = s.device.name.clone();
+        let fresh = s.profile.mappings.is_empty() && !s.profile.seeded.contains(&name);
+        if !fresh || s.device.default_mappings.is_empty() {
+            return None;
+        }
+        let added = add_defaults(&mut s);
+        Some((s.profile.clone(), added))
+    }
+
+    /// Add the device's default mappings whose control and target are both still free
+    /// ("Cargar mapeos del perfil"). Never overwrites a learned mapping. Returns the
+    /// updated profile and how many were added.
+    pub fn add_device_defaults(&self) -> (ControllerMappings, usize) {
+        let mut s = self.state.lock();
+        let added = add_defaults(&mut s);
+        (s.profile.clone(), added)
+    }
+
+    /// The operator's keyboard shortcuts.
+    pub fn keys(&self) -> Vec<KeyBinding> {
+        self.state.lock().profile.keys.clone()
+    }
+
+    /// Set one shortcut (`None` = the action has no key), moving the combo off any other
+    /// action. Returns the updated profile to persist, or `None` for a menu key.
+    pub fn rebind_key(
+        &self,
+        path: &str,
+        combo: Option<prisma_core::KeyCombo>,
+    ) -> Option<ControllerMappings> {
+        let mut s = self.state.lock();
+        s.profile.rebind_key(path, combo).then(|| s.profile.clone())
+    }
+
+    /// Back to the default shortcuts. Returns the updated profile to persist.
+    pub fn reset_keys(&self) -> ControllerMappings {
+        let mut s = self.state.lock();
+        s.profile.keys = prisma_core::keys::default_bindings();
+        for path in prisma_core::keys::default_actions() {
+            if !s.profile.keys_known.contains(&path) {
+                s.profile.keys_known.push(path);
+            }
+        }
+        s.profile.clone()
     }
 
     /// The running show's zone display colours, by slot: a grid cell's LED defaults
@@ -329,17 +475,28 @@ impl MidiRuntime {
         };
         let notice = {
             let mut s = self.state.lock();
-            reaffirm_on_release(&s, &event);
-            match learn_capture(&mut s, &event) {
-                Some(notice) => Some(notice),
-                None => s.binding.as_mut().and_then(|b| {
-                    let accepted = b.apply(&event)? == prisma_core::WriteOutcome::Accepted;
-                    let control = event.control().filter(|_| accepted)?;
-                    Some(MidiNotice::Applied {
-                        control,
-                        zone: b.zone_of(control),
-                    })
-                }),
+            // Bank buttons belong to the device: never learned, never mapped.
+            if let Some(input) = bank_button(&s, &event) {
+                match input {
+                    BankInput::Move(m) => s.move_bank(m).map(MidiNotice::Bank),
+                    BankInput::Shift(held) => {
+                        s.shift = held;
+                        None
+                    }
+                }
+            } else {
+                reaffirm_on_release(&s, &event);
+                match learn_capture(&mut s, &event) {
+                    Some(notice) => Some(notice),
+                    None => s.binding.as_mut().and_then(|b| {
+                        let accepted = b.apply(&event)? == prisma_core::WriteOutcome::Accepted;
+                        let control = event.control().filter(|_| accepted)?;
+                        Some(MidiNotice::Applied {
+                            control,
+                            zone: b.zone_of(control),
+                        })
+                    }),
+                }
             }
         };
         if let Some(notice) = notice {
@@ -355,8 +512,8 @@ impl MidiRuntime {
 /// latches it; `Absolute` would switch it back off on the pad's next velocity-less
 /// event), `Absolute` for everything else.
 fn learn_mode(s: &State, target: &MapTarget) -> ControlMode {
-    // A grid pad starts as a latch: a tap runs the cell, like clicking it on screen.
-    if target.is_cell() {
+    // A grid pad starts as a latch: a tap runs the clip, like playing it on screen.
+    if target.is_clip() {
         return ControlMode::Latch;
     }
     let path = s
@@ -376,6 +533,54 @@ fn learn_mode(s: &State, target: &MapTarget) -> ControlMode {
         Some(prisma_core::ParamKind::Toggle) => ControlMode::Toggle,
         _ => ControlMode::Absolute,
     }
+}
+
+/// Add the device's defaults that are free, mark the device seeded, rebind.
+fn add_defaults(s: &mut State) -> usize {
+    let defaults = s.device.default_mappings.clone();
+    let added = defaults
+        .into_iter()
+        .filter(|m| s.profile.add_if_free(m.clone()))
+        .count();
+    let name = s.device.name.clone();
+    if !s.profile.seeded.contains(&name) {
+        s.profile.seeded.push(name);
+    }
+    if added > 0 {
+        s.rebuild();
+    }
+    added
+}
+
+/// What a bank-section button does.
+enum BankInput {
+    Move(BankMove),
+    /// Shift pressed (`true`) or released.
+    Shift(bool),
+}
+
+/// The bank input a note asks for, if the device has bank buttons and it is one: a bank
+/// press (consumed even at the edge of the grid, where nothing moves), or Shift going
+/// down or up. A bank button's release needs no handling: Learn never captures a release
+/// and a bank note is never mapped.
+fn bank_button(s: &State, event: &MidiEvent) -> Option<BankInput> {
+    let spec = s.device.surface.bank.as_ref()?;
+    let c = event.control()?;
+    let prisma_core::ControlKind::Note(n) = c.kind else {
+        return None;
+    };
+    let pressed = match event.kind {
+        EventKind::NoteOn { .. } => true,
+        EventKind::NoteOff { .. } => false,
+        _ => return None,
+    };
+    if c.channel == spec.channel && spec.shift_note == Some(n) {
+        return Some(BankInput::Shift(pressed));
+    }
+    if !pressed {
+        return None;
+    }
+    spec.move_for(c.channel, n).map(BankInput::Move)
 }
 
 /// The APC40 mkII reverts a pad's LED on the physical release, whatever the host
@@ -419,6 +624,6 @@ fn learn_capture(s: &mut State, event: &MidiEvent) -> Option<MidiNotice> {
     }
     Some(MidiNotice::Learned {
         mapping,
-        profile: s.profile.clone(),
+        profile: Box::new(s.profile.clone()),
     })
 }

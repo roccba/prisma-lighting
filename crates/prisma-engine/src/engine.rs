@@ -336,8 +336,11 @@ impl Engine {
         //     A show also exposes its track clips as tree targets. ---
         let mut grid = GridParams::default();
         let mut clip_active: Vec<Option<usize>> = Vec::new();
-        // Per zone slot, its home track (phase 1 MIDI bridge: grid pads → its clips).
-        let mut home_tracks: Vec<Option<Uuid>> = Vec::new();
+        // The grid's slot coordinates for MIDI: tracks in show order with their first
+        // destination zone (a pad's default colour), and the row count.
+        let mut midi_tracks: Vec<Uuid> = Vec::new();
+        let mut midi_track_zones: Vec<Option<u16>> = Vec::new();
+        let mut midi_rows: u16 = 0;
         // The show's DMX network output (docs/DEVICES-SPEC.md); no show → the default
         // (not routed), i.e. every universe to `config.output_target`.
         let network = match &content {
@@ -351,11 +354,17 @@ impl Engine {
                     seed_live_from_show(&tree, &live, &patch, &show);
                     grid = register_clips(&tree, &patch, &show);
                     clip_active = show.tracks.iter().map(|t| t.active).collect();
-                    home_tracks = patch
-                        .zones
+                    midi_tracks = show.tracks.iter().map(|t| t.id).collect();
+                    midi_track_zones = show
+                        .tracks
                         .iter()
-                        .map(|z| show.home_track(z.id).map(|t| t.id))
+                        .map(|t| {
+                            crate::zone_content::destination_slots(&patch, t)
+                                .first()
+                                .map(|&z| z as u16)
+                        })
                         .collect();
+                    midi_rows = grid.scene_launch.len() as u16;
                     let live: Vec<_> = grid.tracks.iter().map(|t| t.live()).collect();
                     let tracks = build_track_effects(&gpu, &tree, &patch, &show, &live);
                     let compositor = ZoneCompositor::new(&gpu, &patch, &index, tracks);
@@ -566,14 +575,17 @@ impl Engine {
         };
 
         // --- MIDI (M9): bind the transport to this tree, zones in slot order (the same
-        //     `Patch::zones` order `LiveParams` uses) with their home tracks, once every
-        //     parameter exists. ---
+        //     `Patch::zones` order `LiveParams` uses) and tracks in show order, once every
+        //     parameter exists. The runtime keeps its bank window across the rebind. ---
         midi.set_zone_colours(patch.zones.iter().map(|z| z.display_color).collect());
         midi.bind(
             Arc::clone(&tree),
             SlotIds {
                 zones: patch.zones.iter().map(|z| z.id).collect(),
-                tracks: home_tracks,
+                tracks: midi_tracks,
+                track_zones: midi_track_zones,
+                rows: midi_rows,
+                ..SlotIds::default()
             },
         );
 
@@ -931,6 +943,61 @@ impl EngineHandle {
     /// GO: play every armed clip in the same frame.
     pub fn go(&self) -> bool {
         self.fire(self.grid.go.as_ref())
+    }
+
+    /// Select a track and one of its clips (`None` = the track's running clip), the way a
+    /// click does: through `/select/track` and `/select/clip`, so a controller's knobs
+    /// follow it. `track` `None` clears the selection. Never changes output.
+    pub fn select(&self, track: Option<usize>, clip: Option<usize>) {
+        let Some(sel) = &self.grid.selection else {
+            return;
+        };
+        let value = |i: Option<usize>| i.map_or(-1.0, |i| i as f32);
+        self.tree
+            .write_real(&sel.track, value(track), ui_control_source());
+        self.tree
+            .write_real(&sel.clip, value(clip), ui_control_source());
+    }
+
+    /// The selection as the tree holds it: (track slot, clip). `None` clip = the running
+    /// clip.
+    pub fn selection(&self) -> (Option<usize>, Option<usize>) {
+        let Some(sel) = &self.grid.selection else {
+            return (None, None);
+        };
+        let read = |h: &prisma_core::ParamHandle| {
+            h.read_real()
+                .map(f32::round)
+                .filter(|v| *v >= 0.0)
+                .map(|v| v as usize)
+        };
+        (read(&sel.track), read(&sel.clip))
+    }
+
+    /// Re-read the selected clip's parameters onto the knobs (after the panel edited
+    /// one), so a knob picks the new value up and its LED ring shows it.
+    pub fn refresh_selection(&self) {
+        if let Some(sel) = &self.grid.selection {
+            self.tree.fire(&sel.refresh, ui_control_source());
+        }
+    }
+
+    /// Activate a tree path the way a button does — the keyboard's one action: a trigger
+    /// fires, a toggle flips. Levels are not actions (`false`), nor are missing paths.
+    pub fn activate_path(&self, path: &str) -> bool {
+        let Some(h) = self.tree.resolve(path) else {
+            return false;
+        };
+        let outcome = match h.kind() {
+            prisma_core::ParamKind::Trigger => self.tree.fire(&h, ui_control_source()),
+            prisma_core::ParamKind::Toggle => {
+                let on = h.read_bool().unwrap_or(false);
+                self.tree
+                    .write_real(&h, if on { 0.0 } else { 1.0 }, ui_control_source())
+            }
+            prisma_core::ParamKind::Level => return false,
+        };
+        outcome == WriteOutcome::Accepted
     }
 
     /// Set a track's opacity (`0..=1`), read by the render loop next frame.

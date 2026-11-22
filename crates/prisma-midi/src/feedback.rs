@@ -39,15 +39,18 @@ use crate::resolver::{FeedbackTarget, ValueTarget};
 /// on the input side. Called from the feedback thread and the input thread.
 pub type MidiOut = Arc<dyn Fn(&[u8]) + Send + Sync>;
 
-/// What a handle's current value shows. A grid cell's state has three levels
-/// (empty / assigned / running); anything else is lit when a toggle is on or a level
-/// is above the bottom of its range. `None` for triggers and dead handles.
+/// What a handle's current value shows. A grid clip's state has four levels (Vacía →
+/// dark, Cargada → dim, En vivo → full, Armada → pulsing); anything else is lit when a
+/// toggle is on or a level is above the bottom of its range. `None` for triggers and
+/// dead handles.
 pub fn led_level(handle: &ParamHandle, cell: bool) -> Option<LedLevel> {
     let lit = |on: bool| if on { LedLevel::On } else { LedLevel::Off };
     match handle.kind() {
         ParamKind::Toggle => handle.read_bool().map(lit),
         ParamKind::Level if cell => handle.read_real().map(|v| {
-            if v >= 1.5 {
+            if v >= 2.5 {
+                LedLevel::Armed
+            } else if v >= 1.5 {
                 LedLevel::On
             } else if v >= 0.5 {
                 LedLevel::Idle

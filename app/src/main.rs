@@ -28,6 +28,7 @@ use prisma_engine::{
     MidiNotice, MidiRuntime, NodeMonitor, NodeOrigin, NodeStatus, ParamSet, ScanError, Show,
     ShowNetwork, Source, Takeover, Track, TrackBehaviour, ZoneLiveReadout, ZoneShow,
 };
+use prisma_engine::{FocusKind, KeyBinding, KeyCombo};
 use prisma_engine::{LaunchMode, TrackTransition};
 use prisma_midi::io::{input_port_names, MidiInputLink, MidiIoError, MidiOutputLink};
 use prisma_midi::{DeviceProfile, APC40_KEYWORDS};
@@ -122,6 +123,9 @@ struct ParamInfo {
     choices: Option<Vec<String>>,
     /// Greyed out unless this holds (console-style dependent controls); `None` = always on.
     requires: Option<RequiresInfo>,
+    /// Which device knob drives it when this clip is selected (`/select/param/{n}`, 0-based):
+    /// the n-th continuous parameter (slider or tempo). `None` for colours, choices, switches.
+    knob: Option<usize>,
 }
 
 /// [`prisma_render::Requires`] for the panel: enabled while `param` has the choice
@@ -1106,6 +1110,12 @@ fn main_recovery_info(state: State<AppState>) -> Option<RecoveryInfo> {
     state.recovered.lock().unwrap().take()
 }
 
+/// The last opened or saved show file, if any (Archivo → "Abrir el último guardado").
+#[tauri::command]
+fn main_last_saved(state: State<AppState>) -> Option<String> {
+    read_last_show(&state.last_show_file).map(|p| p.display().to_string())
+}
+
 /// Save the current live show to a `.prisma` file (M8-SPEC §5): serialize the Show — with
 /// its embedded Patch — through the versioned envelope. The frontend picks the path with
 /// the native dialog.
@@ -1315,6 +1325,39 @@ impl ClipHost for AppCellHost {
         }
         let _ = self.app.emit("cells-changed", track);
     }
+
+    /// The selection moved (a click echoing back, a controller's track select, the
+    /// keyboard's arrows): the UI follows it.
+    fn selection_changed(&self, track: Option<Uuid>, clip: Option<usize>) {
+        let _ = self
+            .app
+            .emit("selection-changed", SelectionInfo { track, clip });
+    }
+
+    /// A knob moved a parameter of the selected clip: store it, as the panel does. The
+    /// panel re-reads on the (coalesced) `midi-applied` the knob's write already raised.
+    fn param_stored(&self, track: Uuid, clip: usize, name: &str, value_norm: f32) {
+        let Some(state) = self.app.try_state::<AppState>() else {
+            return;
+        };
+        let mut show = state.show.lock().unwrap();
+        let layer = show
+            .track_mut(track)
+            .and_then(|t| t.clips.get_mut(clip))
+            .and_then(|c| c.layers.first_mut());
+        if let Some(layer) = layer {
+            let Source::Shader { params, .. } = &mut layer.source;
+            params.set(name, value_norm);
+        }
+    }
+}
+
+/// The selection, as the UI receives it.
+#[derive(Serialize, Clone, Copy)]
+struct SelectionInfo {
+    track: Option<Uuid>,
+    /// `None` = the track's running clip.
+    clip: Option<usize>,
 }
 
 /// Re-publish every track's clip states — after the show document was swapped under a
@@ -1799,7 +1842,34 @@ fn persist_text(path: &Path, text: &str) -> Result<(), String> {
 /// all name the two halves of one USB device — falling back to the keywords. A device
 /// without an output simply gets no feedback. Its device profile (LED semantics) is
 /// picked from the port name.
-fn connect_midi(state: &AppState) {
+fn connect_midi(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    open_midi(&state);
+    let _ = app.emit("midi-connected", ());
+    // The first connection of a device to an empty profile applies the device's
+    // default mappings, once, with a notice (LIVE-MODEL-SPEC §8.2).
+    if let Some((profile, added)) = state.midi.seed_device_defaults() {
+        if let Err(e) = persist_mappings(app, &profile) {
+            eprintln!("prisma: could not save controller mappings: {e}");
+        }
+        let _ = app.emit(
+            "midi-seeded",
+            SeededInfo {
+                device: state.midi.device().display_name,
+                added,
+            },
+        );
+    }
+}
+
+/// What the "defaults applied" notice says.
+#[derive(Serialize, Clone)]
+struct SeededInfo {
+    device: String,
+    added: usize,
+}
+
+fn open_midi(state: &AppState) {
     let mut link = state.midi_link.lock().unwrap();
     let mut out_link = state.midi_out_link.lock().unwrap();
     state.midi.set_output(None);
@@ -1868,6 +1938,9 @@ fn install_midi_listener(app: &AppHandle, midi: &MidiRuntime, mappings_path: Pat
             }
             let _ = app.emit("midi-learned", mapping);
         }
+        MidiNotice::Bank(bank) => {
+            let _ = app.emit("midi-bank", bank);
+        }
         MidiNotice::Applied { zone, .. } => {
             if !dirty.swap(true, Ordering::Relaxed) {
                 notifier.thread().unpark();
@@ -1912,6 +1985,12 @@ struct MidiStatus {
     /// The connected device's LED palette as `#rrggbb`, index = colour value; empty
     /// when the device has none (colour choices are then hidden).
     palette: Vec<String>,
+    /// Where the controller's grid window sits (bank buttons move it).
+    bank: prisma_engine::Bank,
+    /// How many default mappings the connected device's profile ships.
+    device_defaults: usize,
+    /// The device's grid window (tracks × rows) when it has bank buttons: the UI draws it.
+    grid_window: Option<(u16, u16)>,
 }
 
 #[tauri::command]
@@ -1945,25 +2024,136 @@ fn midi_status(state: State<AppState>) -> MidiStatus {
             .palette()
             .map(|p| p.iter().map(|c| format!("#{c:06x}")).collect())
             .unwrap_or_default(),
+        bank: state.midi.bank(),
+        device_defaults: state.midi.device().default_mappings.len(),
+        grid_window: {
+            let device = state.midi.device();
+            device.surface.bank.as_ref().map(|_| device.window())
+        },
     }
+}
+
+// --- Control (LIVE-MODEL-SPEC §8.2): selection in the tree, keyboard shortcuts ---
+
+/// Select a track and one of its clips (`None` = its running clip) — a click. Goes
+/// through the tree (`/select/track`, `/select/clip`) so the keyboard and a controller's
+/// knobs share it. Never changes output.
+#[tauri::command]
+fn main_select(state: State<AppState>, track: Option<Uuid>, clip: Option<usize>) {
+    let slot = track.and_then(|t| track_slot(&state, t));
+    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        engine.select(slot, slot.and(clip));
+    }
+}
+
+/// The selection as the engine holds it.
+#[tauri::command]
+fn main_selection(state: State<AppState>) -> SelectionInfo {
+    let (slot, clip) = state
+        .engine
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map_or((None, None), |e| e.selection());
+    let track = slot.and_then(|s| state.show.lock().unwrap().tracks.get(s).map(|t| t.id));
+    SelectionInfo { track, clip }
+}
+
+/// A key press in the main window. The decision — is a shortcut bound to this combo,
+/// and is the focus somewhere a shortcut may fire — is `prisma_engine::keys::dispatch`,
+/// in one place; the UI only reports the combo and what kind of element has the focus.
+/// A tree path is activated here; a window action (`ui:…`, e.g. hide the parameter
+/// panel) is returned for the UI to perform. `None` = no shortcut ran.
+#[tauri::command]
+fn main_key(app: AppHandle, combo: KeyCombo, focus: FocusKind) -> Option<String> {
+    let state = app.state::<AppState>();
+    let keys = state.midi.keys();
+    let path = prisma_engine::keys::dispatch(&keys, &combo, focus)?;
+    if prisma_engine::keys::is_ui_action(path) {
+        return Some(path.to_string());
+    }
+    let done = state
+        .engine
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|e| e.activate_path(path));
+    if !done {
+        return None;
+    }
+    // Same refresh the UI does after a controller moved something (blackout button).
+    let _ = app.emit("midi-applied", ());
+    Some(path.to_string())
+}
+
+/// The operator's keyboard shortcuts.
+#[tauri::command]
+fn control_keys(state: State<AppState>) -> Vec<KeyBinding> {
+    state.midi.keys()
+}
+
+/// Bind `path` to `combo` (`None` = no key), moving the combo off any other action.
+/// Refuses the menu's keys.
+#[tauri::command]
+fn control_set_key(
+    app: AppHandle,
+    path: String,
+    combo: Option<KeyCombo>,
+) -> Result<Vec<KeyBinding>, String> {
+    let state = app.state::<AppState>();
+    let profile = state
+        .midi
+        .rebind_key(&path, combo)
+        .ok_or("esa tecla la usa el menú")?;
+    persist_mappings(&app, &profile)?;
+    Ok(profile.keys)
+}
+
+/// Back to the default shortcuts.
+#[tauri::command]
+fn control_reset_keys(app: AppHandle) -> Result<Vec<KeyBinding>, String> {
+    let state = app.state::<AppState>();
+    let profile = state.midi.reset_keys();
+    persist_mappings(&app, &profile)?;
+    Ok(profile.keys)
 }
 
 /// Choose the input (`None` = auto-detect), persist it, and reopen.
 #[tauri::command]
-fn midi_set_input(state: State<AppState>, port: Option<String>) -> Result<MidiStatus, String> {
+fn midi_set_input(app: AppHandle, port: Option<String>) -> Result<MidiStatus, String> {
+    let state = app.state::<AppState>();
     let config = MidiConfig { input_port: port };
     let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     persist_text(&state.midi_config_path, &json)?;
     *state.midi_config.lock().unwrap() = config;
-    connect_midi(&state);
+    connect_midi(&app);
     Ok(midi_status(state))
 }
 
 /// Re-scan and reopen the configured input (hot-plug: the device was connected late).
 #[tauri::command]
-fn midi_reconnect(state: State<AppState>) -> MidiStatus {
-    connect_midi(&state);
-    midi_status(state)
+fn midi_reconnect(app: AppHandle) -> MidiStatus {
+    connect_midi(&app);
+    midi_status(app.state::<AppState>())
+}
+
+/// "Cargar mapeos del perfil": add the connected device's default mappings for the
+/// controls (and targets) that are not mapped yet — never overwriting — and persist.
+#[tauri::command]
+fn midi_load_device_defaults(app: AppHandle) -> Result<DefaultsLoaded, String> {
+    let state = app.state::<AppState>();
+    let (profile, added) = state.midi.add_device_defaults();
+    persist_mappings(&app, &profile)?;
+    Ok(DefaultsLoaded {
+        added,
+        mappings: profile.mappings,
+    })
+}
+
+#[derive(Serialize)]
+struct DefaultsLoaded {
+    added: usize,
+    mappings: Vec<MidiMapping>,
 }
 
 /// Arm MIDI Learn for a target: the next pad/fader touched on the hardware binds to it.
@@ -2488,9 +2678,14 @@ fn main_effect_panel(
     let Some((effect_id, stored, stored_palette)) = effect else {
         return empty(index, active);
     };
+    let mut knobs = 0usize;
     let params = prisma_render::effect_params(&effect_id)
         .into_iter()
         .map(|p| {
+            let knob = matches!(p.role, ParamRole::Scalar | ParamRole::Bpm).then(|| {
+                knobs += 1;
+                knobs - 1
+            });
             let (role, group, channel) = role_dto(&p.role);
             let choices = match &p.role {
                 ParamRole::Enum { choices }
@@ -2521,6 +2716,7 @@ fn main_effect_panel(
                 channel,
                 choices,
                 requires,
+                knob,
             }
         })
         .collect();
@@ -2612,11 +2808,12 @@ fn main_set_param(
         }
         (index.is_some() && index == zs.active, zs.id)
     };
-    if !live {
-        return;
-    }
     if let Some(engine) = state.engine.lock().unwrap().as_ref() {
-        engine.set_track_param(track, &name, value);
+        if live {
+            engine.set_track_param(track, &name, value);
+        }
+        // The controller's knobs show the selected clip's values: re-read them.
+        engine.refresh_selection();
     }
 }
 
@@ -3116,6 +3313,14 @@ fn main() {
             midi_unmap,
             midi_configure,
             midi_set_takeover,
+            midi_load_device_defaults,
+            main_select,
+            main_selection,
+            main_last_saved,
+            main_key,
+            control_keys,
+            control_set_key,
+            control_reset_keys,
             close_splash,
             show_main,
         ])
@@ -3314,7 +3519,7 @@ fn main() {
             }
             // Open the MIDI input off the boot path's critical section: a missing device
             // just leaves the link empty (the device manager can reconnect later).
-            connect_midi(&app.state::<AppState>());
+            connect_midi(app.handle());
             // Art-Net node monitor (status dots + Scan). A held 6454 (another lighting program open on this
             // PC) just leaves it off; the Scan retries and explains.
             let _ = ensure_artnet_monitor(app.handle());

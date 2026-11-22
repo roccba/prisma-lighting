@@ -33,7 +33,8 @@ pub use feedback::{led_level, MidiOut};
 pub use message::{EventKind, MidiEvent};
 pub use ports::{find_port_by_keywords, APC40_KEYWORDS};
 pub use profile::{
-    load_device_profile, nearest_palette_index, DeviceProfile, LedLevel, APC40_MK2_PALETTE,
+    load_device_profile, nearest_palette_index, BankMove, BankSpec, DeviceProfile, LedLevel,
+    APC40_MK2_PALETTE, ARMED_RATE,
 };
 pub use resolver::{source_for, Binding, FeedbackTarget, ValueTarget, PICKUP_STEPS};
 pub use runtime::{MidiListener, MidiNotice, MidiRuntime};

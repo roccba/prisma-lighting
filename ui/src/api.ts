@@ -424,6 +424,8 @@ export interface RecoveryInfo {
   last_saved: string | null;
 }
 export const recoveryInfo = () => invoke<RecoveryInfo | null>("main_recovery_info");
+/** The last opened or saved show file, if any. */
+export const mainLastSaved = () => invoke<string | null>("main_last_saved");
 
 // --- The track grid (live model, docs/LIVE-MODEL-SPEC.md §7) ---
 
@@ -638,6 +640,9 @@ export interface ParamInfo {
   /** Greyed out unless `param` has the choice labelled `choice` (or, when `choice` is
    *  null, unless `param` is above zero). Console-style dependent controls. */
   requires?: { param: string; choice: string | null } | null;
+  /** The device knob (`/select/param/{n}`, 0-based) that drives it while this clip is
+   *  selected: the n-th continuous parameter. null for colours, choices and switches. */
+  knob?: number | null;
 }
 
 /** The effect work panel for a zone: one cell's effect + its parameters — the grid's
@@ -692,16 +697,12 @@ export const setParam = (track: string, name: string, value: number, cell: numbe
 
 // --- MIDI (M9 Slice 1): input device + MIDI Learn ---
 
-/** The per-zone controls a mapping can address by position (zone slot); `{ cell: i }` is
- *  cell i of the zone's scene grid. */
-export type ZoneSub =
-  | "dimmer"
-  | "speed"
-  | "solo"
-  | "blackout"
-  | "strobe_on"
-  | "strobe_rate"
-  | { cell: number };
+/** The per-zone controls a mapping can address by position (zone slot). */
+export type ZoneSub = "dimmer" | "speed" | "solo" | "blackout" | "strobe_on" | "strobe_rate";
+
+/** The per-track controls a mapping can address by position in the controller's bank
+ *  window; `{ clip: i }` is row i of the window. */
+export type TrackSub = "opacity" | "mute" | "solo" | "stop" | "select" | { clip: number };
 
 /** How a control acts. Faders are `absolute`; buttons/pads use the other four. */
 export type ControlMode = "absolute" | "toggle" | "latch" | "trigger" | "momentary";
@@ -716,10 +717,22 @@ export interface LedStyle {
   animation?: LedAnimation;
 }
 
-/** Where a MIDI mapping writes: a literal tree path (globals such as `/master/dimmer`) or
- *  a zone control by slot (slot 0 = the first zone of whichever show is running). The
- *  shape mirrors the Rust enum's serde form. */
-export type MapTarget = { path: string } | { zone_slot: { slot: number; sub: ZoneSub } };
+/** Where a MIDI mapping writes: a literal tree path (globals such as `/master/dimmer`), a
+ *  zone control by slot (slot 0 = the first zone of whichever show is running), a track
+ *  control or scene by position in the bank window, or parameter n of the selected clip.
+ *  The shape mirrors the Rust enum's serde form. */
+export type MapTarget =
+  | { path: string }
+  | { zone_slot: { slot: number; sub: ZoneSub } }
+  | { track_slot: { slot: number; sub: TrackSub } }
+  | { scene: number }
+  | { selected_param: number };
+
+/** Where the controller's grid window sits over the track grid. */
+export interface Bank {
+  track: number;
+  row: number;
+}
 
 /** A physical control: 0-based channel + note or CC number. */
 export interface MidiControl {
@@ -755,6 +768,12 @@ export interface MidiStatus {
   mappings: MidiMapping[];
   /** Device LED palette as `#rrggbb` (index = colour value); empty if none. */
   palette: string[];
+  /** The controller's grid window. */
+  bank: Bank;
+  /** How many default mappings the connected device's profile ships (0 = none). */
+  device_defaults: number;
+  /** The device's grid window (tracks × rows) when it has bank buttons, else null. */
+  grid_window: [number, number] | null;
 }
 
 export const midiStatus = () => invoke<MidiStatus>("midi_status");
@@ -768,6 +787,46 @@ export const midiConfigure = (target: MapTarget, mode: ControlMode, led: LedStyl
 
 export const midiSetTakeover = (target: MapTarget, takeover: Takeover) =>
   invoke<MidiMapping[]>("midi_set_takeover", { target, takeover });
+
+/** "Cargar mapeos del perfil": add the device's defaults for unmapped controls only. */
+export const midiLoadDeviceDefaults = () =>
+  invoke<{ added: number; mappings: MidiMapping[] }>("midi_load_device_defaults");
+
+// --- Control (LIVE-MODEL-SPEC §8.2): selection in the tree, keyboard shortcuts ---
+
+/** The selection as the engine holds it; `clip` null = the track's running clip. */
+export interface Selection {
+  track: string | null;
+  clip: number | null;
+}
+
+export const mainSelect = (track: string | null, clip: number | null) =>
+  invoke<void>("main_select", { track, clip });
+export const mainSelection = () => invoke<Selection>("main_selection");
+
+/** A key with its modifiers, as `keyboard.ts` normalizes it. */
+export interface KeyCombo {
+  key: string;
+  ctrl: boolean;
+  shift: boolean;
+  alt: boolean;
+}
+
+/** What has the focus: shortcuts never fire in a text or numeric field. */
+export type FocusKind = "other" | "text" | "number";
+
+export interface KeyBinding {
+  combo: KeyCombo;
+  path: string;
+}
+
+/** A key press: the shortcut's path if one ran (a `ui:…` window action is returned for
+ *  the UI to perform), else null. */
+export const mainKey = (combo: KeyCombo, focus: FocusKind) => invoke<string | null>("main_key", { combo, focus });
+export const controlKeys = () => invoke<KeyBinding[]>("control_keys");
+export const controlSetKey = (path: string, combo: KeyCombo | null) =>
+  invoke<KeyBinding[]>("control_set_key", { path, combo });
+export const controlResetKeys = () => invoke<KeyBinding[]>("control_reset_keys");
 
 /** Structural equality of two targets (they are small plain objects). */
 export const sameTarget = (a: MapTarget, b: MapTarget) => JSON.stringify(a) === JSON.stringify(b);

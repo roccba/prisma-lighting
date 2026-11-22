@@ -23,9 +23,12 @@ export function ParamField({
   label,
   value,
   block,
+  badge,
   children,
 }: {
   label: string;
+  /** A small number beside the label: the device knob (1–8) that drives this parameter. */
+  badge?: number | null;
   /** The value box element (a `ValueBox`), placed in the value column. Omit for controls
    *  with no scalar readout (rose, colour, palette). */
   value?: React.ReactNode;
@@ -46,6 +49,11 @@ export function ParamField({
   return (
     <div className="pr-field">
       <span className="pr-field-label" title={label}>
+        {badge != null && (
+          <span className="pr-knob-badge" title={`Perilla ${badge} del controlador`}>
+            {badge}
+          </span>
+        )}
         {label}
       </span>
       {value}

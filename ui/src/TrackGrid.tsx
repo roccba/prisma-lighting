@@ -26,7 +26,10 @@ import {
   type Easing,
   type GridInfo,
   type LaunchMode,
+  type MapTarget,
+  type Selection,
   type TrackInfo,
+  type TrackSub,
   type TrackTransition,
   type ZoneInfo,
 } from "./api";
@@ -34,18 +37,22 @@ import { CellColorPopover, CellMenu, isLightCell, NO_COLOR, RenameInput, type Me
 import { type Rgb } from "./ColorPicker";
 import { Check } from "./Check";
 import { Dropdown } from "./Dropdown";
-import { LearnTarget } from "./midiLearn";
+import { LearnTarget, useMidiLearn } from "./midiLearn";
 import { NumberField } from "./NumberField";
 import { scrubHandler } from "./scrub";
 import { linearToSrgb255 } from "./srgb";
 import { VFader } from "./VFader";
+import { DENSITIES, GRID_GAP, type Density } from "./density";
 
 // The track grid (docs/LIVE-MODEL-SPEC.md §7): tracks are columns, clips are rows, scene
 // launch on the right — every zone's content reachable at once, no zone to select first.
 // The cells are the classic grid's cells, with the same select-then-play model:
 //  · a click SELECTS a clip (the panel below edits it) and never changes output;
-//  · a double click or Enter plays it (arms it in "Modo armar" or on an Arm track);
-//  · Shift+click (or Shift+Enter) arms it for GO.
+//  · a double click plays it (arms it in "Modo armar" or on an Arm track), and so does
+//    Enter — the window's shortcut for "launch the selected clip" (Shift+Enter arms);
+//  · Shift+click arms it for GO.
+// Every control is learnable for MIDI: cells and scenes relative to the controller's bank
+// window (the pad under the operator's finger), the footer per track slot.
 // Under each track: stop, opacity fader, M / S / sel. Over each: its header (zone colour
 // line, name, destination, blend · transition) — click to select, ⋯ for its settings,
 // right-click to rename or delete. "+" adds a track to a zone.
@@ -57,8 +64,9 @@ interface TrackGridProps {
   /** The selected clip per track (track id → clip index). */
   selectedCells: Record<string, number>;
   /** Select a track (and optionally one of its clips); `zone` is the track's first
-   *  destination zone, which the large preview follows. Selection only — never plays. */
-  onSelect: (track: string, cell: number | null, zone: string | null) => void;
+   *  destination zone, which the large preview follows. Selection only — never plays.
+   *  `fromEngine`: the selection came from the engine (keyboard, MIDI) — show it only. */
+  onSelect: (track: string, cell: number | null, zone: string | null, fromEngine?: boolean) => void;
   /** The global "Modo armar": a play gesture arms instead of playing. */
   armMode: boolean;
   /** Bumped when something else changed the grid (the panel), to re-read it. */
@@ -67,15 +75,11 @@ interface TrackGridProps {
   onChanged: () => void;
   /** Whether any clip is armed (the global bar shows "Desarmar" then). */
   onArmedChange?: (anyArmed: boolean) => void;
+  /** Sizes of cells, header and footer (Compacta / Normal / Grande). */
+  density: Density;
 }
 
 const EMPTY: GridInfo = { tracks: [], scenes: [] };
-
-/** Clip row height and the gaps, in px — must match `--tgrid-row`, the `.pr-tgrid` gap
- *  and the `.pr-tgrid-wrap` gap in theme.css (the body is sized to whole rows from them). */
-const ROW_H = 52;
-const ROW_GAP = 5;
-const SECTION_GAP = 5;
 
 const EASINGS: { value: Easing; label: string }[] = [
   { value: "linear", label: "Lineal" },
@@ -123,17 +127,6 @@ function transitionLabel(t: TrackTransition): string {
   return t.base === "beats" ? `${n} beats` : `${n} s`;
 }
 
-/** The zone slot a track's cells answer to on MIDI — phase 1 bridge: only a zone's own
- *  track (the first whose destination is exactly that zone) has grid pads until the
- *  track MIDI targets land (phase 3). */
-function homeSlot(t: TrackInfo, tracks: TrackInfo[], zones: ZoneInfo[]): number | null {
-  if (t.zones.length !== 1) return null;
-  const first = tracks.find((o) => o.zones.length === 1 && o.zones[0] === t.zones[0]);
-  if (first?.id !== t.id) return null;
-  const slot = zones.findIndex((z) => z.id === t.zones[0]);
-  return slot >= 0 ? slot : null;
-}
-
 interface CellMenuState {
   track: string;
   index: number;
@@ -158,6 +151,7 @@ export function TrackGrid({
   rev,
   onChanged,
   onArmedChange,
+  density,
 }: TrackGridProps) {
   const [g, setG] = useState<GridInfo>(EMPTY);
   const [menu, setMenu] = useState<CellMenuState | null>(null);
@@ -171,6 +165,14 @@ export function TrackGrid({
   const [clipboard, setClipboard] = useState<CellInfo | null>(null);
   const cellEls = useRef(new Map<string, HTMLDivElement>());
   const key = (track: string, index: number) => `${track}:${index}`;
+  // MIDI targets are positional in the controller's bank window: the window's first track
+  // is slot 0 and its first row is clip 0. A control left of / above it has no pad.
+  const { bank, gridWindow } = useMidiLearn();
+  const trackTarget = (index: number, sub: TrackSub): MapTarget | null =>
+    index >= bank.track ? { track_slot: { slot: index - bank.track, sub } } : null;
+  const clipTarget = (index: number, row: number): MapTarget | null =>
+    row >= bank.row ? trackTarget(index, { clip: row - bank.row }) : null;
+  const sceneTarget = (row: number): MapTarget | null => (row >= bank.row ? { scene: row - bank.row } : null);
 
   const refresh = useCallback(() => {
     fetchGrid()
@@ -198,6 +200,23 @@ export function TrackGrid({
   }, [refresh, onChanged]);
 
   const track = (id: string) => g.tracks.find((t) => t.id === id);
+
+  // The selection moved elsewhere (arrows, a controller's track select): show it. The
+  // grid knows each track's zone, so the large preview follows too.
+  const tracksRef = useRef(g.tracks);
+  tracksRef.current = g.tracks;
+  useEffect(() => {
+    const un = listen<Selection>("selection-changed", (e) => {
+      const { track: id, clip } = e.payload;
+      const t = id ? tracksRef.current.find((o) => o.id === id) : undefined;
+      if (!t) return;
+      onSelect(t.id, clip, t.zones[0] ?? null, true);
+      if (clip !== null) cellEls.current.get(key(t.id, clip))?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
+    return () => {
+      un.then((f) => f()).catch(() => {});
+    };
+  }, [onSelect]);
   const anyArmed = g.tracks.some((t) => t.armed !== null);
   useEffect(() => onArmedChange?.(anyArmed), [anyArmed, onArmedChange]);
   const select = (id: string, cell: number | null) => onSelect(id, cell, track(id)?.zones[0] ?? null);
@@ -365,42 +384,66 @@ export function TrackGrid({
 
   const rows = g.scenes.length;
 
-  // The body shows only WHOLE rows: its height is the most rows (and their gaps) that fit
-  // between the header and the footer, re-measured whenever the region resizes.
+  // ONE grid in ONE scroll box: header, clip rows and footer share the same columns and
+  // the same horizontal scroll. The header and footer stick to the top and bottom, the
+  // scene column (with "Escenas" and "Stop todo") to the right. Sizes come only from the
+  // density; the box is as tall as the whole clip rows that fit (at least 2), so the window
+  // size changes how many rows are seen, never how big they are.
   const wrapRef = useRef<HTMLDivElement>(null);
-  const headRef = useRef<HTMLDivElement>(null);
-  const footRef = useRef<HTMLDivElement>(null);
-  const [bodyHeight, setBodyHeight] = useState<number | undefined>(undefined);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const scenesRef = useRef<HTMLDivElement>(null);
+  const [boxHeight, setBoxHeight] = useState<number | undefined>(undefined);
+  const [hScrollbar, setHScrollbar] = useState(0);
+  const syncScenes = () => {
+    const box = scrollRef.current;
+    if (box && scenesRef.current) scenesRef.current.scrollTop = box.scrollTop;
+  };
+  const sizes = DENSITIES[density];
   useLayoutEffect(() => {
     const wrap = wrapRef.current;
-    if (!wrap) return;
+    const box = scrollRef.current;
+    if (!wrap || !box) return;
     const measure = () => {
-      const head = headRef.current?.offsetHeight ?? 0;
-      const foot = footRef.current?.offsetHeight ?? 0;
       const style = getComputedStyle(wrap);
-      const pad = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
-      // The wrap's own gap between head / body / foot, and the scrollbar if any.
-      const free = wrap.clientHeight - pad - head - foot - 2 * SECTION_GAP;
-      const fit = Math.max(1, Math.floor((free + ROW_GAP) / (ROW_H + ROW_GAP)));
-      const shown = Math.min(fit, Math.max(1, rows));
-      setBodyHeight(shown * ROW_H + (shown - 1) * ROW_GAP);
+      const avail = wrap.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+      const scrollbar = box.offsetHeight - box.clientHeight; // the horizontal one, if shown
+      setHScrollbar(scrollbar);
+      const fixed = sizes.head + sizes.foot + 2 * GRID_GAP + scrollbar;
+      const fit = Math.floor((avail - fixed + GRID_GAP) / (sizes.row + GRID_GAP));
+      const shown = Math.max(Math.min(2, rows), Math.min(fit, rows));
+      const body = shown > 0 ? shown * sizes.row + (shown - 1) * GRID_GAP : 0;
+      setBoxHeight(fixed + body);
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(wrap);
+    ro.observe(box);
     return () => ro.disconnect();
-  }, [rows, g.tracks.length]);
+  }, [rows, g.tracks.length, sizes]);
   // Track columns share the width left by the "+" and scene columns, never narrower than
-  // --tgrid-col (then the grid scrolls sideways).
-  const columns = `repeat(${g.tracks.length}, minmax(var(--tgrid-col), 1fr)) var(--tgrid-add) var(--tgrid-scene)`;
+  // the density's minimum (then the grid scrolls sideways).
+  const columns = `repeat(${g.tracks.length}, minmax(var(--tgrid-col), 1fr)) var(--tgrid-add)`;
+  const gridRows = `var(--tgrid-head) repeat(${rows}, var(--tgrid-row)) var(--tfoot-h)`;
+  // The controller's bank window (an APC40: 8 tracks × 5 rows), drawn over the cells it
+  // controls. Only while a device with a grid is connected.
+  const ring =
+    gridWindow && g.tracks.length > 0 && rows > 0
+      ? {
+          gridColumn: `${bank.track + 1} / span ${Math.max(1, Math.min(gridWindow[0], g.tracks.length - bank.track))}`,
+          gridRow: `${bank.row + 2} / span ${Math.max(1, Math.min(gridWindow[1], rows - bank.row))}`,
+        }
+      : null;
   const menuCell = menu ? cellOf(menu.track, menu.index) : undefined;
   const headTrack = headMenu ? track(headMenu.track) : undefined;
   const settingsTrack = settings ? track(settings.track) : undefined;
 
-  const cols = { gridTemplateColumns: columns } as React.CSSProperties;
   return (
     <div className="pr-tgrid-wrap" ref={wrapRef}>
-      <div className="pr-tgrid pr-tgrid-head" ref={headRef} style={cols}>
+      <div className="pr-tgrid-frame" style={{ height: boxHeight }}>
+      <div className="pr-tgrid-scroll" ref={scrollRef} onScroll={syncScenes}>
+      <div className="pr-tgrid" style={{ gridTemplateColumns: columns, gridTemplateRows: gridRows }}>
+      {ring && <div className="pr-tgrid-ring" style={ring} title="Ventana del controlador (banco)" />}
+      <div className="pr-tgrid-head">
         {/* Header row */}
         {g.tracks.map((t) => (
           <div
@@ -472,24 +515,19 @@ export function TrackGrid({
         >
           +
         </button>
-        <div className="pr-thead pr-thead-scenes">
-          <span className="pr-thead-name">Escenas</span>
-        </div>
       </div>
 
-      {/* Clip rows: a scroll box exactly as tall as the whole rows that fit, snapping to
-          rows, so neither the last visible row nor a scene button is ever cut. */}
-      <div className="pr-tgrid-body" style={{ height: bodyHeight }}>
-        <div className="pr-tgrid" style={cols}>
+      {/* Clip rows, snapping to whole rows under the sticky header. */}
+      <div className="pr-tgrid-body">
         {Array.from({ length: rows }, (_, row) => (
           <Row key={row}>
-            {g.tracks.map((t) => {
+            {g.tracks.map((t, ti) => {
               const cell = t.clips[row];
               if (!cell) return <div key={t.id} className="pr-tgrid-gap" />;
               const assigned = !!cell.effect_id;
               const title = cell.name ?? cell.effect_name ?? "";
               const selected = selectedTrack === t.id && (selectedCells[t.id] ?? t.active) === row;
-              const slot = homeSlot(t, g.tracks, zones);
+              const pad = clipTarget(ti, row);
               const isEditing = editing?.track === t.id && editing.index === row;
               // Label colour first, else the effect's own colour, else the zone's (washed).
               const shown = cell.color ?? effectSwatch(cell);
@@ -527,13 +565,12 @@ export function TrackGrid({
                   }}
                   onKeyDown={(e) => {
                     if (isEditing) return;
+                    // Enter / Shift+Enter are the window's shortcuts (launch / arm the
+                    // selected clip); a focused cell is the selected one.
                     if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
                       e.preventDefault();
                       const r = e.currentTarget.getBoundingClientRect();
                       setMenu({ track: t.id, index: row, x: r.left + 8, y: r.top + 8 });
-                    } else if (e.key === "Enter") {
-                      e.preventDefault();
-                      play(t.id, row, armMode || e.shiftKey);
                     }
                   }}
                   role="button"
@@ -541,7 +578,7 @@ export function TrackGrid({
                   aria-pressed={selected}
                   title={
                     assigned
-                      ? `${title}${cell.name ? ` — ${cell.effect_name ?? ""}` : ""} · ${cellState(cell)} (doble clic o Enter: lanzar · Shift+clic: armar · clic en una armada: desarmar)`
+                      ? `${title}${cell.name ? ` — ${cell.effect_name ?? ""}` : ""} · ${cellState(cell)} (doble clic o Enter: lanzar · Shift+clic o Shift+Enter: armar · clic en una armada: desarmar)`
                       : "Vacía — clic para seleccionarla y elegir un efecto"
                   }
                 >
@@ -561,47 +598,36 @@ export function TrackGrid({
                     ))}
                 </div>
               );
-              return slot === null ? (
+              return pad === null ? (
                 <div key={t.id} className="pr-learn-host pr-learn-cell">
                   {body}
                 </div>
               ) : (
-                <LearnTarget
-                  key={t.id}
-                  target={{ zone_slot: { slot, sub: { cell: row } } }}
-                  name={`${t.name} · celda ${row + 1}`}
-                  className="pr-learn-cell"
-                >
+                <LearnTarget key={t.id} target={pad} name={`${t.name} · celda ${row + 1}`} className="pr-learn-cell">
                   {body}
                 </LearnTarget>
               );
             })}
             <div className="pr-tgrid-gap" />
-            <button
-              type="button"
-              className="pr-btn pr-scene-btn"
-              onClick={(e) => launchScene(row, armMode || e.shiftKey).catch(() => {})}
-              title={armMode ? "Armar la escena en todos los tracks" : "Lanzar la escena en todos los tracks (Shift = armar)"}
-            >
-              ▶ {g.scenes[row]?.name ?? row + 1}
-            </button>
           </Row>
         ))}
-        </div>
       </div>
 
-      <div className="pr-tgrid pr-tgrid-foot" ref={footRef} style={cols}>
+      <div className="pr-tgrid-foot">
         {/* Footer: stop · opacity · M / S / sel */}
-        {g.tracks.map((t) => (
+        {g.tracks.map((t, ti) => (
           <div key={t.id} className="pr-tfoot" onPointerDown={(e) => e.stopPropagation()}>
-            <button
-              type="button"
-              className="pr-btn pr-tfoot-stop"
-              onClick={() => stopTrack(t.id).catch(() => {})}
-              title="Stop (con la transición del track; otro stop corta en seco)"
-            >
-              ■ Stop
-            </button>
+            <Learnable target={trackTarget(ti, "stop")} name={`Stop — ${t.name}`} className="pr-learn-compact">
+              <button
+                type="button"
+                className="pr-btn pr-tfoot-stop"
+                onClick={() => stopTrack(t.id).catch(() => {})}
+                title="Stop (con la transición del track; otro stop corta en seco)"
+              >
+                ■ Stop
+              </button>
+            </Learnable>
+            <Learnable target={trackTarget(ti, "opacity")} name={`Opacidad — ${t.name}`}>
             <div className="pr-tfoot-fader">
               <VFader value={t.opacity} onChange={(v) => changeOpacity(t, v)} aria-label={`Opacidad de ${t.name}`} />
               <span
@@ -618,51 +644,103 @@ export function TrackGrid({
                 {Math.round(t.opacity * 255)}
               </span>
             </div>
+            </Learnable>
             <div className="pr-tfoot-btns">
-              <button
-                type="button"
-                className={`pr-btn pr-zonecard-sm${t.mute ? " is-active" : ""}`}
-                onClick={() => {
-                  patchTrack(t.id, { mute: !t.mute });
-                  setTrackMute(t.id, !t.mute).catch(() => {});
-                }}
-                title="Mute"
-              >
-                M
-              </button>
-              <button
-                type="button"
-                className={`pr-btn pr-zonecard-sm${t.solo ? " is-active" : ""}`}
-                onClick={() => {
-                  patchTrack(t.id, { solo: !t.solo });
-                  setTrackSolo(t.id, !t.solo).catch(() => {});
-                }}
-                title="Solo"
-              >
-                S
-              </button>
-              <button
-                type="button"
-                className={`pr-btn pr-zonecard-sm${selectedTrack === t.id ? " is-active" : ""}`}
-                onClick={() => select(t.id, selectedCells[t.id] ?? null)}
-                title="Seleccionar el track"
-              >
-                sel
-              </button>
+              <Learnable target={trackTarget(ti, "mute")} name={`Mute — ${t.name}`} className="pr-learn-compact">
+                <button
+                  type="button"
+                  className={`pr-btn pr-zonecard-sm${t.mute ? " is-active" : ""}`}
+                  onClick={() => {
+                    patchTrack(t.id, { mute: !t.mute });
+                    setTrackMute(t.id, !t.mute).catch(() => {});
+                  }}
+                  title="Mute"
+                >
+                  M
+                </button>
+              </Learnable>
+              <Learnable target={trackTarget(ti, "solo")} name={`Solo — ${t.name}`} className="pr-learn-compact">
+                <button
+                  type="button"
+                  className={`pr-btn pr-zonecard-sm${t.solo ? " is-active" : ""}`}
+                  onClick={() => {
+                    patchTrack(t.id, { solo: !t.solo });
+                    setTrackSolo(t.id, !t.solo).catch(() => {});
+                  }}
+                  title="Solo"
+                >
+                  S
+                </button>
+              </Learnable>
+              <Learnable target={trackTarget(ti, "select")} name={`Seleccionar — ${t.name}`} className="pr-learn-compact">
+                <button
+                  type="button"
+                  className={`pr-btn pr-zonecard-sm${selectedTrack === t.id ? " is-active" : ""}`}
+                  onClick={() => select(t.id, selectedCells[t.id] ?? null)}
+                  title="Seleccionar el track"
+                >
+                  sel
+                </button>
+              </Learnable>
             </div>
           </div>
         ))}
         <div className="pr-tgrid-gap" />
+      </div>
+      </div>
+      </div>
+
+      {/* The scene column: outside the horizontal scroll so it never covers a track, its
+          vertical scroll mirrored from the tracks' (the wheel over it scrolls them). */}
+      <div className="pr-tgrid-scenes-col" style={{ paddingBottom: hScrollbar }}>
+        <div
+          className="pr-tgrid-scenes"
+          ref={scenesRef}
+          onWheel={(e) => scrollRef.current?.scrollBy({ top: e.deltaY })}
+        >
+          <div className="pr-tgrid pr-tgrid-scenegrid" style={{ gridTemplateRows: gridRows }}>
+            <div className="pr-tgrid-head">
+              <div className="pr-thead pr-thead-scenes">
+                <span className="pr-thead-name">Escenas</span>
+              </div>
+            </div>
+            <div className="pr-tgrid-body">
+              {Array.from({ length: rows }, (_, row) => (
+            <div key={row} className="pr-tgrid-scene">
+            <Learnable target={sceneTarget(row)} name={`Escena ${row + 1}`} className="pr-learn-cell">
+              <button
+                type="button"
+                className="pr-btn pr-scene-btn"
+                onClick={(e) => launchScene(row, armMode || e.shiftKey).catch(() => {})}
+                title={
+                  armMode
+                    ? "Armar la escena en todos los tracks"
+                    : `Lanzar la escena en todos los tracks (Shift = armar${row < 9 ? ` · tecla ${row + 1}` : ""})`
+                }
+              >
+                ▶ {g.scenes[row]?.name ?? row + 1}
+              </button>
+            </Learnable>
+            </div>
+              ))}
+            </div>
+            <div className="pr-tgrid-foot">
         <div className="pr-tfoot pr-tfoot-all">
-          <button
-            type="button"
-            className="pr-btn pr-tfoot-stopall"
-            onClick={() => stopAll().catch(() => {})}
-            title="Stop en todos los tracks, cada uno con su transición (otro toque durante el fade corta en seco)"
-          >
-            ■ Stop todo
-          </button>
+          <LearnTarget target={{ path: "/tracks/stop" }} name="Stop todo" className="pr-learn-compact">
+            <button
+              type="button"
+              className="pr-btn pr-tfoot-stopall"
+              onClick={() => stopAll().catch(() => {})}
+              title="Stop en todos los tracks, cada uno con su transición (otro toque durante el fade corta en seco · Ctrl+Retroceso)"
+            >
+              ■ Stop todo
+            </button>
+          </LearnTarget>
         </div>
+            </div>
+          </div>
+        </div>
+      </div>
       </div>
 
       {menu && menuCell && (
@@ -732,6 +810,27 @@ export function TrackGrid({
       )}
       {color && <CellColorPopover cell={color.cell} value={color.value} onChange={onColorChange} onClose={onColorClose} />}
     </div>
+  );
+}
+
+/** A learnable control, or just the control when it has no MIDI target (left of / above
+ *  the controller's bank window). */
+function Learnable({
+  target,
+  name,
+  className,
+  children,
+}: {
+  target: MapTarget | null;
+  name: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  if (!target) return <>{children}</>;
+  return (
+    <LearnTarget target={target} name={name} className={className}>
+      {children}
+    </LearnTarget>
   );
 }
 

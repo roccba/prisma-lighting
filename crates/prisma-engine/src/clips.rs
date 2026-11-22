@@ -19,7 +19,30 @@
 //! /arm/go                        trigger  play every armed clip, all in the same frame
 //! /tracks/stop                   trigger  stop every track (each with its transition)
 //! /arm/clear                     trigger  disarm every armed clip
+//! /track/{id}/select             trigger  make the track the selected one
+//! /select/track | /select/clip   level    the selection (-1 = none); never saved
+//! /select/param/{n}              level    param n of the selected clip, 0..1 (knobs)
+//! /select/move/up|down|left|right trigger move the selection across the grid
+//! /select/launch | /select/arm   trigger  launch / arm the selected clip
+//! /select/refresh                trigger  re-read the selected clip's params
 //! ```
+//!
+//! # Selection (LIVE-MODEL-SPEC §8.2)
+//!
+//! The selection lives in the tree so the mouse, the keyboard and MIDI move the same
+//! one: a click writes `/select/track` + `/select/clip`, a controller's track-select
+//! button fires `/track/{id}/select`, the arrows fire `/select/move/*`. The controller
+//! tells the host every change ([`ClipHost::selection_changed`]) and the UI follows.
+//! A selected clip of `-1` means the track's running clip. The controller remembers the
+//! last selected clip of each track, which a track-select returns to.
+//!
+//! `/select/param/{n}` mirror the selected clip's continuous parameters (sliders and
+//! tempos, in manifest order; colours, choices and switches are skipped) as a knob
+//! position `0..1` over each one's real range — the same linear mapping a UI slider and a
+//! MIDI fader use. A knob writing one changes
+//! the clip's stored value through the host and, if the clip is running, the live
+//! effect parameter; a selection change re-mirrors them (so a knob picks the new
+//! value up and its LED ring shows it).
 //!
 //! The [`ClipController`] thread subscribes to those, runs each track's
 //! [`ZoneDeck`] (the latch/trigger/hold/arm decisions), builds effects and sends the
@@ -45,11 +68,13 @@ use prisma_core::{
     SubscriptionCloser, TriggerCursor, ZoneDeck,
 };
 use prisma_patch::Patch;
-use prisma_render::Gpu;
+use prisma_render::effect::ParamRole;
+use prisma_render::{manifest_by_id, Gpu};
 use uuid::Uuid;
 
 use crate::zone_content::{
-    build_track_instances, destination_slots, Fade, TrackLive, ZoneCommand, ZoneCommandSender,
+    build_track_instances, destination_slots, track_param_prefix, Fade, TrackLive, ZoneCommand,
+    ZoneCommandSender,
 };
 
 /// `state` value of an empty clip.
@@ -91,6 +116,56 @@ pub trait ClipHost: Send + Sync {
     fn active_changed(&self, track: Uuid, active: Option<usize>);
     /// `track`'s armed clip changed.
     fn armed_changed(&self, _track: Uuid, _armed: Option<usize>) {}
+    /// The selection changed (any transport). `clip` `None` = the track's running clip.
+    fn selection_changed(&self, _track: Option<Uuid>, _clip: Option<usize>) {}
+    /// A knob changed parameter `name` of `track`'s clip `clip` (normalized `0..=1`):
+    /// store it in the clip, like the parameter panel does.
+    fn param_stored(&self, _track: Uuid, _clip: usize, _name: &str, _value_norm: f32) {}
+}
+
+/// How many `/select/param/{n}` knob targets exist (more than any manifest has
+/// continuous parameters today, and two banks of an 8-knob controller).
+pub const SELECT_PARAMS: usize = 16;
+
+/// The largest index `/select/track` and `/select/clip` can hold.
+const SELECT_MAX: f32 = 4095.0;
+
+/// The UI tier: the selection is written as the UI writes it, so a click right after a
+/// controller press is never refused (equal priority → last write wins).
+fn selection_source() -> SourceId {
+    SourceId::new(priority::UI, 2)
+}
+
+/// The engine's mirror of the selected clip's parameters onto `/select/param/*`, at MIDI
+/// tier: a knob (also MIDI) and the mirror are last-write-wins, and neither the panel
+/// nor a selection change locks the knobs out.
+fn mirror_source() -> SourceId {
+    SourceId::new(priority::MIDI, u32::MAX)
+}
+
+/// The parameters a knob drives: the continuous ones (sliders and tempos), in manifest
+/// order — knob n → the n-th of them. Colours, choices, switches and directions are
+/// skipped: a knob has no sensible way to pick among them.
+pub fn knob_params(effect_id: &str) -> Vec<prisma_render::ParamSpec> {
+    manifest_by_id(effect_id)
+        .map(|m| m.params.into_iter().filter(is_knob_param).collect())
+        .unwrap_or_default()
+}
+
+/// Whether a manifest parameter is knob material (see [`knob_params`]).
+pub fn is_knob_param(spec: &prisma_render::ParamSpec) -> bool {
+    matches!(spec.role, ParamRole::Scalar | ParamRole::Bpm)
+}
+
+/// A selection index from its tree value (`-1` and below = none).
+fn read_index(h: &ParamHandle) -> Option<usize> {
+    let v = h.read_real()?.round();
+    (v >= 0.0).then_some(v as usize)
+}
+
+/// The tree value of a selection index.
+fn index_value(i: Option<usize>) -> f32 {
+    i.map_or(-1.0, |i| (i as f32).min(SELECT_MAX))
 }
 
 /// A clip's stored effect parameters, written when it starts.
@@ -119,6 +194,8 @@ pub struct TrackClips {
     pub opacity: ParamHandle,
     pub mute: ParamHandle,
     pub solo: ParamHandle,
+    /// `/track/{id}/select`: make this track the selected one.
+    pub select: ParamHandle,
 }
 
 impl TrackClips {
@@ -147,6 +224,64 @@ pub struct GridParams {
     pub stop_all: Option<ParamHandle>,
     /// `/arm/clear`; `None` before a show registered it.
     pub arm_clear: Option<ParamHandle>,
+    /// The selection, the knob targets and the selection actions; `None` before a show
+    /// registered them.
+    pub selection: Option<SelectionParams>,
+}
+
+/// The selection's tree parameters (see the module docs).
+#[derive(Clone)]
+pub struct SelectionParams {
+    /// `/select/track`: the selected track slot, `-1` = none.
+    pub track: ParamHandle,
+    /// `/select/clip`: the selected clip of that track, `-1` = its running clip.
+    pub clip: ParamHandle,
+    /// `/select/param/{n}`.
+    pub params: Vec<ParamHandle>,
+    /// `/select/move/up|down|left|right`, in that order.
+    pub moves: [ParamHandle; 4],
+    pub launch: ParamHandle,
+    pub arm: ParamHandle,
+    pub refresh: ParamHandle,
+}
+
+fn register_selection(tree: &ParameterTree) -> SelectionParams {
+    let index = |path: &str, label: &str| {
+        tree.register(
+            path,
+            ParamDescriptor::level(
+                label,
+                RealRange {
+                    min: -1.0,
+                    max: SELECT_MAX,
+                },
+                Curve::Linear,
+                0.0, // -1: nothing selected
+            ),
+        )
+    };
+    let trigger = |path: &str, label: &str| tree.register(path, ParamDescriptor::trigger(label));
+    SelectionParams {
+        track: index("/select/track", "select.track"),
+        clip: index("/select/clip", "select.clip"),
+        params: (0..SELECT_PARAMS)
+            .map(|n| {
+                tree.register(
+                    &format!("/select/param/{n}"),
+                    ParamDescriptor::unit_level("select.param", 0.0),
+                )
+            })
+            .collect(),
+        moves: [
+            trigger(prisma_core::keys::paths::MOVE_UP, "select.move"),
+            trigger(prisma_core::keys::paths::MOVE_DOWN, "select.move"),
+            trigger(prisma_core::keys::paths::MOVE_LEFT, "select.move"),
+            trigger(prisma_core::keys::paths::MOVE_RIGHT, "select.move"),
+        ],
+        launch: trigger(prisma_core::keys::paths::LAUNCH_SELECTED, "select.launch"),
+        arm: trigger(prisma_core::keys::paths::ARM_SELECTED, "select.arm"),
+        refresh: trigger("/select/refresh", "select.refresh"),
+    }
 }
 
 /// Register every track's, scene's and GO's parameters. A track's opacity / mute /
@@ -201,6 +336,10 @@ pub fn register_clips(tree: &ParameterTree, patch: &Patch, show: &Show) -> GridP
                     &format!("{base}/solo"),
                     ParamDescriptor::toggle("track.solo", track.solo),
                 ),
+                select: tree.register(
+                    &format!("{base}/select"),
+                    ParamDescriptor::trigger("track.select"),
+                ),
             }
         })
         .collect();
@@ -222,6 +361,7 @@ pub fn register_clips(tree: &ParameterTree, patch: &Patch, show: &Show) -> GridP
         go: Some(tree.register("/arm/go", ParamDescriptor::trigger("arm.go"))),
         stop_all: Some(tree.register("/tracks/stop", ParamDescriptor::trigger("tracks.stop"))),
         arm_clear: Some(tree.register("/arm/clear", ParamDescriptor::trigger("arm.clear"))),
+        selection: Some(register_selection(tree)),
     }
 }
 
@@ -269,11 +409,30 @@ enum Action {
     Go,
     StopAll,
     ArmClear,
+    Select(usize),
+    SelectionChanged,
+    SelectParam(usize),
+    SelectRefresh,
+    Move(Move),
+    LaunchSelected,
+    ArmSelected,
+}
+
+/// A selection move across the grid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Move {
+    Up,
+    Down,
+    Left,
+    Right,
 }
 
 impl Action {
     fn is_trigger(self) -> bool {
-        !matches!(self, Action::Hold(..))
+        !matches!(
+            self,
+            Action::Hold(..) | Action::SelectionChanged | Action::SelectParam(_)
+        )
     }
 }
 
@@ -313,6 +472,21 @@ impl ClipController {
             }
             route(&t.refresh, Action::Refresh(slot));
             route(&t.stop, Action::Stop(slot));
+            route(&t.select, Action::Select(slot));
+        }
+        if let Some(sel) = &grid.selection {
+            route(&sel.track, Action::SelectionChanged);
+            route(&sel.clip, Action::SelectionChanged);
+            for (n, h) in sel.params.iter().enumerate() {
+                route(h, Action::SelectParam(n));
+            }
+            let dirs = [Move::Up, Move::Down, Move::Left, Move::Right];
+            for (h, dir) in sel.moves.iter().zip(dirs) {
+                route(h, Action::Move(dir));
+            }
+            route(&sel.launch, Action::LaunchSelected);
+            route(&sel.arm, Action::ArmSelected);
+            route(&sel.refresh, Action::SelectRefresh);
         }
         for (row, h) in grid.scene_launch.iter().enumerate() {
             route(h, Action::SceneLaunch(row));
@@ -348,7 +522,11 @@ impl ClipController {
             decks: (0..grid.tracks.len())
                 .map(|slot| ZoneDeck::new(active.get(slot).copied().flatten()))
                 .collect(),
+            remembered: vec![None; grid.tracks.len()],
             tracks: grid.tracks,
+            selection: grid.selection,
+            selected: (None, None),
+            mirrored: vec![None; SELECT_PARAMS],
             host,
         };
         let thread = std::thread::Builder::new()
@@ -357,6 +535,7 @@ impl ClipController {
                 for slot in 0..ctl.tracks.len() {
                     ctl.publish_states(slot);
                 }
+                ctl.selection_changed();
                 loop {
                     let changed = sub.recv();
                     if changed.is_empty() {
@@ -382,13 +561,25 @@ impl ClipController {
                                 ctl.hold(slot, clip, handle.read_bool() == Some(true))
                             }
                             Action::Arm(slot, clip) => ctl.arm(slot, clip),
-                            Action::Refresh(slot) => ctl.publish_states(slot),
+                            Action::Refresh(slot) => {
+                                ctl.publish_states(slot);
+                                if ctl.selected.0 == Some(slot) {
+                                    ctl.mirror();
+                                }
+                            }
                             Action::Stop(slot) => ctl.stop(slot),
                             Action::SceneLaunch(row) => ctl.scene(row, false),
                             Action::SceneArm(row) => ctl.scene(row, true),
                             Action::Go => ctl.go(),
                             Action::StopAll => ctl.stop_all(),
                             Action::ArmClear => ctl.arm_clear(),
+                            Action::Select(slot) => ctl.select_track(slot),
+                            Action::SelectionChanged => ctl.selection_changed(),
+                            Action::SelectParam(n) => ctl.knob(n),
+                            Action::SelectRefresh => ctl.mirror(),
+                            Action::Move(dir) => ctl.move_selection(dir),
+                            Action::LaunchSelected => ctl.play_selected(false),
+                            Action::ArmSelected => ctl.play_selected(true),
                         }
                     }
                 }
@@ -417,6 +608,14 @@ struct Controller {
     tracks: Vec<TrackClips>,
     decks: Vec<ZoneDeck>,
     host: Arc<dyn ClipHost>,
+    selection: Option<SelectionParams>,
+    /// The selection as last read: (track slot, clip; `None` = the running clip).
+    selected: (Option<usize>, Option<usize>),
+    /// The last clip selected on each track, which a track-select returns to.
+    remembered: Vec<Option<usize>>,
+    /// What the mirror last wrote to each `/select/param/{n}`, so its own write is not
+    /// taken for a knob move.
+    mirrored: Vec<Option<f32>>,
 }
 
 impl Controller {
@@ -620,7 +819,167 @@ impl Controller {
         }
         self.host.active_changed(track, self.decks[slot].active());
         self.publish_states(slot);
+        // A track showing its running clip (no clip selected) now shows another one.
+        if self.selected == (Some(slot), None) {
+            self.mirror();
+        }
         commands
+    }
+
+    // --- Selection -------------------------------------------------------------------
+
+    /// The selected clip as (track slot, clip): the selected clip, else the track's
+    /// running one.
+    fn selected_clip(&self) -> Option<(usize, usize)> {
+        let (track, clip) = self.selected;
+        let track = track?;
+        let clip = clip.or_else(|| self.decks.get(track)?.active())?;
+        Some((track, clip))
+    }
+
+    /// Write the selection (track first, so an observer between the two writes sees the
+    /// new track with the old clip, never the old track with the new clip).
+    fn write_selection(&self, track: Option<usize>, clip: Option<usize>) {
+        let Some(sel) = &self.selection else {
+            return;
+        };
+        self.tree
+            .write_real(&sel.track, index_value(track), selection_source());
+        self.tree
+            .write_real(&sel.clip, index_value(clip), selection_source());
+    }
+
+    /// `/track/{id}/select`: select the track, on the clip it had selected last.
+    fn select_track(&mut self, slot: usize) {
+        let clip = self.remembered.get(slot).copied().flatten();
+        self.write_selection(Some(slot), clip);
+    }
+
+    /// The selection params changed (any writer): read them, remember, tell the host,
+    /// re-mirror the knobs.
+    fn selection_changed(&mut self) {
+        let Some(sel) = &self.selection else {
+            return;
+        };
+        let track = read_index(&sel.track).filter(|&t| t < self.tracks.len());
+        let clip = track.and(read_index(&sel.clip));
+        if let (Some(t), Some(c)) = (track, clip) {
+            self.remembered[t] = Some(c);
+        }
+        self.selected = (track, clip);
+        self.host
+            .selection_changed(track.map(|t| self.tracks[t].track), clip);
+        self.mirror();
+    }
+
+    /// Arrows: up/down within the track, left/right across tracks keeping the row.
+    fn move_selection(&mut self, dir: Move) {
+        if self.tracks.is_empty() {
+            return;
+        }
+        let (track, _) = self.selected;
+        let track = track.unwrap_or(0);
+        let row = self.selected_clip().map(|(_, c)| c).unwrap_or(0);
+        let clips = |t: usize| self.tracks[t].launch.len();
+        let (t, c) = match dir {
+            Move::Up => (track, row.saturating_sub(1)),
+            Move::Down => (track, row + 1),
+            Move::Left => (track.saturating_sub(1), row),
+            Move::Right => ((track + 1).min(self.tracks.len() - 1), row),
+        };
+        let c = c.min(clips(t).saturating_sub(1));
+        self.write_selection(Some(t), (clips(t) > 0).then_some(c));
+    }
+
+    /// Enter / Shift+Enter: launch or arm the selected clip. An empty clip has nothing
+    /// to play.
+    fn play_selected(&mut self, arm: bool) {
+        let Some((slot, clip)) = self.selected_clip() else {
+            return;
+        };
+        if self
+            .host
+            .clip_effect(self.tracks[slot].track, clip)
+            .is_none()
+        {
+            return;
+        }
+        if arm {
+            self.arm(slot, clip);
+        } else {
+            self.launch(slot, clip);
+        }
+    }
+
+    /// Show the selected clip's continuous parameters on `/select/param/*` (0 past the
+    /// last one, or with nothing selected).
+    fn mirror(&mut self) {
+        let Some(sel) = self.selection.clone() else {
+            return;
+        };
+        let effect = self
+            .selected_clip()
+            .and_then(|(t, c)| self.host.clip_effect(self.tracks[t].track, c));
+        let specs = effect
+            .as_ref()
+            .map(|e| knob_params(&e.effect_id))
+            .unwrap_or_default();
+        for (n, handle) in sel.params.iter().enumerate() {
+            let position = match (specs.get(n), &effect) {
+                (Some(spec), Some(e)) => {
+                    let d = &spec.descriptor;
+                    let span = d.range.max - d.range.min;
+                    let norm = e.params.get(spec.name).unwrap_or(d.default_norm);
+                    if span > 0.0 {
+                        ((d.to_real(norm) - d.range.min) / span).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    }
+                }
+                _ => 0.0,
+            };
+            if self.mirrored[n].is_some_and(|m| (m - position).abs() < 1e-6)
+                && handle
+                    .read_real()
+                    .is_some_and(|v| (v - position).abs() < 1e-6)
+            {
+                continue; // already shown: no write, no knob-ring traffic
+            }
+            self.mirrored[n] = Some(position);
+            self.tree.write_real(handle, position, mirror_source());
+        }
+    }
+
+    /// A knob moved `/select/param/{n}`: set that parameter of the selected clip — its
+    /// stored value, and the live one if the clip is running.
+    fn knob(&mut self, n: usize) {
+        let Some(sel) = &self.selection else {
+            return;
+        };
+        let Some(position) = sel.params.get(n).and_then(|h| h.read_real()) else {
+            return;
+        };
+        if self.mirrored[n].is_some_and(|m| (m - position).abs() < 1e-6) {
+            return; // our own mirror write
+        }
+        self.mirrored[n] = Some(position);
+        let Some((slot, clip)) = self.selected_clip() else {
+            return;
+        };
+        let track = self.tracks[slot].track;
+        let Some(effect) = self.host.clip_effect(track, clip) else {
+            return;
+        };
+        let Some(spec) = knob_params(&effect.effect_id).into_iter().nth(n) else {
+            return;
+        };
+        let d = &spec.descriptor;
+        let norm = d.to_norm(d.range.min + position.clamp(0.0, 1.0) * (d.range.max - d.range.min));
+        if self.decks[slot].active() == Some(clip) {
+            let path = format!("{}/param/{}", track_param_prefix(track), spec.name);
+            self.tree.write_path(&path, norm, stored_params_source());
+        }
+        self.host.param_stored(track, clip, spec.name, norm);
     }
 
     fn publish_states(&self, slot: usize) {

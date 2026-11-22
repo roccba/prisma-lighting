@@ -43,7 +43,7 @@ Arrows point to what a crate depends on. Dependencies implied by another arrow a
 | `prisma-output` | `OutputPlan`, Art-Net, output scheduler, virtual sink |
 | `prisma-preview` | master buffer → sRGB → WebSocket |
 | `prisma-render` | wgpu, effects, blend, gather |
-| `prisma-midi` | mappings, learn, device profiles, LED feedback |
+| `prisma-midi` | mappings, learn, banks, device profiles (with default mappings), LED feedback |
 | `prisma-editor` | patch draft, reversible edit ops |
 | `prisma-engine` | assembly, threads, show content |
 | `prisma-script` | Lua, placeholder |
@@ -107,7 +107,8 @@ classDiagram
     }
     class ControllerMappings {
         mappings (control → tree target)
-        device profile
+        keys (shortcut → tree path)
+        device profile, seeded devices
     }
     Patch *-- Fixture
     Patch *-- Zone
@@ -174,7 +175,7 @@ flowchart LR
 | output | `prisma-output::scheduler` | absolute-deadline ticks, park + spin. Never waits on render: no fresh frame → resend the last one. |
 | preview | `prisma-preview::preview_loop` | off the critical path. Under backpressure it drops frames. |
 | notifier | `prisma-core::notify` | fans tree writes out to subscribers. A slow subscriber cannot stall writers. |
-| clip controller | `prisma-engine::clips` | turns `/track/...`, `/scene/...`, `/arm/...` and `/tracks/stop` writes into deck decisions; builds effects off the render thread and swaps them at the frame boundary (one batch for a scene or GO). Tells the app which clip runs or is armed. |
+| clip controller | `prisma-engine::clips` | turns `/track/...`, `/scene/...`, `/arm/...`, `/tracks/stop` and `/select/...` writes into deck decisions and selection moves; builds effects off the render thread and swaps them at the frame boundary (one batch for a scene or GO). Tells the app which clip runs or is armed and what is selected; mirrors the selected clip's parameters for the knobs. |
 | MIDI input | `prisma-midi::io` (midir's callback) | writes the tree at MIDI priority. |
 | MIDI feedback | `prisma-midi::feedback` | paints LEDs from tree state. |
 | autosave | `app` | snapshots the Show every 2 s; writes or removes `autosave.prisma`. |
@@ -247,8 +248,23 @@ sequenceDiagram
 A mouse click takes the same path from `Tree` on: the Tauri command writes the same path at UI
 priority. Keyboard, touch view and future OSC are the same: another writer into the tree.
 
-Until the control phase, a grid pad is mapped as "cell `i` of zone slot `n`", which resolves to clip
-`i` of that zone's own track (its first track reaching only that zone).
+A grid pad is mapped as "clip `i` of track slot `n`" **of the controller's bank window**: slot 0 is
+the first track the window shows, row 0 its first row. Bank buttons (from the device profile, never
+learned) move the window and every target is re-resolved; the window lives in the MIDI runtime, not
+in the show. Scenes are banked the same way. Pad LEDs show the clip state in the colour of the
+track's first destination zone: dark Vacía, dim Cargada, full En vivo, pulsing Armada.
+
+The **selection** is in the tree too (`/select/track`, `/select/clip`, never saved): a click writes
+it, a controller's track-select button fires `/track/{id}/select`, the arrows fire
+`/select/move/*`. The clip controller tells the app every change and the UI follows. Device knobs
+drive `/select/param/{n}` = parameter `n` of the selected clip's effect in manifest order; the
+controller mirrors the selected clip's values there (so a knob picks them up and its LED ring shows
+them) and writes a knob's move into the clip, and live if the clip is running.
+
+The **keyboard** is one more writer: a shortcut names a tree path, pressing it fires a trigger or
+flips a toggle. Shortcuts live in the controller-mappings profile. Whether a key press does anything
+is decided in one function (`prisma_core::keys::dispatch`) from the combo and the focused element's
+kind: never in a text or numeric field, never the menu's keys.
 
 ## 6. Parameter Tree
 
@@ -266,13 +282,18 @@ takeover after idle.
 | `/track/{id}/clip/{i}/hold` | toggle |
 | `/track/{id}/clip/{i}/state` | written by the engine: 0 empty, 1 loaded, 2 live, 3 armed |
 | `/track/{id}/clips/refresh` | trigger |
-| `/track/{id}/opacity`, `mute`, `solo`, `stop` | level / toggle / trigger |
+| `/track/{id}/opacity`, `mute`, `solo`, `stop`, `select` | level / toggle / trigger |
 | `/track/{id}/layer/0/param/{name}` | effect parameters of the running clip |
 | `/scene/{i}/launch`, `/scene/{i}/arm` | trigger |
 | `/arm/go`, `/arm/clear`, `/tracks/stop` | trigger |
+| `/select/track`, `/select/clip` | level: the selection (`-1` = none / the running clip); not saved |
+| `/select/param/{n}` | level `0..1`: parameter `n` of the selected clip (knobs) |
+| `/select/move/{up,down,left,right}`, `/select/launch`, `/select/arm`, `/select/refresh` | trigger |
 
-Controller mappings address zones by slot (first zone, second zone…), so a profile keeps working
-across shows.
+Controller mappings address zones by slot (first zone, second zone…) and tracks and scenes by
+position in the bank window, so a profile keeps working across shows. The profile (schema v5) also
+holds the keyboard shortcuts and which devices had their defaults seeded; a v4 profile's grid pads
+(`zone_slot { cell }`) are migrated to `track_slot { clip }` on load.
 
 ## 7. Where things are
 
@@ -295,6 +316,8 @@ across shows.
 | Preview | `crates/prisma-preview/src/` |
 | Fixture profiles (components, whites) | `crates/prisma-patch/src/fixture.rs` |
 | MIDI | `crates/prisma-midi/src/{runtime,resolver,feedback,profile}.rs`, `profiles/` |
+| Controller mappings, keyboard shortcuts | `crates/prisma-core/src/{mappings,keys}.rs` |
+| Selection, knobs follow selection | `crates/prisma-engine/src/clips.rs` |
 | Patch editor backend | `crates/prisma-editor/src/{draft,op}.rs` |
 | IPC commands | `app/src/main.rs` |
 | Autosave | `app/src/autosave.rs` |

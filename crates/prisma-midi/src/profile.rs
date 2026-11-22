@@ -13,7 +13,7 @@
 
 use serde::Deserialize;
 
-use prisma_core::{ControlKind, LedAnimation, LedRate, LedStyle, MidiControl};
+use prisma_core::{ControlKind, LedAnimation, LedRate, LedStyle, MidiControl, MidiMapping};
 
 use crate::message::{note_off_bytes, note_on_bytes};
 
@@ -47,6 +47,12 @@ pub struct DeviceProfile {
     #[serde(default)]
     pub surface: Surface,
     pub leds: LedSpec,
+    /// The mappings this device ships with (LIVE-MODEL-SPEC §6: the APC40 mkII's grid →
+    /// clips, faders → track opacity, …). Data in the profile, never code. They seed an
+    /// empty operator profile on the device's first connection and can be added later
+    /// without overwriting anything ("Cargar mapeos del perfil").
+    #[serde(default)]
+    pub default_mappings: Vec<MidiMapping>,
 }
 
 /// Where the structured parts of the surface are. Read by later slices (grid →
@@ -67,12 +73,58 @@ pub struct GridSpec {
     pub row0: String,
 }
 
+/// The bank buttons: they move the controller's grid window over the track grid
+/// (LIVE-MODEL-SPEC §8.2) — by a step, or with Shift held by a whole window (8 tracks /
+/// 5 rows on an APC40). Reserved by the device, Shift included: never learned, never
+/// mapped.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct BankSpec {
+    #[serde(default)]
+    pub channel: u8,
     pub up_note: u8,
     pub down_note: u8,
-    /// CLIP STOP row: same note on every column, channel = column.
-    pub select_note: u8,
+    pub left_note: u8,
+    pub right_note: u8,
+    /// The device's Shift button: held, a bank press moves a whole window.
+    #[serde(default)]
+    pub shift_note: Option<u8>,
+    /// Tracks a left/right press moves the window by.
+    #[serde(default = "one")]
+    pub track_step: u16,
+    /// Rows an up/down press moves the window by.
+    #[serde(default = "one")]
+    pub row_step: u16,
+}
+
+fn one() -> u16 {
+    1
+}
+
+/// Which way a bank button moves the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BankMove {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl BankSpec {
+    /// The move a note-on on `channel` / `note` asks for, if it is a bank button.
+    pub fn move_for(&self, channel: u8, note: u8) -> Option<BankMove> {
+        if channel != self.channel {
+            return None;
+        }
+        [
+            (self.up_note, BankMove::Up),
+            (self.down_note, BankMove::Down),
+            (self.left_note, BankMove::Left),
+            (self.right_note, BankMove::Right),
+        ]
+        .into_iter()
+        .find(|(n, _)| *n == note)
+        .map(|(_, m)| m)
+    }
 }
 
 /// How LEDs are lit.
@@ -97,7 +149,7 @@ pub struct LedSpec {
     #[serde(default)]
     pub blink_channels: Vec<u8>,
     /// Re-send a control's LED on every note-off: the APC40 mkII reverts a pad's LED
-    /// on the physical release, whatever the host last sent (makai `middleware.js`).
+    /// on the physical release, whatever the host last sent.
     #[serde(default)]
     pub reaffirm_on_release: bool,
     /// CC controls that DISPLAY a value sent back to them — knobs with an LED ring, or
@@ -207,7 +259,17 @@ impl DeviceProfile {
                 reaffirm_on_release: false,
                 value_rings: Vec::new(),
             },
+            default_mappings: Vec::new(),
         }
+    }
+
+    /// The grid window's size (tracks × rows), from the surface's grid; 8 × 5 when the
+    /// device declares none.
+    pub fn window(&self) -> (u16, u16) {
+        self.surface
+            .grid
+            .as_ref()
+            .map_or((8, 5), |g| (g.cols as u16, g.rows as u16))
     }
 
     /// Whether `control` displays a value sent back to it (see [`LedSpec::value_rings`]).
@@ -249,7 +311,8 @@ impl DeviceProfile {
     /// On an RGB pad, `On` uses the style's colour, else the zone's colour matched to
     /// the palette, else the profile default, moving as the style says; `Idle` (a cell
     /// with an effect, not running) uses the style's idle colour, else a dim zone
-    /// colour. A single-colour LED is lit for `On` and dark otherwise. Dark is always
+    /// colour; `Armed` is the `On` colour pulsing (the style's motion if it has one).
+    /// A single-colour LED is lit for `On` / `Armed` and dark otherwise. Dark is always
     /// a real note-off: the APC40 protocol notes a velocity-0 note-on does not
     /// reliably turn a LED off (makai).
     pub fn led_bytes(
@@ -268,7 +331,9 @@ impl DeviceProfile {
             self.palette().is_some() && self.leds.rgb.iter().any(|r| r.contains(channel, note));
         if !rgb {
             return match level {
-                LedLevel::On => Some(note_on_bytes(channel, note, self.leds.on_velocity)),
+                LedLevel::On | LedLevel::Armed => {
+                    Some(note_on_bytes(channel, note, self.leds.on_velocity))
+                }
                 LedLevel::Idle | LedLevel::Off => dark,
             };
         }
@@ -277,7 +342,7 @@ impl DeviceProfile {
             LedLevel::Idle => style
                 .and_then(|s| s.idle)
                 .or_else(|| zone_colour.map(|c| nearest_palette_index(dim(c)))),
-            LedLevel::On => style
+            LedLevel::On | LedLevel::Armed => style
                 .and_then(|s| s.on)
                 .or_else(|| zone_colour.map(nearest_palette_index))
                 .or(Some(self.leds.rgb_on_colour)),
@@ -287,6 +352,10 @@ impl DeviceProfile {
         };
         let animation = match level {
             LedLevel::On => style.map(|s| s.animation).unwrap_or_default(),
+            LedLevel::Armed => match style.map(|s| s.animation) {
+                Some(moving @ (LedAnimation::Pulse(_) | LedAnimation::Blink(_))) => moving,
+                _ => LedAnimation::Pulse(ARMED_RATE),
+            },
             _ => LedAnimation::Solid,
         };
         let pick = |channels: &[u8], rate: LedRate| channels.get(rate_index(rate)).copied();
@@ -307,7 +376,12 @@ pub enum LedLevel {
     /// A cell that holds an effect but is not running.
     Idle,
     On,
+    /// A clip armed for GO: lit and pulsing.
+    Armed,
 }
+
+/// How fast an armed clip's pad pulses when its style does not say.
+pub const ARMED_RATE: LedRate = LedRate::N8;
 
 fn rate_index(rate: LedRate) -> usize {
     match rate {
@@ -380,9 +454,19 @@ mod tests {
         assert_eq!(grid.row0, "bottom");
         let bank = p.surface.bank.as_ref().unwrap();
         assert_eq!(
-            (bank.up_note, bank.down_note, bank.select_note),
-            (94, 95, 52)
+            (
+                bank.up_note,
+                bank.down_note,
+                bank.right_note,
+                bank.left_note
+            ),
+            (94, 95, 96, 97)
         );
+        assert_eq!((bank.track_step, bank.row_step), (1, 1));
+        assert_eq!(bank.shift_note, Some(98));
+        assert_eq!(bank.move_for(0, 97), Some(BankMove::Left));
+        assert_eq!(bank.move_for(1, 97), None);
+        assert_eq!(p.window(), (8, 5));
         assert!(p.leds.reaffirm_on_release);
         // The Ableton Live mode handshake (manufacturer 0x47, model 0x29, mode 0x41).
         assert_eq!(p.on_connect.len(), 1);

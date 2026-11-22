@@ -39,7 +39,7 @@ pub mod zone_content;
 
 pub use clips::{
     ClipEffect, ClipHost, GridParams, TrackBehaviour, CLIP_ARMED, CLIP_ASSIGNED, CLIP_EMPTY,
-    CLIP_RUNNING,
+    CLIP_RUNNING, SELECT_PARAMS,
 };
 pub use config::EngineConfig;
 pub use content::IdleContent;
@@ -65,9 +65,11 @@ pub use prisma_core::show::{
 // app's legacy app-wide `NetworkConfig` (`network.json`) it replaces.
 pub use prisma_core::show::NetworkConfig as ShowNetwork;
 // The MIDI transport (M9) and its document types, re-exported for the app shell.
+pub use prisma_core::keys::{self, FocusKind, KeyBinding, KeyCombo};
+pub use prisma_core::mappings::Bank;
 pub use prisma_core::mappings::{
     load_mappings, save_mappings, ControlMode, ControllerMappings, LedAnimation, LedRate, LedStyle,
-    MapTarget, MidiControl, MidiMapping, SlotIds, Takeover, ZoneSub,
+    MapTarget, MidiControl, MidiMapping, SlotIds, Takeover, TrackSub, ZoneSub,
 };
 pub use prisma_midi::{MidiNotice, MidiRuntime};
 pub use zone_content::{
