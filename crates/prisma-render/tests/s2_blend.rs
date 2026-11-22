@@ -68,6 +68,8 @@ fn blended_ref(a: [f32; 3], b: [f32; 3], mode: BlendMode) -> [f32; 3] {
             BlendMode::Screen => 1.0 - (1.0 - a[i]) * (1.0 - b[i]),
             BlendMode::Mask => a[i] * luma(b),
             BlendMode::Max => a[i].max(b[i]),
+            BlendMode::Subtract => (a[i] - b[i]).max(0.0),
+            BlendMode::Min => a[i].min(b[i]),
         }
     };
     [f(0), f(1), f(2)]
@@ -176,6 +178,8 @@ fn every_blend_mode_matches_its_linear_definition() {
         BlendMode::Screen,
         BlendMode::Mask,
         BlendMode::Max,
+        BlendMode::Subtract,
+        BlendMode::Min,
     ] {
         let px = blend_on_gpu(gpu, &tree, &comp, A, B, mode, 1.0);
         let want = blended_ref(A, B, mode);

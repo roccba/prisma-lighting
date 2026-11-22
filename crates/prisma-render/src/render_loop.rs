@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 
 use half::f16;
 use prisma_core::zone::ZoneStates;
-use prisma_core::{ClockSnapshot, MasterClock, OverlapSnapshot};
+use prisma_core::{ClockSnapshot, MasterClock, OverlapSnapshot, ParamHandle, TriggerCursor};
 use prisma_output::frame::FrameProducer;
 use prisma_patch::LayoutGeneration;
 
@@ -348,6 +348,21 @@ pub struct RenderLoopConfig {
     /// (Highlight is applied there, §7, so it is unaffected), and any zone-state change
     /// is still reflected within one slow frame. Clamped to at most `target_rate_hz`.
     pub frozen_rate_hz: u32,
+    /// The tempo controls in the Parameter Tree (`/clock/bpm`, `/clock/tap`), applied
+    /// to the master clock at each frame boundary. `None` = the clock keeps its BPM.
+    pub clock_control: Option<ClockControl>,
+}
+
+/// The master clock's tempo controls, read by the render loop (which owns the clock)
+/// at each frame boundary — wait-free reads, never a write. A BPM change applies when
+/// the parameter changes; each tap fire taps the clock. The resulting BPM is visible
+/// to other threads through the clock's published snapshot.
+#[derive(Clone)]
+pub struct ClockControl {
+    /// Level in real BPM.
+    pub bpm: ParamHandle,
+    /// Trigger.
+    pub tap: ParamHandle,
 }
 
 impl Default for RenderLoopConfig {
@@ -359,6 +374,7 @@ impl Default for RenderLoopConfig {
             zone_source: None,
             freeze: Arc::new(AtomicBool::new(false)),
             frozen_rate_hz: 10,
+            clock_control: None,
         }
     }
 }
@@ -385,6 +401,13 @@ pub fn run_render_loop(
     // Incremental deadline: the period is chosen per frame from the freeze state (a
     // constant `start + period * frame` cannot express a rate that changes at runtime).
     let mut deadline = start;
+    // Tempo controls: the BPM last applied from the tree, and the tap edge detector,
+    // primed so a tap fired before start is not replayed.
+    let mut applied_bpm: Option<f32> = None;
+    let mut tap_cursor = TriggerCursor::new();
+    if let Some(cc) = &config.clock_control {
+        tap_cursor.poll(cc.tap.fire_count().unwrap_or(0));
+    }
 
     loop {
         // The cadence for THIS frame's wait: slow while frozen (editor open), full rate
@@ -417,6 +440,17 @@ pub fn run_render_loop(
             clock.pause();
         } else {
             clock.play();
+        }
+        if let Some(cc) = &config.clock_control {
+            if let Some(bpm) = cc.bpm.read_real() {
+                if applied_bpm != Some(bpm) {
+                    clock.set_bpm(bpm as f64);
+                    applied_bpm = Some(bpm);
+                }
+            }
+            for _ in 0..tap_cursor.poll(cc.tap.fire_count().unwrap_or(0)) {
+                clock.tap();
+            }
         }
         let snapshot_clock = clock.tick();
         if let Some(source) = &config.zone_source {

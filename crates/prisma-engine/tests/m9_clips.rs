@@ -104,6 +104,7 @@ impl ClipHost for Host {
                 effect_id,
                 params,
                 palette,
+                fade_time: Duration::ZERO,
             }),
         }
     }

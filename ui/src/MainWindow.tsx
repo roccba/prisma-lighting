@@ -2,14 +2,29 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { mainZones, newShow, openEditor, openShow, saveShow, type ZoneInfo } from "./api";
+import {
+  armGo,
+  clockInfo,
+  mainZones,
+  newShow,
+  openEditor,
+  openShow,
+  recoveryInfo,
+  saveShow,
+  setBpm,
+  tap,
+  type RecoveryInfo,
+  type ZoneInfo,
+} from "./api";
 import { DeviceManager } from "./DeviceManager";
 import { MenuBar, type MenuDef } from "./MenuBar";
 import { EffectParams } from "./EffectParams";
 import { GlobalBar } from "./GlobalBar";
 import { LargePreview } from "./LargePreview";
 import { PreviewStreamProvider } from "./previewStream";
-import { SceneGrid } from "./SceneGrid";
+import { TrackGrid } from "./TrackGrid";
+import { loadPaneHeight, savePaneHeight, Splitter } from "./Splitter";
+import { scrubHandler } from "./scrub";
 import { ZoneRow } from "./ZoneRow";
 import { MidiLearnProvider, useMidiLearn } from "./midiLearn";
 
@@ -25,6 +40,11 @@ import { MidiLearnProvider, useMidiLearn } from "./midiLearn";
 // do that.
 
 const PRISMA_FILTERS = [{ name: "Prisma show", extensions: ["prisma"] }];
+
+/** The bottom work row's height: default (px), floor, and where it is remembered. */
+const WORKROW_DEFAULT = 200;
+const WORKROW_MIN = 120;
+const WORKROW_KEY = "prisma-workrow-h";
 
 export default function MainWindow() {
   return (
@@ -49,6 +69,13 @@ function MainWindowBody() {
       return "dark";
     }
   });
+  // Boot recovery (autosave): shown until dismissed, with a way back to the last save.
+  const [recovery, setRecovery] = useState<RecoveryInfo | null>(null);
+  useEffect(() => {
+    recoveryInfo()
+      .then((r) => setRecovery(r))
+      .catch(() => {});
+  }, []);
   // Transient toast for menu entries whose feature is not built yet.
   const [notice, setNotice] = useState<string | null>(null);
   const noticeTimer = useRef<number | undefined>(undefined);
@@ -56,13 +83,28 @@ function MainWindowBody() {
   // the effect parameter panel re-fetches the now-active effect and its values. The
   // large preview follows the stream on its own and needs no signal.
   const [gridRev, setGridRev] = useState(0);
-  // Stable, so SceneGrid's `cells-changed` subscription is not torn down every render.
+  // Stable, so the grid's `cells-changed` subscription is not torn down every render.
   const bumpGrid = useCallback(() => setGridRev((r) => r + 1), []);
-  // The SELECTED cell of each zone's grid (zone id → cell index) — a UI state, like the
-  // selected zone: it picks what the parameter panel edits and what GO plays, and never
-  // changes output by itself (selected ≠ active). A zone with no entry shows its running
-  // cell. Remembered per zone, so switching zones and back keeps the selection.
+  // The SELECTED track and the selected clip of each track (track id → clip index) — UI
+  // state only: they pick what the parameter panel edits and what its GO plays, and never
+  // change output by themselves (selected ≠ active). A track with no entry shows its running
+  // clip. Selecting a track also points the large preview at its zone.
+  const [selectedTrack, setSelectedTrack] = useState<string | null>(null);
   const [selectedCells, setSelectedCells] = useState<Record<string, number>>({});
+  const onSelectTrack = useCallback((track: string, cell: number | null, zone: string | null) => {
+    setSelectedTrack(track);
+    if (cell !== null) setSelectedCells((m) => ({ ...m, [track]: cell }));
+    if (zone) setSelected(zone);
+  }, []);
+  // The bottom work row's height (effect parameters | master): the operator drags the
+  // splitter above it; small by default so the grid gets the room. Persisted per viewer.
+  const [workrowH, setWorkrowH] = useState(() => loadPaneHeight(WORKROW_KEY, WORKROW_DEFAULT));
+  const changeWorkrowH = (h: number) => {
+    setWorkrowH(h);
+    savePaneHeight(WORKROW_KEY, h);
+  };
+  // The global "Modo armar" (LIVE-MODEL-SPEC §7): while on, every play gesture arms.
+  const [armMode, setArmMode] = useState(false);
 
   const refreshZones = () =>
     mainZones()
@@ -303,10 +345,7 @@ function MainWindowBody() {
   }, []);
 
   const selectedZone = zones.find((z) => z.id === selected) ?? null;
-  const selectedCell = selectedZone ? (selectedCells[selectedZone.id] ?? null) : null;
-  const selectCell = (index: number) => {
-    if (selectedZone) setSelectedCells((m) => ({ ...m, [selectedZone.id]: index }));
-  };
+  const selectedCell = selectedTrack ? (selectedCells[selectedTrack] ?? null) : null;
 
   const menus: MenuDef[] = [
     {
@@ -394,17 +433,20 @@ function MainWindowBody() {
         <MenuBar
           menus={menus}
           right={
-            learn.active && (
-              <button
-                className="pr-learn-ind"
-                type="button"
-                onClick={() => learn.setActive(false)}
-                title="Salir de MIDI Learn (Esc)"
-              >
-                <span className="pr-learn-bar-dot" />
-                MIDI Learn
-              </button>
-            )
+            <>
+              {learn.active && (
+                <button
+                  className="pr-learn-ind"
+                  type="button"
+                  onClick={() => learn.setActive(false)}
+                  title="Salir de MIDI Learn (Esc)"
+                >
+                  <span className="pr-learn-bar-dot" />
+                  MIDI Learn
+                </button>
+              )}
+              <TransportBar armMode={armMode} onArmMode={setArmMode} />
+            </>
           }
         />
 
@@ -415,22 +457,15 @@ function MainWindowBody() {
 
           <div className="pr-mainwin-mid">
             <section className="pr-region pr-region-grid">
-              {/* No `key={zone.id}` — keying would REMOUNT the grid on every zone switch
-                  (unmount → blank → re-fetch), which is why the grid "disappeared" and felt
-                  slow. SceneGrid re-fetches in place on a zoneId change (its `useEffect`),
-                  so it stays mounted and just swaps its cells. */}
-              {selectedZone ? (
-                <SceneGrid
-                  zoneId={selectedZone.id}
-                  slot={zones.findIndex((z) => z.id === selectedZone.id)}
-                  selectedCell={selectedCell}
-                  onSelectCell={selectCell}
-                  rev={gridRev}
-                  onActiveChange={bumpGrid}
-                />
-              ) : (
-                <div className="pr-placeholder-body">Seleccioná una zona</div>
-              )}
+              <TrackGrid
+                zones={zones}
+                selectedTrack={selectedTrack}
+                selectedCells={selectedCells}
+                onSelect={onSelectTrack}
+                armMode={armMode}
+                rev={gridRev}
+                onChanged={bumpGrid}
+              />
             </section>
             <section className="pr-region pr-region-preview">
               {selectedZone ? (
@@ -443,17 +478,19 @@ function MainWindowBody() {
 
           {/* Bottom work row — FIXED size (no resize): the effect parameters on the left
               (a swappable slot: groups will share it later) and the master on the right. */}
-          <div className="pr-workrow">
+          <Splitter
+            value={workrowH}
+            onChange={changeWorkrowH}
+            min={WORKROW_MIN}
+            max={Math.max(WORKROW_MIN, Math.round(window.innerHeight * 0.6))}
+            invert
+          />
+          <div className="pr-workrow" style={{ height: workrowH }}>
             <section className="pr-region pr-workrow-panel">
-              {selectedZone ? (
-                <EffectParams
-                  zoneId={selectedZone.id}
-                  cell={selectedCell}
-                  rev={gridRev}
-                  onGridChange={bumpGrid}
-                />
+              {selectedTrack ? (
+                <EffectParams trackId={selectedTrack} cell={selectedCell} rev={gridRev} onGridChange={bumpGrid} />
               ) : (
-                <div className="pr-placeholder-body">Seleccioná una zona</div>
+                <div className="pr-placeholder-body">Seleccioná una celda</div>
               )}
             </section>
 
@@ -465,8 +502,88 @@ function MainWindowBody() {
 
         {error && <div className="pr-mainwin-error">Error: {error}</div>}
         {notice && <div className="pr-toast">{notice}</div>}
+        {recovery && (
+          <div className="pr-recovery" role="status">
+            <span>Sesión recuperada</span>
+            {recovery.last_saved && (
+              <button
+                type="button"
+                className="pr-btn"
+                onClick={() => {
+                  const path = recovery.last_saved;
+                  setRecovery(null);
+                  if (path) openShow(path).catch((e) => setError(String(e)));
+                }}
+                title={recovery.last_saved}
+              >
+                Abrir el último guardado
+              </button>
+            )}
+            <button type="button" className="pr-btn" onClick={() => setRecovery(null)} aria-label="Cerrar">
+              ×
+            </button>
+          </div>
+        )}
         {deviceMgrOpen && <DeviceManager onClose={() => setDeviceMgrOpen(false)} zones={zones} />}
       </div>
     </PreviewStreamProvider>
+  );
+}
+
+// --- The global bar (LIVE-MODEL-SPEC §7): tempo, tap, arm mode, GO ----------------------
+
+function TransportBar({ armMode, onArmMode }: { armMode: boolean; onArmMode: (on: boolean) => void }) {
+  const [bpm, setBpmState] = useState(120);
+  const read = () =>
+    clockInfo()
+      .then((c) => setBpmState(c.bpm))
+      .catch(() => {});
+  useEffect(() => {
+    read();
+    // A recompile keeps the tempo; a MIDI tap may change it.
+    const subs = [listen("layout-changed", read), listen("midi-applied", read)];
+    return () => {
+      subs.forEach((u) => u.then((f) => f()).catch(() => {}));
+    };
+  }, []);
+  const change = (v: number) => {
+    const b = Math.round(Math.max(20, Math.min(300, v)) * 10) / 10;
+    setBpmState(b);
+    setBpm(b).catch(() => {});
+  };
+  return (
+    <div className="pr-gbar">
+      <span className="pr-gbar-label">BPM</span>
+      <span
+        className="pr-gbar-bpm"
+        title="Arrastrá para cambiar el tempo"
+        onPointerDown={scrubHandler(() => ({ get: () => bpm, set: change, min: 20, max: 300, perPixel: 0.5, step: 0.1 }))}
+      >
+        {bpm.toFixed(1)}
+      </span>
+      <button
+        type="button"
+        className="pr-btn"
+        onClick={() => {
+          tap().catch(() => {});
+          // The clock applies the tap on its next frame; read the result back then.
+          window.setTimeout(read, 80);
+        }}
+        title="Tap tempo"
+      >
+        Tap
+      </button>
+      <button
+        type="button"
+        className={`pr-btn pr-gbar-arm${armMode ? " is-active" : ""}`}
+        onClick={() => onArmMode(!armMode)}
+        title="Modo armar: tocar una celda o una escena la arma en lugar de lanzarla"
+      >
+        Modo armar
+      </button>
+      <button type="button" className="pr-btn pr-go-btn" onClick={() => armGo().catch(() => {})} title="Lanzar todo lo armado">
+        GO
+      </button>
+    </div>
   );
 }

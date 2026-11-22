@@ -37,11 +37,15 @@ pub mod content;
 pub mod engine;
 pub mod zone_content;
 
-pub use clips::{ClipEffect, ClipHost, CLIP_ASSIGNED, CLIP_EMPTY, CLIP_RUNNING};
+pub use clips::{
+    ClipEffect, ClipHost, GridParams, TrackBehaviour, CLIP_ARMED, CLIP_ASSIGNED, CLIP_EMPTY,
+    CLIP_RUNNING,
+};
 pub use config::EngineConfig;
 pub use content::IdleContent;
 pub use engine::{
-    Engine, EngineError, EngineHandle, OutputRouting, ShutdownReport, ZoneLiveReadout,
+    Engine, EngineError, EngineHandle, OutputRouting, ShutdownReport, TrackLiveReadout,
+    ZoneLiveReadout,
 };
 // Host interfaces for the Device Manager (docs/DEVICES-SPEC.md §6).
 pub use prisma_output::netif::{host_interfaces, HostInterface, InterfaceResolution};
@@ -54,8 +58,8 @@ pub use prisma_output::monitor::{NodeMonitor, NodeStatus};
 // crate) can build a `Show` without depending on `prisma-core` directly.
 pub use prisma_core::show::{
     load_show, save_show, ArtNetNode, Cell, Destination, InterfaceRef, LaunchMode, Layer,
-    MasterState, NodeOrigin, ParamSet, Show, Source, Track, TrackTransition, UniverseRange,
-    ZoneLive, ZoneShow,
+    MasterState, NodeOrigin, ParamSet, SceneLabel, Show, Source, Track, TrackTransition,
+    UniverseRange, ZoneLive, ZoneShow,
 };
 // The Show's network output (docs/DEVICES-SPEC.md), aliased so it never reads as the
 // app's legacy app-wide `NetworkConfig` (`network.json`) it replaces.
@@ -68,6 +72,6 @@ pub use prisma_core::mappings::{
 pub use prisma_midi::{MidiNotice, MidiRuntime};
 pub use zone_content::{
     build_track_effects, build_track_instances, destination_slots, seed_live_from_show,
-    track_param_prefix, CompositorOptions, TrackContent, ZoneCommand, ZoneCommandSender,
-    ZoneCompositor,
+    track_param_prefix, CompositorOptions, Fade, TrackContent, TrackLive, ZoneCommand,
+    ZoneCommandSender, ZoneCompositor,
 };

@@ -340,6 +340,7 @@ fn no_preview_attached_costs_nothing_and_still_feeds_output() {
             zone_source: None,
             freeze: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             frozen_rate_hz: 200,
+            clock_control: None,
         },
     );
 

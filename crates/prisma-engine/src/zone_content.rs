@@ -11,14 +11,23 @@
 //! blend_zone`). Gather, overlap counter and output stage downstream are untouched —
 //! this content only changes *where a zone's pixels came from*.
 //!
+//! # Live track controls, transitions (LIVE-MODEL-SPEC §4.2, §5)
+//!
+//! Each track's opacity, mute and solo are Parameter Tree values read wait-free at the
+//! top of every frame. A clip change can crossfade on clock time (seconds or beats):
+//! the instance keeps the outgoing effect, renders both and mixes them by the eased
+//! progress, and drops the outgoing one when the fade completes. A launch during a fade
+//! fades from exactly what is on screen: the running mix keeps fading underneath (nested,
+//! depth cap 2 — deeper, the oldest mix is frozen to a texture). A stop fades to black; a
+//! stop during that fade cuts. [`ZoneCommand::Batch`] lands several changes
+//! in the same frame (scene launch, GO).
+//!
 //! # The 1:1 shortcut
 //!
-//! A zone whose only playing track is `Normal` at full opacity renders that track
-//! **straight into the zone texture**, with no fold: blending one `Normal` layer at
-//! opacity 1 over black is the identity, so the fold would only cost two passes and
-//! two textures. A zone reached by a single such track (the default show: one track
-//! per zone) never allocates fold textures at all. The `m8_zone_render` suite asserts
-//! the shortcut and the fold produce the same frame.
+//! A zone whose only playing track is `Normal` at full opacity this frame, with no
+//! crossfade running, renders that track **straight into the zone texture**, with no
+//! fold: blending one `Normal` layer at opacity 1 over black is the identity. The
+//! `m8_zone_render` suite asserts the shortcut and the fold produce the same frame.
 //!
 //! # Hot-path allocation: zero (M8-PARTA §2.6, LIVE-MODEL-SPEC §4.4)
 //!
@@ -42,11 +51,11 @@
 
 use std::sync::mpsc;
 
-use prisma_core::show::{Show, Source, Track};
+use prisma_core::show::{Show, Source, Track, TrackTransition};
 use prisma_core::source::{priority, SourceId};
 use prisma_core::tree::ParameterTree;
 use prisma_core::zone::ZoneStates;
-use prisma_core::{ClockSnapshot, OverlapSnapshot};
+use prisma_core::{ClockSnapshot, Easing, OverlapSnapshot, ParamHandle, TimeBase, Transition};
 use prisma_patch::{BlendMode, Patch, PatchIndex};
 use prisma_render::blend::Compositor;
 use prisma_render::effect::EffectInstance;
@@ -96,8 +105,11 @@ pub struct TrackContent {
     /// Zone slots, in destination order.
     pub zones: Vec<usize>,
     pub blend_mode: BlendMode,
-    /// `0.0..=1.0`.
+    /// `0.0..=1.0`. Used when there is no [`live`](Self::live) binding.
     pub opacity: f32,
+    /// The track's live controls in the Parameter Tree, read every frame. `None` =
+    /// fixed at `opacity`, never muted or soloed (tests).
+    pub live: Option<TrackLive>,
     /// Parallel to `zones`; `None` = nothing playing in that zone. Shorter than
     /// `zones` means `None` for the rest.
     pub effects: Vec<Option<EffectInstance>>,
@@ -114,6 +126,7 @@ impl TrackContent {
                 zones: vec![slot],
                 blend_mode: BlendMode::Normal,
                 opacity: 1.0,
+                live: None,
                 effects: vec![effect],
             })
             .collect()
@@ -154,19 +167,22 @@ pub fn build_track_instances(
 }
 
 /// Build every track's running content from a Show, in track order (= compositing
-/// order, first at the bottom), ready for [`ZoneCompositor::new`]. A track with no
-/// active clip, an empty clip or an unknown `effect_id` plays nothing. The GPU work
-/// (pipeline compile) happens here, at load — not per frame.
+/// order, first at the bottom), ready for [`ZoneCompositor::new`]. `live[t]` binds
+/// track `t`'s live controls (missing = fixed). A track with no active clip, an empty
+/// clip or an unknown `effect_id` plays nothing. The GPU work (pipeline compile)
+/// happens here, at load — not per frame.
 pub fn build_track_effects(
     gpu: &Gpu,
     tree: &ParameterTree,
     patch: &Patch,
     show: &Show,
+    live: &[TrackLive],
 ) -> Vec<TrackContent> {
     let src = show_load_source();
     show.tracks
         .iter()
-        .map(|track| {
+        .enumerate()
+        .map(|(t, track)| {
             let zones = destination_slots(patch, track);
             let effects = track
                 .active_clip()
@@ -192,6 +208,7 @@ pub fn build_track_effects(
                 zones,
                 blend_mode: track.blend_mode,
                 opacity: track.opacity,
+                live: live.get(t).cloned(),
                 effects,
             }
         })
@@ -226,6 +243,72 @@ pub fn seed_live_from_show(tree: &ParameterTree, live: &LiveParams, patch: &Patc
     }
 }
 
+/// How a content change lands (LIVE-MODEL-SPEC §4.2): a hard cut, or a crossfade on
+/// clock time — show seconds or beats — with an easing curve.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Fade {
+    pub time: f64,
+    pub base: TimeBase,
+    pub easing: Easing,
+}
+
+impl Fade {
+    /// A hard cut.
+    pub const CUT: Fade = Fade {
+        time: 0.0,
+        base: TimeBase::Seconds,
+        easing: Easing::Linear,
+    };
+
+    /// A fade of `seconds` show-seconds.
+    pub fn seconds(seconds: f64, easing: Easing) -> Fade {
+        Fade {
+            time: seconds,
+            base: TimeBase::Seconds,
+            easing,
+        }
+    }
+
+    /// A track's default transition.
+    pub fn of_track(t: &TrackTransition) -> Fade {
+        Fade {
+            time: t.time,
+            base: t.base,
+            easing: t.easing,
+        }
+    }
+
+    /// The fade into a clip: the clip's own `fade_time` when non-zero (in seconds,
+    /// with the track's easing), else the track's transition (LIVE-MODEL-SPEC §3).
+    pub fn into_clip(track: &TrackTransition, clip_fade: std::time::Duration) -> Fade {
+        if clip_fade.is_zero() {
+            Fade::of_track(track)
+        } else {
+            Fade::seconds(clip_fade.as_secs_f64(), track.easing)
+        }
+    }
+
+    pub fn is_cut(&self) -> bool {
+        self.time <= 0.0
+    }
+
+    fn start(&self, clock: &ClockSnapshot) -> Transition {
+        match self.base {
+            TimeBase::Seconds => Transition::seconds(clock, self.time, self.easing),
+            TimeBase::Beats => Transition::beats(clock, self.time, self.easing),
+        }
+    }
+}
+
+/// A track's live controls, resolved once and read wait-free every frame.
+#[derive(Clone)]
+pub struct TrackLive {
+    /// Unit level, `0..=1`.
+    pub opacity: ParamHandle,
+    pub mute: ParamHandle,
+    pub solo: ParamHandle,
+}
+
 /// A structural change to the running content, applied at the **frame boundary**
 /// (M8-PARTA §3, locked decision 3). The expensive part — building an
 /// [`EffectInstance`] (which compiles a GPU pipeline) — happens **off** the render
@@ -234,18 +317,28 @@ pub fn seed_live_from_show(tree: &ParameterTree, live: &LiveParams, patch: &Patc
 /// at the **top** of the next `render_into`, so frame N renders wholly with the old
 /// effect and frame N+1 wholly with the new one — never a half-and-half frame.
 pub enum ZoneCommand {
-    /// Replace a track's running effect in each zone it reaches (`effects[k]` for its
-    /// k-th destination zone; missing entries clear). An empty list stops the track.
+    /// Play new effects on a track — `effects[k]` in its k-th destination zone —
+    /// cutting or crossfading from what plays now. Missing entries play nothing there.
     SetTrackEffects {
         track: usize,
         effects: Vec<Option<EffectInstance>>,
+        fade: Fade,
     },
+    /// Stop a track, fading what plays to black. A stop while the track is already
+    /// fading out (or silent) cuts at once — the "second stop" of LIVE-MODEL-SPEC.
+    StopTrack { track: usize, fade: Fade },
     /// Rewind a track's animation phase (in every zone it reaches) to its start, so its
     /// effect plays from the beginning (a pad in trigger mode, M9).
     Restart { track: usize },
     /// Replace the colour table of a track's running effect (the Tabla de color edited
     /// live). Built by the sender; the render thread only uploads it at the boundary.
     SetPalette { track: usize, colors: Vec<[f32; 3]> },
+    /// Change how a track blends in every zone it reaches (the track popover). Live:
+    /// no recompile, nothing reallocated.
+    SetBlend { track: usize, mode: BlendMode },
+    /// Several commands applied at the SAME frame boundary, in order — what makes a
+    /// scene launch or GO land on every track in one frame.
+    Batch(Vec<ZoneCommand>),
 }
 
 /// The producer end of the frame-boundary command queue. Cloneable and `Send`, so
@@ -257,50 +350,313 @@ pub struct ZoneCommandSender {
 }
 
 impl ZoneCommandSender {
-    /// Queue an effect swap for `track`, applied at the next frame boundary. Returns
-    /// `false` if the compositor has been dropped (the render loop is gone).
-    pub fn set_track_effects(&self, track: usize, effects: Vec<Option<EffectInstance>>) -> bool {
-        self.tx
-            .send(ZoneCommand::SetTrackEffects { track, effects })
-            .is_ok()
+    /// Queue a command. Returns `false` if the compositor has been dropped (the render
+    /// loop is gone).
+    pub fn send(&self, command: ZoneCommand) -> bool {
+        self.tx.send(command).is_ok()
     }
 
-    /// Queue stopping `track` (nothing playing in any zone it reaches).
+    /// Queue a hard-cut effect swap for `track`, applied at the next frame boundary.
+    pub fn set_track_effects(&self, track: usize, effects: Vec<Option<EffectInstance>>) -> bool {
+        self.play_track(track, effects, Fade::CUT)
+    }
+
+    /// Queue an effect change for `track` that lands with `fade`.
+    pub fn play_track(
+        &self,
+        track: usize,
+        effects: Vec<Option<EffectInstance>>,
+        fade: Fade,
+    ) -> bool {
+        self.send(ZoneCommand::SetTrackEffects {
+            track,
+            effects,
+            fade,
+        })
+    }
+
+    /// Queue stopping `track` at once (nothing playing in any zone it reaches).
     pub fn clear_track(&self, track: usize) -> bool {
-        self.set_track_effects(track, Vec::new())
+        self.stop_track(track, Fade::CUT)
+    }
+
+    /// Queue stopping `track` with `fade` (a stop during its fade-out cuts).
+    pub fn stop_track(&self, track: usize, fade: Fade) -> bool {
+        self.send(ZoneCommand::StopTrack { track, fade })
     }
 
     /// Queue a phase rewind for `track` (applied after any swap queued before it).
     pub fn restart_track(&self, track: usize) -> bool {
-        self.tx.send(ZoneCommand::Restart { track }).is_ok()
+        self.send(ZoneCommand::Restart { track })
     }
 
     /// Queue a new colour table for `track`'s running effect (applied after any swap
     /// queued before it, so it lands on the effect that will actually be running).
     pub fn set_track_palette(&self, track: usize, colors: Vec<[f32; 3]>) -> bool {
-        self.tx
-            .send(ZoneCommand::SetPalette { track, colors })
-            .is_ok()
+        self.send(ZoneCommand::SetPalette { track, colors })
+    }
+}
+
+/// A source under a crossfade: a running effect with its own animation phase, or the
+/// instance's frozen snapshot (see [`Below`]).
+enum Src {
+    Effect {
+        effect: EffectInstance,
+        phase_ns: f64,
+    },
+    Frozen,
+}
+
+impl Src {
+    fn advance(&mut self, step: f64) {
+        if let Src::Effect { phase_ns, .. } = self {
+            *phase_ns = (*phase_ns + step).max(0.0);
+        }
+    }
+}
+
+/// What the playing effect crossfades over (LIVE-MODEL-SPEC §4.2) — exactly what was on
+/// screen when the fade started, so a launch never jumps:
+/// - `Silence` — nothing (a fade in from black);
+/// - `One` — a single source (the common A → B fade);
+/// - `Mix` — a launch landed while a fade was running: the whole visible mix keeps fading
+///   underneath, still animated (a nested fade). **Depth cap 2:** a launch while a `Mix` is
+///   already below freezes that `Mix` into the frozen texture (one GPU copy of its last
+///   frame) instead of nesting deeper, so the cost has a ceiling.
+enum Below {
+    Silence,
+    One(Src),
+    Mix {
+        out: Option<Src>,
+        inn: Option<Src>,
+        fade: Transition,
+    },
+}
+
+impl Below {
+    fn is_silent(&self) -> bool {
+        matches!(self, Below::Silence)
+    }
+
+    fn advance(&mut self, step: f64) {
+        match self {
+            Below::Silence => {}
+            Below::One(s) => s.advance(step),
+            Below::Mix { out, inn, .. } => {
+                for s in [out, inn].into_iter().flatten() {
+                    s.advance(step);
+                }
+            }
+        }
+    }
+}
+
+/// An instance's render targets at its zone's `mapping_size`, all allocated once.
+struct Targets {
+    /// The playing effect.
+    tex: wgpu::Texture,
+    /// The (inner) outgoing source.
+    tex_out: wgpu::Texture,
+    /// The inner incoming source of a nested fade.
+    tex_in: wgpu::Texture,
+    /// The rendered `Below` of a nested fade.
+    tex_below: wgpu::Texture,
+    /// The instance's result during a fade.
+    tex_mix: wgpu::Texture,
+    /// The frozen snapshot a depth-capped fade fades from.
+    tex_frozen: wgpu::Texture,
+}
+
+impl Targets {
+    fn new(gpu: &Gpu, w: u32, h: u32) -> Targets {
+        Targets {
+            tex: create_render_target(gpu, w, h),
+            tex_out: create_render_target(gpu, w, h),
+            tex_in: create_render_target(gpu, w, h),
+            tex_below: create_render_target(gpu, w, h),
+            tex_mix: create_render_target(gpu, w, h),
+            tex_frozen: create_render_target(gpu, w, h),
+        }
     }
 }
 
 /// One (track, zone) effect instance, held by its zone in track order.
 struct Instance {
+    /// Its track slot (for the track's per-frame opacity / mute / solo).
+    track: usize,
     blend_mode: BlendMode,
-    opacity: f32,
+    /// What plays now (the incoming side of a crossfade).
     effect: Option<EffectInstance>,
-    /// Its render target at the zone's `mapping_size` — only in a zone that can fold
-    /// (see [`ZoneSlot::fold`]); the shortcut renders straight into `zone_tex`.
-    tex: Option<wgpu::Texture>,
-    /// Animation phase in show-ns, integrated from the zone's signed speed.
+    /// Animation phase of `effect` in show-ns, integrated from the zone's signed speed.
     phase_ns: f64,
+    /// What `effect` fades over, while `fade` runs.
+    below: Below,
+    /// The running crossfade, if any (eased progress = weight of `effect`).
+    fade: Option<Transition>,
+    /// `tex_below` holds the current `Below::Mix`'s last rendered frame (false between a
+    /// nesting launch and the next render, e.g. two launches landing in one frame).
+    below_rendered: bool,
+    targets: Targets,
 }
 
 impl Instance {
-    /// Blending this over black is the identity (`Normal` at full opacity).
-    fn is_plain(&self) -> bool {
-        self.blend_mode == BlendMode::Normal && self.opacity >= 1.0
+    /// Whether this instance puts anything into its zone (playing or fading out).
+    fn has_content(&self) -> bool {
+        self.effect.is_some() || (self.fade.is_some() && !self.below.is_silent())
     }
+
+    /// Advance every running source's phase by `step` show-ns.
+    fn advance(&mut self, step: f64) {
+        self.phase_ns = (self.phase_ns + step).max(0.0);
+        self.below.advance(step);
+    }
+
+    /// Swap in new content at the frame boundary. With a fade, it starts from exactly
+    /// what is on screen: if a fade was already running, that whole mix fades out
+    /// underneath (nested); at the depth cap, the older mix is frozen first (`gpu` does the
+    /// copy — without one, a depth-capped mix is dropped instead, which only the
+    /// GPU-less direct path could hit and it only ever cuts).
+    fn play(
+        &mut self,
+        effect: Option<EffectInstance>,
+        fade: Fade,
+        clock: &ClockSnapshot,
+        gpu: Option<&Gpu>,
+    ) {
+        let stopping = effect.is_none();
+        if fade.is_cut() || (stopping && self.effect.is_none()) {
+            // A cut — or a stop while already silent / fading out: end it now.
+            self.below = Below::Silence;
+            self.fade = None;
+            self.effect = effect;
+            return;
+        }
+        let current = self.effect.take().map(|effect| Src::Effect {
+            effect,
+            phase_ns: self.phase_ns,
+        });
+        self.below = match self.fade.take() {
+            // Nothing fading: the new clip fades over what plays now.
+            None => current.map_or(Below::Silence, Below::One),
+            // A fade is running: what shows is mix(below, current, outer) — keep it.
+            Some(outer) => {
+                let inner_out = match std::mem::replace(&mut self.below, Below::Silence) {
+                    Below::Silence => None,
+                    Below::One(src) => Some(src),
+                    Below::Mix { inn, .. } => match gpu {
+                        // Depth cap: freeze the older mix's last frame.
+                        Some(gpu) if self.below_rendered => {
+                            copy_texture(gpu, &self.targets.tex_below, &self.targets.tex_frozen);
+                            Some(Src::Frozen)
+                        }
+                        // Never drawn (two launches in one frame) or no GPU: keep its
+                        // incoming side, the newest thing it showed.
+                        _ => inn,
+                    },
+                };
+                self.below_rendered = false;
+                Below::Mix {
+                    out: inner_out,
+                    inn: current,
+                    fade: outer,
+                }
+            }
+        };
+        self.effect = effect;
+        self.fade = Some(fade.start(clock));
+    }
+
+    /// Render this instance into its own textures and return the one holding the
+    /// result. `None` if it shows nothing.
+    fn render(
+        &mut self,
+        gpu: &Gpu,
+        compositor: &Compositor,
+        clock: &ClockSnapshot,
+        (w, h): (u32, u32),
+    ) -> Option<&wgpu::Texture> {
+        // Retire finished fades (their sources are dropped here; wgpu frees the memory).
+        if self.fade.is_some_and(|f| f.is_complete(clock)) {
+            self.fade = None;
+            self.below = Below::Silence;
+        }
+        if let Below::Mix { inn, fade, .. } = &mut self.below {
+            if fade.is_complete(clock) {
+                self.below = inn.take().map_or(Below::Silence, Below::One);
+            }
+        }
+        let t = &self.targets;
+        let Some(outer) = self.fade else {
+            let effect = self.effect.as_mut()?;
+            effect.render(gpu, &phase_clock(clock, self.phase_ns), &view(&t.tex), w, h);
+            return Some(&t.tex);
+        };
+        let below: &wgpu::Texture = match &mut self.below {
+            Below::Silence => {
+                clear_black(gpu, &t.tex_out);
+                &t.tex_out
+            }
+            Below::One(src) => render_src(gpu, clock, Some(src), &t.tex_out, t, (w, h)),
+            Below::Mix { out, inn, fade } => {
+                let a = render_src(gpu, clock, out.as_mut(), &t.tex_out, t, (w, h));
+                let b = render_src(gpu, clock, inn.as_mut(), &t.tex_in, t, (w, h));
+                let p = fade.eased(clock);
+                compositor.blend(gpu, a, b, &view(&t.tex_below), BlendMode::Normal, p);
+                self.below_rendered = true;
+                &t.tex_below
+            }
+        };
+        match self.effect.as_mut() {
+            Some(effect) => {
+                let c = phase_clock(clock, self.phase_ns);
+                effect.render(gpu, &c, &view(&t.tex), w, h);
+            }
+            None => clear_black(gpu, &t.tex),
+        }
+        compositor.blend(
+            gpu,
+            below,
+            &t.tex,
+            &view(&t.tex_mix),
+            BlendMode::Normal,
+            outer.eased(clock),
+        );
+        Some(&t.tex_mix)
+    }
+}
+
+/// Render one source and return the texture holding it: an effect into `target`, the
+/// frozen snapshot as-is, nothing as black in `target`.
+fn render_src<'t>(
+    gpu: &Gpu,
+    clock: &ClockSnapshot,
+    src: Option<&mut Src>,
+    target: &'t wgpu::Texture,
+    targets: &'t Targets,
+    (w, h): (u32, u32),
+) -> &'t wgpu::Texture {
+    match src {
+        Some(Src::Effect { effect, phase_ns }) => {
+            effect.render(gpu, &phase_clock(clock, *phase_ns), &view(target), w, h);
+            target
+        }
+        Some(Src::Frozen) => &targets.tex_frozen,
+        None => {
+            clear_black(gpu, target);
+            target
+        }
+    }
+}
+
+/// GPU copy of one render target into another of the same size (no CPU round trip).
+fn copy_texture(gpu: &Gpu, from: &wgpu::Texture, to: &wgpu::Texture) {
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("fade-freeze"),
+        });
+    encoder.copy_texture_to_texture(from.as_image_copy(), to.as_image_copy(), from.size());
+    gpu.queue.submit([encoder.finish()]);
 }
 
 /// One zone's GPU-side resources, all sized once at construction.
@@ -321,15 +677,8 @@ struct ZoneSlot {
     blend_mode: BlendMode,
     /// Every track reaching this zone, in track (compositing) order.
     instances: Vec<Instance>,
-    /// Ping/pong at `mapping` for folding tracks. `None` when the zone is reached by
-    /// at most one plain track, which always takes the shortcut.
-    fold: Option<(wgpu::Texture, wgpu::Texture)>,
-}
-
-impl ZoneSlot {
-    fn has_content(&self) -> bool {
-        self.instances.iter().any(|i| i.effect.is_some())
-    }
+    /// Ping/pong at `mapping` for folding tracks.
+    fold: (wgpu::Texture, wgpu::Texture),
 }
 
 /// How [`ZoneCompositor::with_options`] builds the content.
@@ -347,6 +696,22 @@ struct At {
     index: usize,
 }
 
+/// A track as the compositor tracks it: where its instances live and its controls.
+struct TrackSlot {
+    at: Vec<At>,
+    live: Option<TrackLive>,
+    /// Fixed opacity when there is no live binding.
+    opacity: f32,
+}
+
+/// A track's controls as read at the top of a frame.
+#[derive(Clone, Copy)]
+struct TrackFrame {
+    opacity: f32,
+    /// Not muted, and not silenced by another track's solo.
+    audible: bool,
+}
+
 /// The per-zone compositor. Implements [`FrameContent`]; install it in place of
 /// [`IdleContent`](crate::IdleContent) when a show runs.
 pub struct ZoneCompositor {
@@ -355,8 +720,9 @@ pub struct ZoneCompositor {
     /// Bottom-to-top compositing order (`PatchIndex::composite_order`), once.
     order: Vec<u32>,
     slots: Vec<ZoneSlot>,
-    /// Per track slot: where each of its instances lives, in destination order.
-    tracks: Vec<Vec<At>>,
+    tracks: Vec<TrackSlot>,
+    /// This frame's track controls, one per track. Rewritten in place each frame.
+    track_frame: Vec<TrackFrame>,
     force_fold: bool,
     /// This frame's per-cell overlap mask (world cells). Persistent; rewritten each
     /// frame from the snapshot with `write_buffer`.
@@ -415,11 +781,15 @@ impl ZoneCompositor {
     ) -> ZoneCompositor {
         let world = (patch.matrix_size[0].max(1), patch.matrix_size[1].max(1));
         let zone_count = index.zone_count();
+        let mapping_of = |slot: usize| {
+            let z = &patch.zones[slot];
+            (z.mapping_size[0].max(1), z.mapping_size[1].max(1))
+        };
 
         // Distribute each track's instances to the zones it reaches, in track order.
         let mut per_zone: Vec<Vec<Instance>> = (0..zone_count).map(|_| Vec::new()).collect();
-        let mut track_at: Vec<Vec<At>> = Vec::with_capacity(tracks.len());
-        for track in tracks {
+        let mut track_slots: Vec<TrackSlot> = Vec::with_capacity(tracks.len());
+        for (t, track) in tracks.into_iter().enumerate() {
             let mut effects = track.effects.into_iter();
             let mut at = Vec::with_capacity(track.zones.len());
             for &zone in &track.zones {
@@ -427,43 +797,37 @@ impl ZoneCompositor {
                 if zone >= zone_count {
                     continue;
                 }
+                let (w, h) = mapping_of(zone);
                 at.push(At {
                     zone,
                     index: per_zone[zone].len(),
                 });
                 per_zone[zone].push(Instance {
+                    track: t,
                     blend_mode: track.blend_mode,
-                    opacity: track.opacity.clamp(0.0, 1.0),
                     effect,
-                    tex: None,
                     phase_ns: PHASE_BIAS_NS,
+                    below: Below::Silence,
+                    fade: None,
+                    below_rendered: false,
+                    targets: Targets::new(gpu, w, h),
                 });
             }
-            track_at.push(at);
+            track_slots.push(TrackSlot {
+                at,
+                live: track.live,
+                opacity: track.opacity.clamp(0.0, 1.0),
+            });
         }
 
         let coverage_masks = zone_cell_coverage(patch, index);
         let slots: Vec<ZoneSlot> = per_zone
             .into_iter()
             .enumerate()
-            .map(|(slot, mut instances)| {
+            .map(|(slot, instances)| {
                 let zone = &patch.zones[slot];
-                let mapping = (zone.mapping_size[0].max(1), zone.mapping_size[1].max(1));
+                let mapping = mapping_of(slot);
                 let footprint = footprint_from_coverage(&coverage_masks[slot], world.0);
-                // A zone folds only if it ever could need to: several tracks, a
-                // non-plain one, or a forced fold. Otherwise no extra textures at all.
-                let can_fold = options.force_fold
-                    || instances.len() > 1
-                    || instances.iter().any(|i| !i.is_plain());
-                let fold = can_fold.then(|| {
-                    for inst in &mut instances {
-                        inst.tex = Some(create_render_target(gpu, mapping.0, mapping.1));
-                    }
-                    (
-                        create_render_target(gpu, mapping.0, mapping.1),
-                        create_render_target(gpu, mapping.0, mapping.1),
-                    )
-                });
                 ZoneSlot {
                     mapping,
                     footprint,
@@ -472,7 +836,10 @@ impl ZoneCompositor {
                     coverage: create_cell_mask(gpu, &coverage_masks[slot]),
                     blend_mode: zone.blend_mode,
                     instances,
-                    fold,
+                    fold: (
+                        create_render_target(gpu, mapping.0, mapping.1),
+                        create_render_target(gpu, mapping.0, mapping.1),
+                    ),
                 }
             })
             .collect();
@@ -486,12 +853,20 @@ impl ZoneCompositor {
         });
 
         let (commands_tx, commands_rx) = mpsc::channel();
+        let track_frame = vec![
+            TrackFrame {
+                opacity: 1.0,
+                audible: true,
+            };
+            track_slots.len()
+        ];
         ZoneCompositor {
             compositor: Compositor::new(gpu),
             placer: ZonePlacer::new(gpu),
             order: index.composite_order().to_vec(),
             slots,
-            tracks: track_at,
+            tracks: track_slots,
+            track_frame,
             force_fold: options.force_fold,
             cell_mask,
             ping: create_render_target(gpu, world.0, world.1),
@@ -512,93 +887,172 @@ impl ZoneCompositor {
         }
     }
 
-    /// Replace a track's running effects directly — the same swap the queue performs,
-    /// for callers already holding `&mut`. Textures are unchanged.
+    /// Replace a track's running effects directly with a hard cut — the same swap the
+    /// queue performs, for callers already holding `&mut`. Textures are unchanged.
     pub fn set_track_effects(&mut self, track: usize, effects: Vec<Option<EffectInstance>>) {
-        let Some(at) = self.tracks.get(track) else {
-            return;
-        };
-        let mut effects = effects.into_iter();
-        for a in at {
-            self.slots[a.zone].instances[a.index].effect = effects.next().flatten();
-        }
+        self.apply(
+            ZoneCommand::SetTrackEffects {
+                track,
+                effects,
+                fade: Fade::CUT,
+            },
+            None,
+            // A cut never reads the clock.
+            &ClockSnapshot {
+                frame: 0,
+                wall_ns: 0,
+                show_ns: 0,
+                beat: 0.0,
+                bpm: 120.0,
+                playing: false,
+            },
+        );
     }
 
     /// Apply every queued command. Called at the **top** of `render_into`, so all
     /// structural changes land at the frame boundary and the frame is then rendered
-    /// wholly under the post-swap state — never a half-and-half frame. Non-blocking
-    /// (`try_recv`); the render thread never waits on a producer.
-    fn drain_commands(&mut self, gpu: &Gpu) {
+    /// wholly under the post-swap state — never a half-and-half frame. A fade starts
+    /// at this frame's clock. Non-blocking (`try_recv`); the render thread never waits
+    /// on a producer.
+    fn drain_commands(&mut self, gpu: &Gpu, clock: &ClockSnapshot) {
         while let Ok(cmd) = self.commands_rx.try_recv() {
-            match cmd {
-                ZoneCommand::SetTrackEffects { track, effects } => {
-                    self.set_track_effects(track, effects);
+            self.apply(cmd, Some(gpu), clock);
+        }
+    }
+
+    /// Apply one command. A palette upload needs the GPU; without one it is skipped.
+    fn apply(&mut self, cmd: ZoneCommand, gpu: Option<&Gpu>, clock: &ClockSnapshot) {
+        // `At` is Copy: index the track's instances without borrowing `self.tracks`
+        // across the mutation (and without allocating on the render thread).
+        let count = |tracks: &[TrackSlot], t: usize| tracks.get(t).map_or(0, |t| t.at.len());
+        match cmd {
+            ZoneCommand::SetTrackEffects {
+                track,
+                effects,
+                fade,
+            } => {
+                let mut effects = effects.into_iter();
+                for k in 0..count(&self.tracks, track) {
+                    let a = self.tracks[track].at[k];
+                    let effect = effects.next().flatten();
+                    self.slots[a.zone].instances[a.index].play(effect, fade, clock, gpu);
                 }
-                ZoneCommand::Restart { track } => {
-                    for a in self.tracks.get(track).into_iter().flatten() {
-                        self.slots[a.zone].instances[a.index].phase_ns = PHASE_BIAS_NS;
+            }
+            ZoneCommand::StopTrack { track, fade } => {
+                for k in 0..count(&self.tracks, track) {
+                    let a = self.tracks[track].at[k];
+                    self.slots[a.zone].instances[a.index].play(None, fade, clock, gpu);
+                }
+            }
+            ZoneCommand::Restart { track } => {
+                for k in 0..count(&self.tracks, track) {
+                    let a = self.tracks[track].at[k];
+                    self.slots[a.zone].instances[a.index].phase_ns = PHASE_BIAS_NS;
+                }
+            }
+            ZoneCommand::SetPalette { track, colors } => {
+                let Some(gpu) = gpu else { return };
+                for k in 0..count(&self.tracks, track) {
+                    let a = self.tracks[track].at[k];
+                    if let Some(effect) = &self.slots[a.zone].instances[a.index].effect {
+                        effect.set_palette(gpu, &colors);
                     }
                 }
-                ZoneCommand::SetPalette { track, colors } => {
-                    for a in self.tracks.get(track).into_iter().flatten() {
-                        if let Some(effect) = &self.slots[a.zone].instances[a.index].effect {
-                            effect.set_palette(gpu, &colors);
-                        }
-                    }
+            }
+            ZoneCommand::SetBlend { track, mode } => {
+                for k in 0..count(&self.tracks, track) {
+                    let a = self.tracks[track].at[k];
+                    self.slots[a.zone].instances[a.index].blend_mode = mode;
+                }
+            }
+            ZoneCommand::Batch(cmds) => {
+                for c in cmds {
+                    self.apply(c, gpu, clock);
                 }
             }
         }
     }
 
+    /// Read every track's live controls once, at the top of the frame (wait-free).
+    fn read_track_controls(&mut self) {
+        let any_solo = self.tracks.iter().any(|t| {
+            t.live
+                .as_ref()
+                .and_then(|l| l.solo.read_bool())
+                .unwrap_or(false)
+        });
+        for (t, frame) in self.tracks.iter().zip(self.track_frame.iter_mut()) {
+            *frame = match &t.live {
+                None => TrackFrame {
+                    opacity: t.opacity,
+                    audible: !any_solo,
+                },
+                Some(l) => {
+                    let mute = l.mute.read_bool().unwrap_or(false);
+                    let solo = l.solo.read_bool().unwrap_or(false);
+                    TrackFrame {
+                        opacity: l.opacity.read_real().unwrap_or(t.opacity).clamp(0.0, 1.0),
+                        audible: !mute && (!any_solo || solo),
+                    }
+                }
+            };
+        }
+    }
+
+    /// Whether zone `s` shows anything this frame (an audible track with content).
+    fn zone_has_content(&self, s: usize) -> bool {
+        self.slots[s]
+            .instances
+            .iter()
+            .any(|i| i.has_content() && self.track_frame[i.track].audible)
+    }
+
     /// Render zone `s`'s tracks into its `zone_tex`: straight in when one plain track
-    /// plays (the shortcut), otherwise folded over black in track order.
+    /// plays with no crossfade (the shortcut), otherwise folded over black in track
+    /// order with each track's blend mode and this frame's opacity.
     fn render_zone(&mut self, gpu: &Gpu, clock: &ClockSnapshot, s: usize) {
         let compositor = &self.compositor;
+        let frames = &self.track_frame;
         let force_fold = self.force_fold;
         let ZoneSlot {
             mapping,
             zone_tex,
             instances,
-            fold,
+            fold: (a, b),
             ..
         } = &mut self.slots[s];
-        let (w, h) = *mapping;
-        let playing = instances.iter().filter(|i| i.effect.is_some()).count();
-        let Some(last) = instances.iter().rposition(|i| i.effect.is_some()) else {
+        let shows = |i: &Instance| i.has_content() && frames[i.track].audible;
+        let playing = instances.iter().filter(|i| shows(i)).count();
+        let Some(last) = instances.iter().rposition(shows) else {
             return;
         };
 
-        let shortcut = playing == 1 && instances[last].is_plain() && !force_fold;
-        let Some((a, b)) = fold.as_ref().filter(|_| !shortcut) else {
-            // No fold textures ⇒ at most one plain track reaches this zone.
+        let only = &instances[last];
+        let plain = only.blend_mode == BlendMode::Normal && frames[only.track].opacity >= 1.0;
+        if playing == 1 && plain && only.fade.is_none() && !force_fold {
             let inst = &mut instances[last];
-            let zclock = phase_clock(clock, inst.phase_ns);
             if let Some(effect) = inst.effect.as_mut() {
-                effect.render(gpu, &zclock, &view(zone_tex), w, h);
+                let c = phase_clock(clock, inst.phase_ns);
+                effect.render(gpu, &c, &view(zone_tex), mapping.0, mapping.1);
             }
             return;
-        };
+        }
 
         clear_black(gpu, a);
         let mut acc: &wgpu::Texture = a;
         let mut other: &wgpu::Texture = b;
         for (k, inst) in instances.iter_mut().enumerate() {
-            let zclock = phase_clock(clock, inst.phase_ns);
-            let (Some(effect), Some(tex)) = (inst.effect.as_mut(), inst.tex.as_ref()) else {
+            if !(inst.has_content() && frames[inst.track].audible) {
+                continue;
+            }
+            let (mode, opacity) = (inst.blend_mode, frames[inst.track].opacity);
+            let Some(tex) = inst.render(gpu, compositor, clock, *mapping) else {
                 continue;
             };
-            effect.render(gpu, &zclock, &view(tex), w, h);
             if k == last {
-                compositor.blend(
-                    gpu,
-                    acc,
-                    tex,
-                    &view(zone_tex),
-                    inst.blend_mode,
-                    inst.opacity,
-                );
+                compositor.blend(gpu, acc, tex, &view(zone_tex), mode, opacity);
             } else {
-                compositor.blend(gpu, acc, tex, &view(other), inst.blend_mode, inst.opacity);
+                compositor.blend(gpu, acc, tex, &view(other), mode, opacity);
                 std::mem::swap(&mut acc, &mut other);
             }
         }
@@ -643,7 +1097,8 @@ impl FrameContent for ZoneCompositor {
         //    BEFORE any rendering this frame. This is the atomic-swap point — the
         //    whole frame below is rendered under one consistent set of effects, so a
         //    swap can never split a frame into old-half / new-half (M8-PARTA §3).
-        self.drain_commands(gpu);
+        self.drain_commands(gpu, clock);
+        self.read_track_controls();
 
         // 0b. Advance every instance's animation phase by its zone's signed speed over
         //     the master's show-time delta. Integrating (rather than scaling absolute
@@ -657,9 +1112,9 @@ impl FrameContent for ZoneCompositor {
         };
         self.last_show_ns = Some(clock.show_ns);
         for (s, slot) in self.slots.iter_mut().enumerate() {
-            let speed = zones.get(s).speed_multiplier as f64;
+            let step = delta_ns * zones.get(s).speed_multiplier as f64;
             for inst in &mut slot.instances {
-                inst.phase_ns = (inst.phase_ns + delta_ns * speed).max(0.0);
+                inst.advance(step);
             }
         }
 
@@ -669,10 +1124,9 @@ impl FrameContent for ZoneCompositor {
         self.contrib.clear();
         for &slot in &self.order {
             let s = slot as usize;
-            let slot_ref = &self.slots[s];
             if zones.contributes_pixels(s)
-                && slot_ref.has_content()
-                && !slot_ref.footprint.is_empty()
+                && self.zone_has_content(s)
+                && !self.slots[s].footprint.is_empty()
             {
                 self.contrib.push(slot);
             }

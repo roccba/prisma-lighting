@@ -393,15 +393,26 @@ export const openShow = (path: string) => invoke<void>("main_open_show", { path 
 /** Start a clean show over the current patch (keeps zones/fixtures, clears all effects). */
 export const newShow = () => invoke<void>("main_new_show");
 
-// --- Main operation window (M8 step 4): the scene grid ---
+/** Set once at boot when the session was recovered from an autosave. */
+export interface RecoveryInfo {
+  /** The last saved show to fall back to, if any. */
+  last_saved: string | null;
+}
+export const recoveryInfo = () => invoke<RecoveryInfo | null>("main_recovery_info");
 
-/** One scene-grid cell of a zone: empty (assignable) or an assigned effect, and
- *  whether it is the zone's running (active) cell. */
+// --- The track grid (live model, docs/LIVE-MODEL-SPEC.md §7) ---
+
+/** One clip (grid cell) of a track: empty (assignable) or an assigned effect, and
+ *  whether it is the track's running or armed clip. */
 export interface CellInfo {
   index: number;
   effect_id: string | null;
   effect_name: string | null;
   active: boolean;
+  /** Armed for GO. */
+  armed: boolean;
+  /** The clip's own fade in seconds (0 = the track's transition). */
+  fade: number;
   /** The operator's label for the cell (null = unnamed: show the effect's name). */
   name: string | null;
   /** The cell's grid colour, sRGB 0–255 (null = default panel grey). */
@@ -410,6 +421,52 @@ export interface CellInfo {
   params: Record<string, number> | null;
   /** The effect's own colour table (linear light), if it has one. */
   palette: [number, number, number][] | null;
+  /** The effect's main colour (linear light), shown when the cell has no label colour. */
+  effect_color: [number, number, number] | null;
+}
+
+/** How a track blends onto the ones before it (the Rust enum's names). */
+export type BlendMode = "Normal" | "Add" | "Subtract" | "Multiply" | "Screen" | "Max" | "Min" | "Mask";
+
+export type TimeBase = "seconds" | "beats";
+export type Easing = "linear" | "ease_in" | "ease_out" | "ease_in_out";
+export type LaunchMode = "direct" | "arm";
+
+export interface TrackTransition {
+  time: number;
+  base: TimeBase;
+  easing: Easing;
+}
+
+/** One column of the grid. */
+export interface TrackInfo {
+  id: string;
+  name: string;
+  zones: string[];
+  /** The destination zones' names, joined. */
+  destination: string;
+  /** The first destination zone's display colour (sRGB 0–255). */
+  color: [number, number, number];
+  blend_mode: BlendMode;
+  opacity: number;
+  mute: boolean;
+  solo: boolean;
+  transition: TrackTransition;
+  launch: LaunchMode;
+  active: number | null;
+  armed: number | null;
+  clips: CellInfo[];
+}
+
+export interface SceneInfo {
+  index: number;
+  name: string | null;
+  color: [number, number, number] | null;
+}
+
+export interface GridInfo {
+  tracks: TrackInfo[];
+  scenes: SceneInfo[];
 }
 
 /** One entry the effect picker offers. */
@@ -422,44 +479,94 @@ export interface EffectListing {
 /** The effect catalogue for the picker, grouped by `category` in the UI. */
 export const effectCatalogue = () => invoke<EffectListing[]>("main_effect_catalogue");
 
-/** The scene grid of a zone (its cells + which is running). */
-export const zoneGrid = (zone: string) => invoke<CellInfo[]>("main_zone_grid", { zone });
+/** The whole grid: tracks (compositing order) with their clips, and the scene rows. */
+export const grid = () => invoke<GridInfo>("main_grid");
 
-/** Assign an effect to a cell AND fire it (picking plays it). Returns the new grid.
- *  `params` / `palette` default to the effect's own. */
+/** One track's clips (from the grid). */
+export const trackClips = async (track: string) =>
+  (await grid()).tracks.find((t) => t.id === track)?.clips ?? [];
+
+/** Assign an effect to a clip AND play it. `params` / `palette` default to the effect's. */
 export const assignCell = (
-  zone: string,
+  track: string,
   index: number,
   effectId: string,
   params: Record<string, number> | null = null,
   palette: [number, number, number][] | null = null,
-) => invoke<CellInfo[]>("main_assign_cell", { zone, index, effectId, params, palette });
+) => invoke<CellInfo[]>("main_assign_cell", { track, index, effectId, params, palette });
 
-/** Assign an effect (with its stored params / colour table) to a cell WITHOUT firing it
- *  — the grid's paste. The zone's running cell does not change. Returns the new grid. */
+/** Assign an effect (with its stored params / colour table) to a clip WITHOUT playing it. */
 export const assignCellSilent = (
-  zone: string,
+  track: string,
   index: number,
   effectId: string,
   params: Record<string, number> | null,
   palette: [number, number, number][] | null,
-) => invoke<CellInfo[]>("main_assign_cell_silent", { zone, index, effectId, params, palette });
+) => invoke<CellInfo[]>("main_assign_cell_silent", { track, index, effectId, params, palette });
 
-/** Label a cell on the grid (blank clears the label). Returns the new grid. */
-export const renameCell = (zone: string, index: number, name: string) =>
-  invoke<CellInfo[]>("main_rename_cell", { zone, index, name });
+/** Label a clip (blank clears the label). */
+export const renameCell = (track: string, index: number, name: string) =>
+  invoke<CellInfo[]>("main_rename_cell", { track, index, name });
 
-/** Give a cell its own grid colour (sRGB 0–255). Returns the new grid. */
-export const setCellColor = (zone: string, index: number, color: [number, number, number]) =>
-  invoke<CellInfo[]>("main_set_cell_color", { zone, index, color });
+/** Give a clip its own grid colour (sRGB 0–255). */
+export const setCellColor = (track: string, index: number, color: [number, number, number]) =>
+  invoke<CellInfo[]>("main_set_cell_color", { track, index, color });
 
-/** Trigger an already-assigned cell (make it the zone's active content). */
-export const triggerCell = (zone: string, index: number) =>
-  invoke<CellInfo[]>("main_trigger_cell", { zone, index });
+/** Launch a clip (the track's `launch` target: plays it, or arms it on an Arm track). */
+export const triggerCell = (track: string, index: number) =>
+  invoke<CellInfo[]>("main_trigger_cell", { track, index });
 
-/** Empty a cell (and stop the zone if it was the running cell). */
-export const clearCell = (zone: string, index: number) =>
-  invoke<CellInfo[]>("main_clear_cell", { zone, index });
+/** Empty a clip (and stop the track if it was running). */
+export const clearCell = (track: string, index: number) =>
+  invoke<CellInfo[]>("main_clear_cell", { track, index });
+
+/** Arm (or disarm) a clip for GO. */
+export const armCell = (track: string, index: number) => invoke<void>("main_arm_cell", { track, index });
+
+/** A clip's own fade in seconds (0 = the track's transition). */
+export const setCellFade = (track: string, index: number, seconds: number) =>
+  invoke<void>("main_set_cell_fade", { track, index, seconds });
+
+/** Stop a track (fades out with its transition; a second stop during the fade cuts). */
+export const stopTrack = (track: string) => invoke<void>("main_stop_track", { track });
+
+/** Launch (or arm) grid row `row` on every track that has a clip there. */
+export const launchScene = (row: number, arm = false) => invoke<void>("main_launch_scene", { row, arm });
+
+/** GO: play every armed clip in the same frame. */
+export const armGo = () => invoke<void>("main_arm_go");
+
+export const setTrackOpacity = (track: string, value: number) =>
+  invoke<void>("main_set_track_opacity", { track, value });
+export const setTrackMute = (track: string, on: boolean) => invoke<void>("main_set_track_mute", { track, on });
+export const setTrackSolo = (track: string, on: boolean) => invoke<void>("main_set_track_solo", { track, on });
+
+/** The track popover: transition + launch mode (applies at the next launch). */
+export const setTrackBehaviour = (track: string, transition: TrackTransition, launch: LaunchMode) =>
+  invoke<void>("main_set_track_behaviour", { track, transition, launch });
+
+export const setTrackBlend = (track: string, mode: BlendMode) =>
+  invoke<void>("main_set_track_blend", { track, mode });
+
+/** Stop every track (each with its transition; a second press during the fades cuts). */
+export const stopAll = () => invoke<void>("main_stop_all");
+
+/** Move a track just before another of the same zone (`before` null = last). */
+export const moveTrack = (track: string, before: string | null) =>
+  invoke<void>("main_move_track", { track, before });
+
+export const renameTrack = (track: string, name: string) => invoke<void>("main_rename_track", { track, name });
+
+/** "+ Track" on a zone (recompiles; the window re-fetches on `layout-changed`). */
+/** Resolves to the new track's id. */
+export const addTrack = (zone: string) => invoke<string>("main_add_track", { zone });
+export const removeTrack = (track: string) => invoke<void>("main_remove_track", { track });
+
+// --- Tempo (global bar) ---
+
+export const clockInfo = () => invoke<{ bpm: number }>("main_clock");
+export const setBpm = (bpm: number) => invoke<void>("main_set_bpm", { bpm });
+export const tap = () => invoke<void>("main_tap");
 
 // --- Main operation window (M8 step 5): the effect parameter panel ---
 
@@ -493,7 +600,7 @@ export interface ParamInfo {
  *  selected cell, else the zone's running cell. `effect_id` is null when that cell is
  *  empty (or the zone has no cell to show). */
 export interface EffectPanelInfo {
-  zone_id: string;
+  track_id: string;
   cell_index: number | null;
   /** Whether `cell_index` is the zone's running cell (its edits drive the output live). */
   active: boolean;
@@ -506,33 +613,35 @@ export interface EffectPanelInfo {
   palette: [number, number, number][] | null;
   /** Most colours a table may hold (255). */
   palette_max: number;
+  /** The clip's own fade in seconds (0 = the track's transition). */
+  fade: number;
 }
 
 /** A cell's effect and its manifest-driven parameters (§3.5). `cell` is the grid's
  *  selection; null = the zone's running cell. For an EMPTY cell, `draft` is the effect
  *  to show at its defaults (read-only — the cell stays empty). */
-export const effectPanel = (zone: string, cell: number | null = null, draft: string | null = null) =>
-  invoke<EffectPanelInfo>("main_effect_panel", { zone, cell, draft });
+export const effectPanel = (track: string, cell: number | null = null, draft: string | null = null) =>
+  invoke<EffectPanelInfo>("main_effect_panel", { track, cell, draft });
 
 /** Replace the colour table of a cell's effect (linear-light RGB list). Live only when
  *  that cell is the running one; `cell` null = the running cell. */
-export const setPalette = (zone: string, colors: [number, number, number][], cell: number | null = null) =>
-  invoke<void>("main_set_palette", { zone, colors, cell });
+export const setPalette = (track: string, colors: [number, number, number][], cell: number | null = null) =>
+  invoke<void>("main_set_palette", { track, colors, cell });
 
 /** Fired on `window` for every `setParam`, so the effect panel keeps its copy of the
  *  values current (a control opened later — e.g. the Tabla de color — must see what was
  *  set, not what was loaded when the cell was selected). */
 export const PARAM_WRITTEN = "prisma-param-written";
 export interface ParamWritten {
-  zone: string;
+  track: string;
   name: string;
   value: number;
 }
 
 /** Set one parameter of a zone's active effect (normalized 0..1). Drives it live. */
-export const setParam = (zone: string, name: string, value: number, cell: number | null = null) => {
-  window.dispatchEvent(new CustomEvent<ParamWritten>(PARAM_WRITTEN, { detail: { zone, name, value } }));
-  return invoke<void>("main_set_param", { zone, name, value, cell });
+export const setParam = (track: string, name: string, value: number, cell: number | null = null) => {
+  window.dispatchEvent(new CustomEvent<ParamWritten>(PARAM_WRITTEN, { detail: { track, name, value } }));
+  return invoke<void>("main_set_param", { track, name, value, cell });
 };
 
 // --- MIDI (M9 Slice 1): input device + MIDI Learn ---

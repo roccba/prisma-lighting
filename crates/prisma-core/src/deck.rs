@@ -18,6 +18,11 @@
 //! returns straight to what A would have returned to. A latch or trigger makes a
 //! new base and clears the stack.
 //!
+//! A track can also hold one **armed** clip (LIVE-MODEL-SPEC §5): arming readies a
+//! clip without playing it, and GO ([`take_armed`](ZoneDeck::take_armed)) plays every
+//! armed clip together. Arming the armed clip again disarms it. Playing the armed clip
+//! directly also disarms it (it is no longer waiting for GO).
+//!
 //! This is the decision logic only — pure, no tree, no GPU — so the engine's cell
 //! controller and its tests share one definition.
 
@@ -26,6 +31,7 @@
 pub struct ZoneDeck {
     active: Option<usize>,
     holds: Vec<Hold>,
+    armed: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,12 +55,43 @@ impl ZoneDeck {
         Self {
             active,
             holds: Vec::new(),
+            armed: None,
         }
     }
 
     /// The running cell.
     pub fn active(&self) -> Option<usize> {
         self.active
+    }
+
+    /// The armed clip, waiting for GO.
+    pub fn armed(&self) -> Option<usize> {
+        self.armed
+    }
+
+    /// Arm `cell` (replacing any armed clip), or disarm it if it already is. Returns
+    /// the armed clip afterwards. Never changes what plays.
+    pub fn arm(&mut self, cell: usize) -> Option<usize> {
+        self.armed = if self.armed == Some(cell) {
+            None
+        } else {
+            Some(cell)
+        };
+        self.armed
+    }
+
+    /// GO: play the armed clip as a latch (a new base, temporary clips forgotten) and
+    /// disarm. [`DeckChange::None`] if nothing is armed — or if it is already the base.
+    pub fn take_armed(&mut self) -> DeckChange {
+        match self.armed.take() {
+            Some(cell) => self.latch(cell),
+            None => DeckChange::None,
+        }
+    }
+
+    /// Stop: nothing plays, temporary clips are forgotten. The armed clip stays armed.
+    pub fn stop(&mut self) -> DeckChange {
+        self.set_base(None)
     }
 
     /// Whether `cell` is currently held as a temporary cell.
@@ -114,6 +151,9 @@ impl ZoneDeck {
     }
 
     fn play(&mut self, cell: Option<usize>, restart: bool) -> DeckChange {
+        if cell.is_some() && self.armed == cell {
+            self.armed = None; // played directly: no longer waiting for GO
+        }
         if self.active == cell && !restart {
             return DeckChange::None;
         }
@@ -181,5 +221,61 @@ mod tests {
                 restart: true
             }
         );
+    }
+
+    #[test]
+    fn arming_readies_without_playing_and_toggles() {
+        let mut d = ZoneDeck::new(Some(0));
+        assert_eq!(d.arm(2), Some(2));
+        assert_eq!(d.active(), Some(0), "arming never plays");
+        assert_eq!(d.arm(3), Some(3), "a new arm replaces the old one");
+        assert_eq!(d.arm(3), None, "arming the armed clip disarms it");
+        assert_eq!(d.armed(), None);
+    }
+
+    #[test]
+    fn go_plays_the_armed_clip_as_a_latch_and_disarms() {
+        let mut d = ZoneDeck::new(Some(0));
+        d.press(1);
+        d.arm(4);
+        assert_eq!(d.take_armed(), play(Some(4)));
+        assert_eq!(d.armed(), None);
+        assert_eq!(
+            d.release(1),
+            DeckChange::None,
+            "GO latches: holds forgotten"
+        );
+        assert_eq!(
+            d.take_armed(),
+            DeckChange::None,
+            "nothing armed: GO does nothing"
+        );
+        // Arming the running clip and GO: already the base, nothing to do.
+        d.arm(4);
+        assert_eq!(d.take_armed(), DeckChange::None);
+    }
+
+    #[test]
+    fn playing_the_armed_clip_directly_disarms_it() {
+        let mut d = ZoneDeck::new(None);
+        d.arm(2);
+        d.latch(2);
+        assert_eq!(d.armed(), None);
+        // Playing another clip leaves the arm alone.
+        d.arm(3);
+        d.latch(1);
+        assert_eq!(d.armed(), Some(3));
+    }
+
+    #[test]
+    fn stop_clears_the_base_and_holds_but_keeps_the_arm() {
+        let mut d = ZoneDeck::new(Some(0));
+        d.press(1);
+        d.arm(2);
+        assert_eq!(d.stop(), play(None));
+        assert_eq!(d.active(), None);
+        assert_eq!(d.release(1), DeckChange::None);
+        assert_eq!(d.armed(), Some(2));
+        assert_eq!(d.stop(), DeckChange::None, "already stopped");
     }
 }

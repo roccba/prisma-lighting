@@ -29,6 +29,8 @@ pub fn blend_code(mode: BlendMode) -> u32 {
         // M10 when alpha-carrying media exists — operators will expect alpha gating.
         BlendMode::Mask => 4,
         BlendMode::Max => 5,
+        BlendMode::Subtract => 6,
+        BlendMode::Min => 7,
     }
 }
 

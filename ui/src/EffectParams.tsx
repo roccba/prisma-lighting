@@ -8,10 +8,11 @@ import {
   PARAM_WRITTEN,
   renameCell,
   setCellColor,
+  setCellFade,
   setPalette,
   setParam,
   triggerCell,
-  zoneGrid,
+  trackClips,
   type EffectListing,
   type EffectPanelInfo,
   type ParamInfo,
@@ -22,6 +23,7 @@ import { Dropdown } from "./Dropdown";
 import { Fader } from "./Fader";
 import { ColorTable } from "./ColorTable";
 import { DirectionMenu } from "./DirectionMenu";
+import { NumberField } from "./NumberField";
 import { ParamField, ValueBox } from "./ParamField";
 import { Rose } from "./Rose";
 import { PingPong, PlayLoop } from "./icons";
@@ -48,7 +50,7 @@ import { PanelCellContext, usePanelWrites, type PanelTarget } from "./panelCell"
 // through the engine, so it shows at once in the large preview beside it and on the wire.
 
 interface EffectParamsProps {
-  zoneId: string;
+  trackId: string;
   /** The grid's selected cell; null = the zone's running cell. */
   cell: number | null;
   /** Bumped when the grid changes (fire / assign / clear), to re-fetch the panel. */
@@ -146,8 +148,8 @@ function TapButton({ onBpm, disabled }: { onBpm: (bpm: number) => void; disabled
 /** One scalar parameter: label · value box · fader, all through the shared `ParamField`
  *  so it is identical to every other control. Owns its value locally for a smooth drag
  *  while writing every change straight to the engine; the value box edits the same value. */
-function ScalarRow({ zoneId, param, disabled }: { zoneId: string; param: ParamInfo; disabled?: boolean }) {
-  const write = usePanelWrites(zoneId);
+function ScalarRow({ trackId, param, disabled }: { trackId: string; param: ParamInfo; disabled?: boolean }) {
+  const write = usePanelWrites(trackId);
   const [value, setValue] = useState(param.value_norm);
   useEffect(() => setValue(param.value_norm), [param.value_norm]);
 
@@ -179,8 +181,8 @@ function ScalarRow({ zoneId, param, disabled }: { zoneId: string; param: ParamIn
 /** One enum parameter: a labelled dropdown (a block control on the right). The value is a
  *  scalar INDEX (0..steps): the normalized value maps linearly to the choice index, and
  *  picking a choice writes the index back as `i / steps`. Used by the shape/mode selectors. */
-function EnumRow({ zoneId, param, disabled }: { zoneId: string; param: ParamInfo; disabled?: boolean }) {
-  const write = usePanelWrites(zoneId);
+function EnumRow({ trackId, param, disabled }: { trackId: string; param: ParamInfo; disabled?: boolean }) {
+  const write = usePanelWrites(trackId);
   const choices = param.choices ?? [];
   const steps = Math.max(1, choices.length - 1);
   const idxOf = (norm: number) => Math.min(choices.length - 1, Math.max(0, Math.round(norm * steps)));
@@ -210,8 +212,8 @@ function EnumRow({ zoneId, param, disabled }: { zoneId: string; param: ParamInfo
 }
 
 /** An on/off parameter as a latching button (the classic "Atenuar"): lit while on. */
-function ToggleButton({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
-  const write = usePanelWrites(zoneId);
+function ToggleButton({ trackId, param }: { trackId: string; param: ParamInfo }) {
+  const write = usePanelWrites(trackId);
   const [on, setOn] = useState(param.value_norm > 0.5);
   useEffect(() => setOn(param.value_norm > 0.5), [param.value_norm]);
   return (
@@ -240,8 +242,8 @@ function paletteModeGlyph(i: number, label: string) {
 
 /** The colour table's play mode (the classic button beside "Colores"): an icon button that
  *  drops a vertical menu of the modes. The value is the choice INDEX, like an enum. */
-function PaletteModeButton({ zoneId, param }: { zoneId: string; param: ParamInfo }) {
-  const write = usePanelWrites(zoneId);
+function PaletteModeButton({ trackId, param }: { trackId: string; param: ParamInfo }) {
+  const write = usePanelWrites(trackId);
   const choices = param.choices ?? [];
   const steps = Math.max(1, choices.length - 1);
   const idxOf = (norm: number) => Math.min(choices.length - 1, Math.max(0, Math.round(norm * steps)));
@@ -299,12 +301,12 @@ function PaletteModeButton({ zoneId, param }: { zoneId: string; param: ParamInfo
 
 /** "Colores": opens the "Tabla de color" where the click happened. */
 function ColorsButton({
-  zoneId,
+  trackId,
   colors,
   max,
   onChange,
 }: {
-  zoneId: string;
+  trackId: string;
   colors: [number, number, number][];
   max: number;
   onChange: (colors: [number, number, number][]) => void;
@@ -322,7 +324,7 @@ function ColorsButton({
       >
         Colores
       </button>
-      {at && <ColorTable zoneId={zoneId} colors={colors} max={max} onChange={onChange} at={at} onClose={() => setAt(null)} />}
+      {at && <ColorTable trackId={trackId} colors={colors} max={max} onChange={onChange} at={at} onClose={() => setAt(null)} />}
     </>
   );
 }
@@ -335,13 +337,13 @@ function ColorsButton({
  *  · An empty cell (a draft): changing the effect only changes the draft (UI state). GO
  *    first assigns the cell with the draft effect, then plays it. */
 function EffectHead({
-  zoneId,
+  trackId,
   panel,
   onDraftEffect,
   ensureAssigned,
   onGridChange,
 }: {
-  zoneId: string;
+  trackId: string;
   panel: EffectPanelInfo;
   onDraftEffect: (effectId: string) => void;
   /** Assign a draft cell (no-op for an assigned one); resolves once it holds the effect. */
@@ -364,11 +366,11 @@ function EffectHead({
     }
     try {
       // The cell's label and colour survive an effect change (the assign rewrites the cell).
-      const before = (await zoneGrid(zoneId))[index];
+      const before = (await trackClips(trackId))[index];
       const assign = panel.active ? assignCell : assignCellSilent;
-      await assign(zoneId, index, effectId, null, null);
-      if (before?.name) await renameCell(zoneId, index, before.name);
-      if (before?.color) await setCellColor(zoneId, index, before.color);
+      await assign(trackId, index, effectId, null, null);
+      if (before?.name) await renameCell(trackId, index, before.name);
+      if (before?.color) await setCellColor(trackId, index, before.color);
     } catch {
       /* the grid and panel re-read below either way */
     }
@@ -377,11 +379,13 @@ function EffectHead({
 
   const go = () => {
     ensureAssigned()
-      .then(() => triggerCell(zoneId, index))
+      .then(() => triggerCell(trackId, index))
       .then(() => onGridChange?.())
       .catch(() => {});
   };
 
+  const [fade, setFade] = useState(panel.fade);
+  useEffect(() => setFade(panel.fade), [panel.fade, index]);
   const state = panel.draft ? "Vacía" : panel.active ? "En vivo" : "Sin activar";
   return (
     <div className="pr-params-head">
@@ -393,6 +397,24 @@ function EffectHead({
         minWidth={220}
         aria-label="Efecto de la celda"
       />
+      {!panel.draft && (
+        <span className="pr-params-fade" title="Fade propio de la celda; 0 = la transición del track">
+          <span className="pr-params-head-label">Fade</span>
+          <NumberField
+            value={fade}
+            min={0}
+            max={600}
+            step={0.1}
+            width={52}
+            onChange={(v) => {
+              setFade(v);
+              setCellFade(trackId, index, v).catch(() => {});
+            }}
+            aria-label="Fade de la celda (segundos)"
+          />
+          <span className="pr-tsettings-unit">s</span>
+        </span>
+      )}
       <span className={`pr-params-state${panel.active ? " is-live" : ""}`}>{state}</span>
       <button
         type="button"
@@ -429,12 +451,12 @@ function isBlackColor(p: EffectPanelInfo): boolean {
   return channels.length > 0 && channels.every((q) => q.value_norm <= 1e-6);
 }
 
-export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsProps) {
+export function EffectParams({ trackId, cell, rev, onGridChange }: EffectParamsProps) {
   const [panel, setPanel] = useState<EffectPanelInfo | null>(null);
   // The effect an EMPTY selected cell is shown with (UI state only). Back to the default
   // whenever another cell is selected.
   const [draftEffect, setDraftEffect] = useState(DRAFT_DEFAULT_EFFECT);
-  useEffect(() => setDraftEffect(DRAFT_DEFAULT_EFFECT), [zoneId, cell]);
+  useEffect(() => setDraftEffect(DRAFT_DEFAULT_EFFECT), [trackId, cell]);
   // The assignment of a draft cell: edits made while it is pending (and until the panel
   // re-reads the cell as assigned) wait for it, so one drag of a slider assigns the cell
   // once and then writes to it. It belongs to ONE draft: whenever the panel shows a draft
@@ -445,7 +467,7 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
   const assigning = useRef<Promise<void> | null>(null);
   useEffect(() => {
     assigning.current = null;
-  }, [zoneId, cell, draftEffect]);
+  }, [trackId, cell, draftEffect]);
   // Auto-clear (see `isBlackColor`), at two moments:
   //  · while editing: every edit re-arms a timer; when it fires the latest panel state is
   //    checked (the operator finished editing this cell);
@@ -458,8 +480,8 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
   const gridChangeRef = useRef(onGridChange);
   gridChangeRef.current = onGridChange;
   // What is selected NOW (refs are set during render, so a cleanup sees the new values).
-  const selectionRef = useRef({ zoneId, cell });
-  selectionRef.current = { zoneId, cell };
+  const selectionRef = useRef({ trackId, cell });
+  selectionRef.current = { trackId, cell };
   const clearTimer = useRef<number | undefined>(undefined);
   useEffect(
     () => () => {
@@ -470,20 +492,20 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
       // cell the panel was already showing as the zone's default).
       const now = selectionRef.current;
       const same =
-        now.zoneId === left.zone_id && (now.cell === left.cell_index || (now.cell === null && left.active));
+        now.trackId === left.track_id && (now.cell === left.cell_index || (now.cell === null && left.active));
       if (same) return;
-      clearCell(left.zone_id, left.cell_index)
+      clearCell(left.track_id, left.cell_index)
         .then(() => gridChangeRef.current?.()) // the grid shows the left cell empty
         .catch(() => {});
     },
-    [zoneId, cell],
+    [trackId, cell],
   );
   const scheduleAutoClear = () => {
     window.clearTimeout(clearTimer.current);
     clearTimer.current = window.setTimeout(() => {
       const p = panelRef.current;
       if (!p || p.cell_index == null || !isBlackColor(p)) return;
-      clearCell(zoneId, p.cell_index)
+      clearCell(trackId, p.cell_index)
         .then(() => {
           // Reset to a freshly selected empty cell (the draft effect back to its default,
           // no assignment held), then re-read: the grid shows it empty, the panel drafts it.
@@ -519,27 +541,27 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
 
   useEffect(() => {
     let live = true;
-    effectPanel(zoneId, cell, draftEffect)
+    effectPanel(trackId, cell, draftEffect)
       .then((p) => live && setPanel(p))
       .catch(() => live && setPanel(null));
     return () => {
       live = false;
     };
-  }, [zoneId, cell, rev, draftEffect]);
+  }, [trackId, cell, rev, draftEffect]);
 
   // Keep the loaded values current with every write, so a control mounted later (the
   // Tabla de color, the Caja de Fader, a re-rendered row) starts from the real value.
   useEffect(() => {
     const onWrite = (e: Event) => {
-      const { zone, name, value } = (e as CustomEvent<ParamWritten>).detail;
-      if (zone !== zoneId) return;
+      const { track, name, value } = (e as CustomEvent<ParamWritten>).detail;
+      if (track !== trackId) return;
       setPanel((p) =>
         p ? { ...p, params: p.params.map((q) => (q.name === name ? { ...q, value_norm: value } : q)) } : p,
       );
     };
     window.addEventListener(PARAM_WRITTEN, onWrite);
     return () => window.removeEventListener(PARAM_WRITTEN, onWrite);
-  }, [zoneId]);
+  }, [trackId]);
 
   if (!panel || panel.cell_index == null) {
     return null; // no cell selected and none running: the panel simply stays blank
@@ -554,7 +576,7 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
   ): Promise<void> => {
     if (!assigning.current) {
       const effectId = panel.effect_id!;
-      assigning.current = assignCellSilent(zoneId, index, effectId, params, palette).then(() => {
+      assigning.current = assignCellSilent(trackId, index, effectId, params, palette).then(() => {
         onGridChange?.(); // the grid shows the cell assigned; the panel re-reads it
       });
       assigning.current.catch(() => {
@@ -568,22 +590,22 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
     writeParam: (name, value) => {
       scheduleAutoClear();
       if (!panel.draft) {
-        setParam(zoneId, name, value, index).catch(() => {});
+        setParam(trackId, name, value, index).catch(() => {});
         return;
       }
       // Keep the shown value (setParam would announce it; the first write is the assign).
-      window.dispatchEvent(new CustomEvent<ParamWritten>(PARAM_WRITTEN, { detail: { zone: zoneId, name, value } }));
+      window.dispatchEvent(new CustomEvent<ParamWritten>(PARAM_WRITTEN, { detail: { track: trackId, name, value } }));
       if (assigning.current) {
-        assigning.current.then(() => setParam(zoneId, name, value, index)).catch(() => {});
+        assigning.current.then(() => setParam(trackId, name, value, index)).catch(() => {});
       } else {
         assignDraft({ [name]: value }, null).catch(() => {});
       }
     },
     writePalette: (colors) => {
       if (!panel.draft) {
-        setPalette(zoneId, colors, index).catch(() => {});
+        setPalette(trackId, colors, index).catch(() => {});
       } else if (assigning.current) {
-        assigning.current.then(() => setPalette(zoneId, colors, index)).catch(() => {});
+        assigning.current.then(() => setPalette(trackId, colors, index)).catch(() => {});
       } else {
         assignDraft(null, colors).catch(() => {});
       }
@@ -591,7 +613,7 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
   };
   const head = (
     <EffectHead
-      zoneId={zoneId}
+      trackId={trackId}
       panel={panel}
       onDraftEffect={setDraftEffect}
       ensureAssigned={() => (panel.draft ? assignDraft(null, null) : Promise.resolve())}
@@ -623,7 +645,7 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
             {palette && (
               <ColorsButton
                 key={`${panel.effect_id}:palette`}
-                zoneId={zoneId}
+                trackId={trackId}
                 colors={palette}
                 max={panel.palette_max}
                 onChange={(next) => setPanel((p) => (p ? { ...p, palette: next } : p))}
@@ -632,7 +654,7 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
             {palModeItems.map(
               (item) =>
                 item.kind === "palmode" && (
-                  <PaletteModeButton key={`${panel.effect_id}:${item.param.name}`} zoneId={zoneId} param={item.param} />
+                  <PaletteModeButton key={`${panel.effect_id}:${item.param.name}`} trackId={trackId} param={item.param} />
                 ),
             )}
             {buttonItems.map((item) => renderButton(item, panel.effect_id!))}
@@ -648,7 +670,7 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
               {scalarItems.map((item) => (
                 <ScalarRow
                   key={`${panel.effect_id}:${item.param.name}`}
-                  zoneId={zoneId}
+                  trackId={trackId}
                   param={item.param}
                   disabled={!enabledOf(item.param, panel.params)}
                 />
@@ -668,7 +690,7 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
   // A button of the top row: an on/off toggle ("Colores" is drawn separately).
   function renderButton(item: PanelItem, effectId: string) {
     if (item.kind === "toggle") {
-      return <ToggleButton key={`${effectId}:${item.param.name}`} zoneId={zoneId} param={item.param} />;
+      return <ToggleButton key={`${effectId}:${item.param.name}`} trackId={trackId} param={item.param} />;
     }
     return null;
   }
@@ -681,18 +703,18 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
       if (item.r && item.g && item.b) {
         return (
           <ParamField key={`${effectId}:color:${item.group}`} label={item.label} block>
-            <ColorControl zoneId={zoneId} r={item.r} g={item.g} b={item.b} />
+            <ColorControl trackId={trackId} r={item.r} g={item.g} b={item.b} />
           </ParamField>
         );
       }
       return [item.r, item.g, item.b]
         .filter((p): p is ParamInfo => !!p)
-        .map((p) => <ScalarRow key={`${effectId}:${p.name}`} zoneId={zoneId} param={p} />);
+        .map((p) => <ScalarRow key={`${effectId}:${p.name}`} trackId={trackId} param={p} />);
     }
     if (item.kind === "direction") {
       return (
         <ParamField key={`${effectId}:${item.param.name}`} label={item.param.label} block>
-          <Rose zoneId={zoneId} param={item.param} />
+          <Rose trackId={trackId} param={item.param} />
         </ParamField>
       );
     }
@@ -700,7 +722,7 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
       return (
         <EnumRow
           key={`${effectId}:${item.param.name}`}
-          zoneId={zoneId}
+          trackId={trackId}
           param={item.param}
           disabled={!enabledOf(item.param, panel!.params)}
         />
@@ -709,7 +731,7 @@ export function EffectParams({ zoneId, cell, rev, onGridChange }: EffectParamsPr
     if (item.kind === "dirmenu") {
       return (
         <ParamField key={`${effectId}:${item.param.name}`} label={item.param.label} block>
-          <DirectionMenu zoneId={zoneId} param={item.param} />
+          <DirectionMenu trackId={trackId} param={item.param} />
         </ParamField>
       );
     }

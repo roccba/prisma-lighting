@@ -357,6 +357,17 @@ impl Track {
     }
 }
 
+/// A grid row's optional label (LIVE-MODEL-SPEC §3): launching scene `n` launches
+/// clip `n` on every track that has one. UI-only — the engine never reads it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SceneLabel {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// sRGB 0–255, like a cell's colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<[u8; 3]>,
+}
+
 /// Master state applied **above** all zones (CLAUDE.md §4.3): master dimmer,
 /// colour and strobe, applied at the output stage for every pixel.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -599,6 +610,9 @@ pub struct Show {
     /// The grid's columns, in compositing order (first = bottom).
     #[serde(default)]
     pub tracks: Vec<Track>,
+    /// Optional labels per grid row (index = clip row). May be shorter than the rows.
+    #[serde(default)]
+    pub scenes: Vec<SceneLabel>,
     #[serde(default)]
     pub master: MasterState,
     /// Reserved for the device manager (M8-SPEC §5).
@@ -630,6 +644,7 @@ impl Show {
             patch,
             zones,
             tracks,
+            scenes: Vec::new(),
             master: MasterState::default(),
             network: NetworkConfig::default(),
             embedded_mappings: None,

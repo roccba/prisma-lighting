@@ -17,7 +17,7 @@ use prisma_core::time::SystemClock;
 use prisma_core::tree::{ParameterTree, WriteOutcome};
 use prisma_core::zone::ZoneStates;
 use prisma_core::MasterClock;
-use prisma_core::{ControllerMappings, SlotIds};
+use prisma_core::{ClockShared, ControllerMappings, Curve, ParamDescriptor, RealRange, SlotIds};
 use prisma_midi::MidiRuntime;
 
 use prisma_patch::{LayoutGeneration, Patch, PatchError};
@@ -43,11 +43,13 @@ use prisma_core::show::ParamSet;
 
 use prisma_render::live_params::LiveParams;
 use prisma_render::overlap::OverlapCounter;
-use prisma_render::render_loop::{run_render_loop, RenderLoop, RenderLoopConfig, RenderStats};
+use prisma_render::render_loop::{
+    run_render_loop, ClockControl, RenderLoop, RenderLoopConfig, RenderStats,
+};
 use prisma_render::sample::{SamplePlan, Sampler};
 use prisma_render::{Gpu, GpuError};
 
-use crate::clips::{register_clips, ClipController, ClipHost, TrackClips};
+use crate::clips::{register_clips, ClipController, ClipHost, GridParams};
 use crate::config::EngineConfig;
 use crate::content::IdleContent;
 use crate::zone_content::{
@@ -151,9 +153,9 @@ pub struct EngineHandle {
     /// outlives any one tree — a recompile unbinds it from the old tree and binds it
     /// to the new one, so open hardware ports never notice.
     midi: MidiRuntime,
-    /// Each track's clips as tree targets, by track slot (`Show::tracks` order).
+    /// Every grid parameter (tracks by slot in `Show::tracks` order, scenes, GO).
     /// Empty under `IdleContent`.
-    clips: Vec<TrackClips>,
+    grid: GridParams,
     /// The show's running clip per track at assembly — where the clip controller starts.
     clip_active: Vec<Option<usize>>,
     /// The Show's owner, carried across recompiles like `midi`.
@@ -161,6 +163,9 @@ pub struct EngineHandle {
     /// Plays clips from their tree parameters; running once a host is set.
     clip_controller: Mutex<Option<ClipController>>,
     live: LiveParams,
+    /// The master clock's published face (read the live BPM) and its tempo controls.
+    clock: Arc<ClockShared>,
+    tempo: ClockControl,
     generation: LayoutGeneration,
     /// Kept so shutdown can release the GPU **last**, after the render thread that
     /// used it has joined. This is the only long-lived strong reference besides the
@@ -212,6 +217,18 @@ pub struct ZoneLiveReadout {
     /// Strobe speed, normalized `0..=1` over its 1–25 Hz range (the UI slider's scale).
     pub strobe_rate: f32,
 }
+
+/// A snapshot of a track's live controls (LIVE-MODEL-SPEC §5).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TrackLiveReadout {
+    pub opacity: f32,
+    pub mute: bool,
+    pub solo: bool,
+}
+
+/// The tempo range of `/clock/bpm`.
+const BPM_MIN: f32 = prisma_core::MIN_BPM as f32;
+const BPM_MAX: f32 = prisma_core::MAX_BPM as f32;
 
 /// The source the main window's live controls (faders, solo, mute) write as — UI
 /// priority, so a physical fader can take over per the arbitration rules (§4.5).
@@ -314,7 +331,7 @@ impl Engine {
         //     thread. A show also seeds the tree with its saved live state so it
         //     lights up instead of sitting at engine-default dimmers (dark). ---
         //     A show also exposes its track clips as tree targets. ---
-        let mut clips: Vec<TrackClips> = Vec::new();
+        let mut grid = GridParams::default();
         let mut clip_active: Vec<Option<usize>> = Vec::new();
         // Per zone slot, its home track (phase 1 MIDI bridge: grid pads → its clips).
         let mut home_tracks: Vec<Option<Uuid>> = Vec::new();
@@ -329,14 +346,15 @@ impl Engine {
                 ContentSource::Idle => (None, None),
                 ContentSource::Show(show) => {
                     seed_live_from_show(&tree, &live, &patch, &show);
-                    clips = register_clips(&tree, &patch, &show);
+                    grid = register_clips(&tree, &patch, &show);
                     clip_active = show.tracks.iter().map(|t| t.active).collect();
                     home_tracks = patch
                         .zones
                         .iter()
                         .map(|z| show.home_track(z.id).map(|t| t.id))
                         .collect();
-                    let tracks = build_track_effects(&gpu, &tree, &patch, &show);
+                    let live: Vec<_> = grid.tracks.iter().map(|t| t.live()).collect();
+                    let tracks = build_track_effects(&gpu, &tree, &patch, &show, &live);
                     let compositor = ZoneCompositor::new(&gpu, &patch, &index, tracks);
                     let sender = compositor.command_sender();
                     (Some(compositor), Some(sender))
@@ -393,6 +411,26 @@ impl Engine {
         let sample_plan = SamplePlan::compile(&patch, &index);
         let counter = OverlapCounter::new(&patch, &index);
         let clock = MasterClock::new(Arc::new(SystemClock::new()));
+        // Tempo (LIVE-MODEL-SPEC §7 global bar): `/clock/bpm` and `/clock/tap`, applied
+        // by the render loop that owns the clock; the result is read back through the
+        // clock's published snapshot.
+        let clock_shared = clock.handle();
+        let clock_control = ClockControl {
+            bpm: tree.register(
+                "/clock/bpm",
+                ParamDescriptor::level(
+                    "clock.bpm",
+                    RealRange {
+                        min: BPM_MIN,
+                        max: BPM_MAX,
+                    },
+                    Curve::Linear,
+                    (120.0 - BPM_MIN) / (BPM_MAX - BPM_MIN),
+                ),
+            ),
+            tap: tree.register("/clock/tap", ParamDescriptor::trigger("clock.tap")),
+        };
+        let tempo = clock_control.clone();
 
         // --- Freeze flag (render pauses the clock) + Highlight handoff (output reads
         //     the editor's selection wait-free). §7 / S9. ---
@@ -492,6 +530,7 @@ impl Engine {
                         // Output keeps its own fixed rate; Highlight (output-stage) is
                         // unaffected. See RenderLoopConfig::frozen_rate_hz.
                         frozen_rate_hz: 10,
+                        clock_control: Some(clock_control),
                     };
                     // The content (built at load on the setup thread) was moved in.
                     // Either arm runs the SAME loop; only the FrameContent type differs.
@@ -538,11 +577,13 @@ impl Engine {
         let handle = EngineHandle {
             tree,
             midi,
-            clips,
+            grid,
             clip_active,
             clip_host: Mutex::new(None),
             clip_controller: Mutex::new(None),
             live,
+            clock: clock_shared,
+            tempo,
             generation,
             gpu,
             freeze,
@@ -733,12 +774,12 @@ impl EngineHandle {
 
     /// How many tracks the running show has (0 under `IdleContent`).
     pub fn track_count(&self) -> usize {
-        self.clips.len()
+        self.grid.tracks.len()
     }
 
     /// The slot (`Show::tracks` position at assembly) of a track, if running.
     pub fn track_slot(&self, track: Uuid) -> Option<usize> {
-        self.clips.iter().position(|c| c.track == track)
+        self.grid.tracks.iter().position(|c| c.track == track)
     }
 
     /// Run an effect on a track in every zone it reaches. Builds the
@@ -757,7 +798,7 @@ impl EngineHandle {
         params: &ParamSet,
         palette: Option<&[[f32; 3]]>,
     ) -> bool {
-        let (Some(sender), Some(clips)) = (self.zone_commands.as_ref(), self.clips.get(slot))
+        let (Some(sender), Some(clips)) = (self.zone_commands.as_ref(), self.grid.tracks.get(slot))
         else {
             return false;
         };
@@ -796,7 +837,7 @@ impl EngineHandle {
                 Arc::clone(&self.tree),
                 Arc::clone(&self.gpu),
                 sender,
-                self.clips.clone(),
+                self.grid.clone(),
                 self.clip_active.clone(),
                 host,
             ));
@@ -806,7 +847,7 @@ impl EngineHandle {
     /// Latch a track's clip (a UI click): the same tree target a pad in latch mode
     /// fires, so every transport plays clips one way. `false` if no such clip.
     pub fn fire_clip(&self, slot: usize, clip: usize) -> bool {
-        match self.clips.get(slot).and_then(|t| t.launch.get(clip)) {
+        match self.grid.tracks.get(slot).and_then(|t| t.launch.get(clip)) {
             Some(h) => self.tree.fire(h, ui_control_source()) == WriteOutcome::Accepted,
             None => false,
         }
@@ -816,7 +857,7 @@ impl EngineHandle {
     /// clip's content was just replaced, so the new effect plays even if that clip was
     /// already the running one. `false` if no such clip.
     pub fn trigger_clip(&self, slot: usize, clip: usize) -> bool {
-        match self.clips.get(slot).and_then(|t| t.trigger.get(clip)) {
+        match self.grid.tracks.get(slot).and_then(|t| t.trigger.get(clip)) {
             Some(h) => self.tree.fire(h, ui_control_source()) == WriteOutcome::Accepted,
             None => false,
         }
@@ -825,9 +866,108 @@ impl EngineHandle {
     /// Ask the clip controller to re-read which of a track's clips hold an effect
     /// (after they were edited), so pad LEDs follow.
     pub fn refresh_clips(&self, slot: usize) {
-        if let Some(t) = self.clips.get(slot) {
+        if let Some(t) = self.grid.tracks.get(slot) {
             self.tree.fire(&t.refresh, ui_control_source());
         }
+    }
+
+    /// Fire a trigger as the UI. `false` if it is missing or refused.
+    fn fire(&self, h: Option<&prisma_core::ParamHandle>) -> bool {
+        h.is_some_and(|h| self.tree.fire(h, ui_control_source()) == WriteOutcome::Accepted)
+    }
+
+    /// Arm (or disarm) a track's clip for GO — the same target Shift+click and an
+    /// Arm-mode launch reach. `false` if no such clip.
+    pub fn arm_clip(&self, slot: usize, clip: usize) -> bool {
+        self.fire(self.grid.tracks.get(slot).and_then(|t| t.arm.get(clip)))
+    }
+
+    /// Stop a track, fading out with its transition (a stop during the fade cuts).
+    pub fn stop_track(&self, slot: usize) -> bool {
+        self.fire(self.grid.tracks.get(slot).map(|t| &t.stop))
+    }
+
+    /// Stop every track (`/tracks/stop`), each with its transition; a second Stop All
+    /// during the fades cuts them.
+    pub fn stop_all(&self) -> bool {
+        self.fire(self.grid.stop_all.as_ref())
+    }
+
+    /// Launch grid row `row` on every track that has a clip there.
+    pub fn launch_scene(&self, row: usize) -> bool {
+        self.fire(self.grid.scene_launch.get(row))
+    }
+
+    /// Arm grid row `row` on every track that has a clip there.
+    pub fn arm_scene(&self, row: usize) -> bool {
+        self.fire(self.grid.scene_arm.get(row))
+    }
+
+    /// GO: play every armed clip in the same frame.
+    pub fn go(&self) -> bool {
+        self.fire(self.grid.go.as_ref())
+    }
+
+    /// Set a track's opacity (`0..=1`), read by the render loop next frame.
+    pub fn set_track_opacity(&self, slot: usize, value: f32) {
+        if let Some(t) = self.grid.tracks.get(slot) {
+            self.tree
+                .write_real(&t.opacity, value.clamp(0.0, 1.0), ui_control_source());
+        }
+    }
+
+    /// Change a track's blend mode, live (applied at the next frame boundary).
+    pub fn set_track_blend(&self, slot: usize, mode: prisma_patch::BlendMode) -> bool {
+        match self.zone_commands.as_ref() {
+            Some(sender) if slot < self.grid.tracks.len() => {
+                sender.send(crate::zone_content::ZoneCommand::SetBlend { track: slot, mode })
+            }
+            _ => false,
+        }
+    }
+
+    /// Mute or unmute a track.
+    pub fn set_track_mute(&self, slot: usize, on: bool) {
+        if let Some(t) = self.grid.tracks.get(slot) {
+            self.tree
+                .write_real(&t.mute, if on { 1.0 } else { 0.0 }, ui_control_source());
+        }
+    }
+
+    /// Solo or unsolo a track.
+    pub fn set_track_solo(&self, slot: usize, on: bool) {
+        if let Some(t) = self.grid.tracks.get(slot) {
+            self.tree
+                .write_real(&t.solo, if on { 1.0 } else { 0.0 }, ui_control_source());
+        }
+    }
+
+    /// A track's live opacity / mute / solo, wait-free (for the UI and for folding
+    /// back into the show before a recompile).
+    pub fn track_live(&self, slot: usize) -> Option<TrackLiveReadout> {
+        let t = self.grid.tracks.get(slot)?;
+        Some(TrackLiveReadout {
+            opacity: t.opacity.read_real().unwrap_or(1.0),
+            mute: t.mute.read_bool().unwrap_or(false),
+            solo: t.solo.read_bool().unwrap_or(false),
+        })
+    }
+
+    /// The master clock's current tempo (after taps), read wait-free.
+    pub fn bpm(&self) -> f64 {
+        self.clock.snapshot().bpm
+    }
+
+    /// Set the tempo (clamped to the `/clock/bpm` range); applied next frame.
+    pub fn set_bpm(&self, bpm: f64) {
+        let v = (bpm as f32).clamp(BPM_MIN, BPM_MAX);
+        self.tree
+            .write_real(&self.tempo.bpm, v, ui_control_source());
+    }
+
+    /// One tap of tap tempo.
+    pub fn tap(&self) {
+        self.tree.fire(&self.tempo.tap, ui_control_source());
     }
 
     /// Stop the clip controller (before the tree or GPU it uses goes away).

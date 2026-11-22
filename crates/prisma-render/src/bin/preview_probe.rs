@@ -278,6 +278,7 @@ fn main() {
             zone_source: Some(Box::new(live.clone())),
             freeze: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             frozen_rate_hz: RATE_HZ,
+            clock_control: None,
         },
     );
 

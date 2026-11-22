@@ -11,7 +11,7 @@ import { type ParamInfo } from "./api";
 // direction-taking effect defines it.
 
 interface RoseProps {
-  zoneId: string;
+  trackId: string;
   param: ParamInfo;
 }
 
@@ -28,8 +28,8 @@ const DIRS = [
   { name: "UpLeft", glyph: "↖", col: 1, row: 1 },
 ];
 
-export function Rose({ zoneId, param }: RoseProps) {
-  const write = usePanelWrites(zoneId);
+export function Rose({ trackId, param }: RoseProps) {
+  const write = usePanelWrites(trackId);
   const toIndex = (norm: number) => Math.round(norm * (DIRS.length - 1));
   const [index, setIndex] = useState(toIndex(param.value_norm));
   useEffect(() => setIndex(toIndex(param.value_norm)), [param.value_norm]);

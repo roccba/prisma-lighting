@@ -10,7 +10,7 @@ import { type ParamInfo } from "./api";
 // value); the rose's buttons pick choices by label. Nothing here is effect-specific.
 
 interface DirectionMenuProps {
-  zoneId: string;
+  trackId: string;
   param: ParamInfo;
 }
 
@@ -44,8 +44,8 @@ function glyph(label: string): string {
   return "•";
 }
 
-export function DirectionMenu({ zoneId, param }: DirectionMenuProps) {
-  const write = usePanelWrites(zoneId);
+export function DirectionMenu({ trackId, param }: DirectionMenuProps) {
+  const write = usePanelWrites(trackId);
   const choices = param.choices ?? [];
   const steps = Math.max(1, choices.length - 1);
   const idxOf = (norm: number) => Math.min(choices.length - 1, Math.max(0, Math.round(norm * steps)));

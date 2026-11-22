@@ -480,3 +480,25 @@ fn a_clips_colour_table_round_trips_and_a_layer_without_one_loads_none() {
     let Source::Shader { palette, .. } = &old.tracks[0].clips[0].layers[0].source;
     assert!(palette.is_none());
 }
+
+#[test]
+fn scene_labels_and_track_live_state_round_trip() {
+    use prisma_core::show::SceneLabel;
+    let mut show = populated_show();
+    show.scenes = vec![
+        SceneLabel {
+            name: Some("Intro".into()),
+            color: Some([200, 40, 40]),
+        },
+        SceneLabel::default(),
+    ];
+    show.tracks[0].opacity = 0.35;
+    show.tracks[0].solo = true;
+    let back = load_show(&save_show(&show).unwrap()).unwrap();
+    assert_eq!(back, show);
+    // An unlabelled row writes no fields; a show without scenes loads with none.
+    let json = save_show(&show).unwrap();
+    assert!(json.contains("\"Intro\""));
+    let plain = load_show(&save_show(&populated_show()).unwrap()).unwrap();
+    assert!(plain.scenes.is_empty());
+}

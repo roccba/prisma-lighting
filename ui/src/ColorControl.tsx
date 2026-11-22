@@ -18,7 +18,7 @@ import { linearToSrgb255, srgb255ToLinear } from "./srgb";
 // so the engine's value model is untouched.
 
 interface ColorControlProps {
-  zoneId: string;
+  trackId: string;
   r: ParamInfo;
   g: ParamInfo;
   b: ParamInfo;
@@ -26,8 +26,8 @@ interface ColorControlProps {
 
 const TINT = { r: "#e05555", g: "#5bbf5b", b: "#5b8fe0", w: "#9a9a9a", a: "#e8e8e8" };
 
-export function ColorControl({ zoneId, r, g, b }: ColorControlProps) {
-  const write = usePanelWrites(zoneId);
+export function ColorControl({ trackId, r, g, b }: ColorControlProps) {
+  const write = usePanelWrites(trackId);
   const [lin, setLin] = useState({ r: r.value_norm, g: g.value_norm, b: b.value_norm });
   useEffect(() => {
     setLin({ r: r.value_norm, g: g.value_norm, b: b.value_norm });

@@ -12,6 +12,8 @@
 //   Screen   = 1 - (1 - a)(1 - b)
 //   Mask     = a * luma(b)            // luminance key: dst gated by src brightness
 //   Max      = max(a, b)
+//   Subtract = max(a - b, 0)
+//   Min      = min(a, b)
 // `luma` is Rec.709 LINEAR luminance: dot(b, (0.2126, 0.7152, 0.0722)).
 //
 // PROVISIONAL — Mask semantics (revisit at M10). The BlendMode enum did not define
@@ -25,7 +27,7 @@
 // so opacity = 1 is the pure mode and opacity = 0 leaves `a` untouched. Normal at
 // opacity o is therefore the familiar `mix(a, b, o)` alpha-over.
 //
-// `mode` codes MUST match `blend::blend_code` (Normal=0 … Max=5).
+// `mode` codes MUST match `blend::blend_code` (Normal=0 … Max=5, Subtract=6, Min=7).
 
 // When compositing ZONES (not intra-zone layers), `use_mask` is 1 and this pass
 // also applies the zone's own dimmer/colour to its contribution — but ONLY on the
@@ -97,6 +99,8 @@ fn fs(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
         case 3u: { blended = vec3<f32>(1.0) - (vec3<f32>(1.0) - a) * (vec3<f32>(1.0) - b); }
         case 4u: { blended = a * luma(b); }
         case 5u: { blended = max(a, b); }
+        case 6u: { blended = max(a - b, vec3<f32>(0.0)); }
+        case 7u: { blended = min(a, b); }
         default: { blended = b; }
     }
 

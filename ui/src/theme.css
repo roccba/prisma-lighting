@@ -75,6 +75,9 @@
   --cell-empty:        #6e6e6e;                /* an empty grid cell: plain light grey */
   --cell-empty-border: #808080;
   --cell-empty-ink:    #e6e6e6;                /* its number */
+  /* An assigned cell with no colour of its own wears its zone's colour, toned down by this
+     wash so it reads as "the zone's" without competing with operator-coloured cells. */
+  --cell-zone-wash:    rgba(0,0,0,.62);
 }
 
 /* ---- Light theme ---- */
@@ -109,6 +112,7 @@
   --cell-empty:        #d9d9d9;
   --cell-empty-border: #bdbdbd;
   --cell-empty-ink:    #555555;
+  --cell-zone-wash:    rgba(255,255,255,.62);
 }
 
 /* ---- Base ---- */
@@ -539,7 +543,9 @@ input, textarea, [contenteditable="true"] {
 /* Bottom work row: FIXED height, not resizable (console-style). The effect-parameters
    panel (a swappable slot — groups will share it later) sits left at a fixed width where
    every parameter fits without scrolling; the master strip sits right at a fixed width. */
-.pr-workrow { flex: 0 0 auto; height: clamp(250px, 36vh, 460px); display: flex; gap: 6px; }
+.pr-workrow { flex: 0 0 auto; display: flex; gap: 6px; min-height: 0; }
+/* The splitter above the work row sits inside the body's 6px gap: a thin, quiet grab bar. */
+.pr-mainwin-body > .pr-splitter-h { height: 6px; margin: -6px 0; background: transparent; border: 0; z-index: 1; }
 /* The params panel FILLS the row (minus the fixed master), so faders/controls use the
    width instead of leaving a gap. Its content is sized so the densest effect still fits. */
 .pr-workrow-panel { flex: 1 1 auto; min-width: 0; }
@@ -646,6 +652,7 @@ input, textarea, [contenteditable="true"] {
   padding: 8px 16px; border-radius: var(--r-md); font-size: var(--fs-base);
   box-shadow: 0 6px 16px rgba(0,0,0,.5); z-index: 200; pointer-events: none;
 }
+.pr-recovery { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 140; display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 14px; background: var(--menu-bg); border: 1px solid var(--accent); border-radius: var(--r-sm); box-shadow: 0 8px 18px rgba(0,0,0,.5); font-size: var(--fs-base); color: var(--text); }
 
 /* --- Scene grid + effect picker (M8 step 4, §3.3 / §4) --- */
 /* The wrap is a size container so cells can be sized from BOTH its width and height. */
@@ -667,6 +674,8 @@ input, textarea, [contenteditable="true"] {
 .pr-cell.is-active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset, 0 0 6px rgba(0,122,204,.35); }
 .pr-cell.is-assigned.is-active { background: linear-gradient(var(--cell-glow), var(--cell-glow)), var(--bg-panel-2); }
 .pr-cell.is-assigned.has-color.is-active { background: linear-gradient(var(--cell-glow), var(--cell-glow)), rgb(var(--cell-rgb)); }
+.pr-cell.is-assigned.has-zone-color { background: linear-gradient(var(--cell-zone-wash), var(--cell-zone-wash)), rgb(var(--cell-rgb)); }
+.pr-cell.is-assigned.has-zone-color.is-active { background: linear-gradient(var(--cell-glow), var(--cell-glow)), linear-gradient(var(--cell-zone-wash), var(--cell-zone-wash)), rgb(var(--cell-rgb)); }
 .pr-cell.is-menu { border-color: var(--accent-bright); }
 /* The SELECTED cell (what the panel edits / GO plays) — an outline, distinct from the
    running cell's accent border: a cell can be selected without playing (selected ≠ active). */
@@ -712,6 +721,65 @@ input, textarea, [contenteditable="true"] {
 .pr-picker { background: var(--bg-panel); border: 1px solid var(--btn-border); border-radius: var(--r-md); min-width: 300px; max-width: 460px; box-shadow: 0 12px 30px rgba(0,0,0,.6); }
 .pr-picker-head { padding: 8px 12px; border-bottom: 1px solid var(--divider); color: var(--text-label); font-size: var(--fs-small); text-transform: uppercase; letter-spacing: .04em; }
 .pr-picker-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 12px; }
+
+/* --- Track grid (docs/LIVE-MODEL-SPEC.md §7): tracks are columns, clips rows, scenes on the
+   right. The same .pr-cell cells as the classic grid; the header reads like a zone card's
+   title (neutral strip, zone colour as a 2px line); the footer carries stop, opacity and
+   M / S / sel. The header and footer stay put while the clip rows scroll. --- */
+.pr-tgrid-wrap { flex: 1 1 auto; overflow-x: auto; overflow-y: hidden; padding: 8px; min-height: 0; position: relative; display: flex; flex-direction: column; gap: 5px; }
+.pr-tgrid-body { flex: 0 0 auto; overflow-y: scroll; overflow-x: hidden; width: 100%; min-width: max-content; scroll-snap-type: y mandatory; }
+.pr-tgrid-body .pr-tgrid > * { scroll-snap-align: start; }
+/* The body always shows its (14px, theme.css ::-webkit-scrollbar) scrollbar; head and foot
+   reserve the same width on the right so all three share one column grid. */
+.pr-tgrid-head, .pr-tgrid-foot { flex: 0 0 auto; grid-template-rows: auto; grid-auto-rows: auto; padding-right: 14px; box-sizing: border-box; }
+.pr-tgrid { --tgrid-col: 104px; --tgrid-add: 28px; --tgrid-scene: 76px; --tgrid-row: 52px;
+  --tgrid-head: 58px; display: grid; grid-auto-rows: var(--tgrid-row); gap: 5px; align-content: start; width: 100%; min-width: max-content; }
+.pr-tgrid-head { grid-template-rows: var(--tgrid-head); }
+.pr-tgrid > * { min-width: 0; }
+.pr-tgrid-gap { pointer-events: none; }
+.pr-thead { position: relative; display: flex; flex-direction: column; justify-content: center; gap: 1px;
+  padding: 4px 18px 4px 6px; background: var(--header-bg); border: 1px solid var(--btn-border-dark); border-bottom: 2px solid transparent;
+  border-radius: var(--r-sm) var(--r-sm) 0 0; cursor: pointer; user-select: none; }
+.pr-thead.is-selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.pr-thead-name { font-size: var(--fs-small); font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-thead-sub { font-size: var(--fs-tiny); color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-thead-arm { color: var(--warn); font-weight: 700; }
+.pr-thead-more { position: absolute; top: 2px; right: 2px; width: 16px; height: 16px; padding: 0; border: 0; background: transparent;
+  color: var(--text-dim); font-size: var(--fs-small); line-height: 1; cursor: pointer; border-radius: var(--r-sm); }
+.pr-thead-more:hover { color: var(--text); background: var(--btn-face-hover); }
+.pr-thead-scenes { cursor: default; align-items: center; padding-right: 6px; }
+.pr-tgrid-addbtn { padding: 0; font-size: var(--fs-base); }
+.pr-scene-btn { height: 100%; padding: 0 6px; font-size: var(--fs-small); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; justify-content: flex-start; }
+.pr-cell.is-armed { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn) inset; animation: pr-armed-pulse 1s ease-in-out infinite; }
+@keyframes pr-armed-pulse { 50% { box-shadow: 0 0 0 1px var(--warn) inset, 0 0 6px var(--warn); } }
+.pr-tfoot { display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 4px 2px; background: var(--bg-panel); border: 1px solid var(--btn-border-dark); border-radius: 0 0 var(--r-sm) var(--r-sm); }
+.pr-tfoot-all { justify-content: flex-end; }
+.pr-tfoot-stopall { width: 100%; height: 30px; font-size: var(--fs-small); font-weight: 700; }
+.pr-thead.is-dragging { opacity: .5; }
+.pr-thead.is-drop-before { box-shadow: -3px 0 0 var(--accent); }
+.pr-thead.is-drop-after { box-shadow: 3px 0 0 var(--accent); }
+.pr-tfoot-stop { width: 100%; height: 22px; font-size: var(--fs-small); }
+.pr-tfoot-fader { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.pr-tfoot-fader .pr-fader { --pr-knob-h: 18px; width: 24px; height: 72px; }
+.pr-tfoot-fader .pr-fader .pr-knob { width: 22px; height: 18px; padding: 3px; }
+.pr-tfoot-btns { display: flex; gap: 3px; }
+.pr-tfoot-btns .pr-zonecard-sm:last-child { width: 30px; }
+/* The track settings popover: a small floating form on the menu surface. */
+.pr-tsettings { position: fixed; z-index: 120; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; min-width: 260px;
+  background: var(--menu-bg); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); box-shadow: 0 8px 18px rgba(0,0,0,.5); }
+.pr-tsettings-title { font-size: var(--fs-small); font-weight: 700; color: var(--text); }
+.pr-tsettings-row { display: flex; align-items: center; gap: 8px; }
+.pr-tsettings-label { width: 74px; flex: 0 0 auto; font-size: var(--fs-small); color: var(--text-label); }
+.pr-tsettings-unit { font-size: var(--fs-small); color: var(--text-dim); }
+.pr-tsettings-hint { font-size: var(--fs-tiny); color: var(--text-dim); max-width: 240px; }
+/* The global bar (menu bar, right): tempo, arm mode, GO. */
+.pr-gbar { display: flex; align-items: center; gap: 6px; }
+.pr-gbar-label { font-size: var(--fs-tiny); color: var(--text-label); letter-spacing: .06em; }
+.pr-gbar-bpm { min-width: 46px; text-align: right; font-family: var(--font-mono); font-size: var(--fs-small); color: var(--text); cursor: ns-resize; user-select: none; }
+.pr-gbar .pr-btn { height: 22px; font-size: var(--fs-small); padding: 0 8px; }
+.pr-gbar .pr-go-btn { min-width: 56px; height: 22px; font-size: var(--fs-small); }
+.pr-gbar-arm.is-active { background: var(--warn); border-color: var(--warn); color: var(--bg-app); }
 
 /* --- Device manager (network output) --- */
 /* The Device Manager is a FIXED-size console-style window: switching tabs or toggling
@@ -854,6 +922,8 @@ body.is-picking, body.is-picking * { cursor: crosshair !important; user-select: 
 /* Effect panel head: the selected cell, its effect (dropdown), live/idle state and GO. */
 .pr-params-head { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; }
 .pr-params-head-label { color: var(--text-label); font-size: var(--fs-small); min-width: 60px; }
+.pr-params-fade { display: flex; align-items: center; gap: 6px; }
+.pr-params-fade .pr-params-head-label { min-width: 0; }
 .pr-params-state { margin-left: auto; font-size: var(--fs-small); color: var(--text-dim); }
 .pr-params-state.is-live { color: var(--ok); font-weight: 700; }
 .pr-go-btn {

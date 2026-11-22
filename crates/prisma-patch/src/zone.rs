@@ -34,6 +34,10 @@ pub enum BlendMode {
     Screen,
     Mask,
     Max,
+    /// `max(a - b, 0)`: the layer darkens what is below it.
+    Subtract,
+    /// `min(a, b)`: the darker of the two, per channel.
+    Min,
 }
 
 /// A stable reference to one pixel: the owning fixture plus the pixel's index

@@ -20,13 +20,13 @@ export interface PanelTarget {
 
 export const PanelCellContext = createContext<PanelTarget>({ cell: null });
 
-/** The writers a panel control uses for `zoneId`'s edited cell. */
-export function usePanelWrites(zoneId: string) {
+/** The writers a panel control uses for `trackId`'s edited cell. */
+export function usePanelWrites(trackId: string) {
   const t = useContext(PanelCellContext);
   return {
     param: (name: string, value: number) =>
-      t.writeParam ? t.writeParam(name, value) : void setParam(zoneId, name, value, t.cell).catch(() => {}),
+      t.writeParam ? t.writeParam(name, value) : void setParam(trackId, name, value, t.cell).catch(() => {}),
     palette: (colors: [number, number, number][]) =>
-      t.writePalette ? t.writePalette(colors) : void setPalette(zoneId, colors, t.cell).catch(() => {}),
+      t.writePalette ? t.writePalette(colors) : void setPalette(trackId, colors, t.cell).catch(() => {}),
   };
 }

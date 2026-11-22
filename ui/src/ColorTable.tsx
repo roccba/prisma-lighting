@@ -19,7 +19,7 @@ import { linearToSrgb255, srgb255ToLinear } from "./srgb";
 // running effect at the next frame boundary. Presentation is sRGB 0–255.
 
 interface ColorTableProps {
-  zoneId: string;
+  trackId: string;
   /** The current colour table (linear-light RGB). */
   colors: [number, number, number][];
   /** Most colours allowed (255). */
@@ -36,8 +36,8 @@ const toRgb = (c: Lin): Rgb => [linearToSrgb255(c.r), linearToSrgb255(c.g), line
 const toLin = ([r, g, b]: Rgb): Lin => ({ r: srgb255ToLinear(r), g: srgb255ToLinear(g), b: srgb255ToLinear(b) });
 const WHITE: Lin = { r: 1, g: 1, b: 1 };
 
-export function ColorTable({ zoneId, colors, max, onChange, at, onClose }: ColorTableProps) {
-  const write = usePanelWrites(zoneId);
+export function ColorTable({ trackId, colors, max, onChange, at, onClose }: ColorTableProps) {
+  const write = usePanelWrites(trackId);
   const [cols, setCols] = useState<Lin[]>(() => colors.map(([r, g, b]) => ({ r, g, b })));
   const [sel, setSel] = useState<number | null>(null);
   const [dragFrom, setDragFrom] = useState<number | null>(null);

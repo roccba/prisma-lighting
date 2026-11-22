@@ -8,6 +8,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod autosave;
+
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,8 +26,9 @@ use prisma_engine::{
     ClipEffect, ClipHost, ControlMode, ControllerMappings, DiscoveredNode, Engine, EngineConfig,
     EngineHandle, HostInterface, InterfaceResolution, Layer, LedStyle, MapTarget, MidiMapping,
     MidiNotice, MidiRuntime, NodeMonitor, NodeOrigin, NodeStatus, ParamSet, ScanError, Show,
-    ShowNetwork, Source, Takeover, Track, ZoneLiveReadout, ZoneShow,
+    ShowNetwork, Source, Takeover, Track, TrackBehaviour, ZoneLiveReadout, ZoneShow,
 };
+use prisma_engine::{LaunchMode, TrackTransition};
 use prisma_midi::io::{input_port_names, MidiInputLink, MidiIoError, MidiOutputLink};
 use prisma_midi::{DeviceProfile, APC40_KEYWORDS};
 use prisma_patch::{load_patch, save_patch, BlendMode, Diagnostic, Patch, Zone};
@@ -62,6 +65,10 @@ struct CellInfo {
     effect_id: Option<String>,
     effect_name: Option<String>,
     active: bool,
+    /// Armed for GO (LIVE-MODEL-SPEC §5).
+    armed: bool,
+    /// The clip's own fade in seconds (0 = the track's transition).
+    fade: f64,
     /// The operator's label for the cell (`None` = unnamed).
     name: Option<String>,
     /// The cell's grid colour, sRGB 0–255 (`None` = default panel grey).
@@ -71,6 +78,9 @@ struct CellInfo {
     params: Option<ParamSet>,
     /// The effect's stored colour table (linear light), if it has its own.
     palette: Option<Vec<[f32; 3]>>,
+    /// The effect's main colour (its first colour group, linear light) — what the grid
+    /// shows on a cell without a label colour. `None` for an effect without one.
+    effect_color: Option<[f32; 3]>,
 }
 
 /// One entry the effect picker offers, catalogue-driven (§5.3).
@@ -121,7 +131,7 @@ struct RequiresInfo {
 /// has no running cell (empty selection) — the panel then shows an empty state.
 #[derive(Serialize)]
 struct EffectPanelInfo {
-    zone_id: Uuid,
+    track_id: Uuid,
     cell_index: Option<usize>,
     /// Whether `cell_index` is the zone's running cell — its edits drive the output live;
     /// any other cell's edits are only stored, for when it is played.
@@ -136,6 +146,8 @@ struct EffectPanelInfo {
     palette: Option<Vec<[f32; 3]>>,
     /// Most colours a table may hold.
     palette_max: usize,
+    /// The clip's own fade in seconds (0 = the track's transition).
+    fade: f64,
 }
 
 /// A display label from a manifest parameter key: capitalise the first letter, leaving
@@ -211,8 +223,32 @@ fn effect_display_name(id: &str) -> Option<String> {
         .map(|e| e.name.to_string())
 }
 
-/// A track's clips as cell DTOs.
-fn grid_dto(zs: &Track) -> Vec<CellInfo> {
+/// An effect's main colour: its manifest's FIRST colour group, each channel the stored
+/// value or the manifest default (linear light `0..1`). `None` if it declares none.
+fn effect_main_color(effect_id: &str, params: &ParamSet) -> Option<[f32; 3]> {
+    let defs = prisma_render::effect_params(effect_id);
+    let group = defs.iter().find_map(|p| match p.role {
+        ParamRole::Color { group, .. } => Some(group),
+        _ => None,
+    })?;
+    let mut rgb = [0.0f32; 3];
+    for p in &defs {
+        if let ParamRole::Color { group: g, channel } = p.role {
+            if g == group {
+                let i = match channel {
+                    ColorChannel::R => 0,
+                    ColorChannel::G => 1,
+                    ColorChannel::B => 2,
+                };
+                rgb[i] = params.get(&p.name).unwrap_or(p.default_norm);
+            }
+        }
+    }
+    Some(rgb)
+}
+
+/// A track's clips as cell DTOs (`armed` = its armed clip).
+fn grid_dto(zs: &Track, armed: Option<usize>) -> Vec<CellInfo> {
     zs.clips
         .iter()
         .enumerate()
@@ -229,15 +265,22 @@ fn grid_dto(zs: &Track) -> Vec<CellInfo> {
                 None => (None, None, None),
             };
             let effect_name = effect_id.as_deref().and_then(effect_display_name);
+            let effect_color = effect_id
+                .as_deref()
+                .zip(params.as_ref())
+                .and_then(|(id, p)| effect_main_color(id, p));
             CellInfo {
                 index: i,
                 effect_id,
                 effect_name,
                 active: zs.active == Some(i),
+                armed: armed == Some(i),
+                fade: cell.fade_time.as_secs_f64(),
                 name: cell.cell_name.clone(),
                 color: cell.cell_color,
                 params,
                 palette,
+                effect_color,
             }
         })
         .collect()
@@ -302,23 +345,11 @@ fn empty_patch() -> Patch {
     patch
 }
 
-/// Give every zone its own track (live model phase 1: the per-zone grid UI reaches a
-/// zone through it) and pad every track up to `GRID_CELLS` assignable (empty) clips —
-/// `Show::new` creates tracks with no clips, and a track with none renders no grid.
-/// Existing clips keep their index and a track is never truncated, so real content is
-/// never wiped. Idempotent.
+/// Pad every track up to `GRID_CELLS` assignable (empty) clips — `Show::new` creates
+/// tracks with no clips, and every row needs a cell in every track. Existing clips keep
+/// their index and a track is never truncated, so real content is never wiped.
+/// Idempotent.
 fn pad_grids(show: &mut Show) {
-    let missing: Vec<(Uuid, String)> = show
-        .patch
-        .zones
-        .iter()
-        .filter(|z| show.home_track(z.id).is_none())
-        .map(|z| (z.id, z.name.clone()))
-        .collect();
-    for (zone, name) in missing {
-        show.tracks
-            .push(Track::new(name, prisma_engine::Destination::zone(zone)));
-    }
     for track in &mut show.tracks {
         if track.clips.len() < GRID_CELLS {
             track.clips.resize_with(GRID_CELLS, Cell::empty);
@@ -364,6 +395,16 @@ fn write_last_show(file: &Path, path: Option<&Path>) {
 struct AppState {
     /// The live output engine (S1). `None` once shut down.
     engine: Mutex<Option<EngineHandle>>,
+    /// Autosave (see `autosave`): its files, and the clean baseline + last snapshot the
+    /// autosave thread compares against.
+    autosave: autosave::Autosave,
+    autosave_state: Mutex<(autosave::Baseline, Option<String>)>,
+    /// Set at boot when the session was recovered from an autosave; taken once by the UI
+    /// to show "Sesión recuperada".
+    recovered: Mutex<Option<RecoveryInfo>>,
+    /// Each track's armed clip, as the clip controller reports it (live state, not
+    /// saved with the show).
+    armed: Mutex<std::collections::HashMap<Uuid, usize>>,
     /// The editable Show — the source of truth for each zone's scene grid (M8 step 4)
     /// AND for the zone set/identity (its embedded patch; §7 derives the zone row and
     /// slot mapping from it, so a hot patch edit needs no separate list kept in sync).
@@ -514,6 +555,14 @@ fn fold_live_into_show(engine: &EngineHandle, show: &mut Show) {
             .read_real()
             .map(|v| v > 0.5)
             .unwrap_or(zs.live.blackout);
+    }
+    // Tracks, by the slot order the engine was assembled in.
+    for (slot, t) in show.tracks.iter_mut().enumerate() {
+        if let Some(l) = engine.track_live(slot) {
+            t.opacity = l.opacity;
+            t.mute = l.mute;
+            t.solo = l.solo;
+        }
     }
 }
 
@@ -904,46 +953,21 @@ fn apply_editor_draft(app: &AppHandle, resume: bool) -> Result<(), String> {
         // reconcile). The reconcile keeps these by zone id, and `recompile_show` re-seeds
         // from them — so auto-applying an edit does not reset the operator's master /
         // colour / dimmers.
-        {
-            let guard = state.engine.lock().unwrap();
-            if let Some(engine) = guard.as_ref() {
-                let m = engine.live().master();
-                show.master.dimmer = m.dimmer.read_real().unwrap_or(show.master.dimmer);
-                for i in 0..3 {
-                    show.master.color[i] = m.color[i].read_real().unwrap_or(show.master.color[i]);
-                }
-                for (slot, zs) in show.zones.iter_mut().enumerate() {
-                    if slot >= engine.zone_count() {
-                        break;
-                    }
-                    let z = engine.live().zone(slot);
-                    zs.live.dimmer = z.dimmer.read_real().unwrap_or(zs.live.dimmer);
-                    for i in 0..3 {
-                        zs.live.color_filter[i] =
-                            z.color[i].read_real().unwrap_or(zs.live.color_filter[i]);
-                    }
-                    zs.live.speed_multiplier =
-                        z.speed.read_real().unwrap_or(zs.live.speed_multiplier);
-                    zs.live.solo = z.solo.read_real().map(|v| v > 0.5).unwrap_or(zs.live.solo);
-                    zs.live.blackout = z
-                        .blackout
-                        .read_real()
-                        .map(|v| v > 0.5)
-                        .unwrap_or(zs.live.blackout);
-                }
-            }
+        if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+            fold_live_into_show(engine, &mut show);
         }
         // Reconcile to the new zone set: one ZoneShow per patch zone, in patch order,
         // keeping an existing zone's live state by id, a default one for a newly added
         // zone, and dropping a removed zone's. This keeps `Show` a bijection with its
         // patch (what the engine and `Show::validate` expect). Tracks follow below.
         let mut old = std::mem::take(&mut show.zones);
+        let old_zone_ids: Vec<Uuid> = old.iter().map(|zs| zs.zone_id).collect();
         show.zones = patch
             .zones
             .iter()
             .map(|pz| match old.iter().position(|zs| zs.zone_id == pz.id) {
                 Some(pos) => old.remove(pos),
-                // A newly added zone (its own track is added by `pad_grids` below).
+                // A newly added zone; its own track is added below.
                 None => {
                     let mut zs = ZoneShow::new(pz.id);
                     // A freshly created zone starts LIT (dimmer full) — master defaults to
@@ -963,6 +987,15 @@ fn apply_editor_draft(app: &AppHandle, resume: bool) -> Result<(), String> {
                 .retain(|z| patch.zones.iter().any(|pz| pz.id == *z));
         }
         show.tracks.retain(|t| !t.destination.is_empty());
+        // A newly added zone gets its own track, like `Show::new` gives every zone.
+        for pz in &patch.zones {
+            if !old_zone_ids.contains(&pz.id) {
+                show.tracks.push(Track::new(
+                    pz.name.clone(),
+                    prisma_engine::Destination::zone(pz.id),
+                ));
+            }
+        }
         show.patch = patch;
         pad_grids(&mut show);
         show.clone()
@@ -974,9 +1007,12 @@ fn apply_editor_draft(app: &AppHandle, resume: bool) -> Result<(), String> {
     let (config, port) = preview_config(AdapterPreference::Software, target);
     let mut guard = state.engine.lock().unwrap();
     let engine = guard.take().ok_or("engine is not running")?;
+    let bpm = engine.bpm();
     match engine.recompile_show(show, config) {
         Ok(new) => {
             new.set_frozen(!resume);
+            new.set_bpm(bpm);
+            state.armed.lock().unwrap().clear();
             *guard = Some(new);
             if let Some(port) = port {
                 *state.preview_port.lock().unwrap() = port;
@@ -998,14 +1034,75 @@ fn editor_apply_to_live(app: AppHandle) -> Result<(), String> {
     apply_editor_draft(&app, false)
 }
 
+/// The show as it would be saved right now: the document with the engine's live values
+/// folded in, serialized like a `.prisma`. Never holds the show and engine locks
+/// together (the show is cloned first).
+fn show_snapshot(state: &AppState) -> Result<String, String> {
+    let mut show = state.show.lock().unwrap().clone();
+    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        fold_live_into_show(engine, &mut show);
+    }
+    save_show(&show).map_err(|e| e.to_string())
+}
+
+/// The operator saved or opened `snapshot`: it is the clean state the autosave compares
+/// against from now on.
+fn mark_saved(state: &AppState, snapshot: String) {
+    let mut g = state.autosave_state.lock().unwrap();
+    let (baseline, last) = &mut *g;
+    autosave::mark_clean(baseline, last, snapshot);
+}
+
+/// One autosave step: snapshot, write or clear the autosave, and mark the window title
+/// when there are unsaved changes. Run by the autosave thread and once on exit.
+fn autosave_tick(app: &AppHandle) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    let Ok(snap) = show_snapshot(&state) else {
+        return;
+    };
+    let (step, dirty) = {
+        let mut g = state.autosave_state.lock().unwrap();
+        let (baseline, last) = &mut *g;
+        autosave::step(baseline, last, snap.clone())
+    };
+    match step {
+        autosave::Step::Idle => {}
+        autosave::Step::Write => {
+            if let Err(e) = state.autosave.write(&snap) {
+                eprintln!("prisma: autosave failed: {e}");
+            }
+        }
+        autosave::Step::Clear => state.autosave.clear(),
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.set_title(if dirty { "Prisma •" } else { "Prisma" });
+    }
+}
+
+/// The session was recovered from an autosave at boot.
+#[derive(Serialize, Clone)]
+struct RecoveryInfo {
+    /// The last saved show, if there is one to fall back to.
+    last_saved: Option<String>,
+}
+
+/// Taken once by the main window at boot: `Some` if this session was recovered.
+#[tauri::command]
+fn main_recovery_info(state: State<AppState>) -> Option<RecoveryInfo> {
+    state.recovered.lock().unwrap().take()
+}
+
 /// Save the current live show to a `.prisma` file (M8-SPEC §5): serialize the Show — with
 /// its embedded Patch — through the versioned envelope. The frontend picks the path with
 /// the native dialog.
 #[tauri::command]
 fn main_save_show(state: State<AppState>, path: String) -> Result<(), String> {
-    let show = state.show.lock().unwrap();
-    let json = save_show(&show).map_err(|e| e.to_string())?;
-    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    // The saved file carries the live values (faders, opacities) as they are now.
+    let json = show_snapshot(&state)?;
+    std::fs::write(&path, &json).map_err(|e| e.to_string())?;
+    mark_saved(&state, json);
     // Remember it so the next launch reopens this show.
     write_last_show(&state.last_show_file, Some(Path::new(&path)));
     Ok(())
@@ -1039,6 +1136,9 @@ fn main_new_show(app: AppHandle) -> Result<(), String> {
                 refresh_all_cells(engine);
             }
             write_last_show(&state.last_show_file, None);
+            if let Ok(snap) = show_snapshot(&state) {
+                mark_saved(&state, snap);
+            }
             let _ = app.emit("layout-changed", ());
             Ok(())
         }
@@ -1086,6 +1186,9 @@ fn main_open_show(app: AppHandle, path: String) -> Result<(), String> {
             }
             // Remember it so the next launch reopens this show.
             write_last_show(&state.last_show_file, Some(Path::new(&path)));
+            if let Ok(snap) = show_snapshot(&state) {
+                mark_saved(&state, snap);
+            }
             let _ = app.emit("layout-changed", ());
             Ok(())
         }
@@ -1141,9 +1244,9 @@ fn editor_open_from(state: State<AppState>, path: String) -> Result<EditorState,
 /// the app's addressing stay in lockstep with no separate list to keep in sync.
 /// The app's side of clip playback: the engine's clip controller plays clips from the
 /// Parameter Tree (pads, clicks — every transport the same way) and asks here what a
-/// clip holds; it reports back which clip each track is running, which this folds into
-/// the show and announces to the UI (`cells-changed`, once per zone the track reaches —
-/// the per-zone grid of phase 1 listens by zone).
+/// clip holds and how a track transitions; it reports back which clip each track is
+/// running or has armed, which this folds into the app state and announces to the UI
+/// (`cells-changed`, the track id).
 ///
 /// Lock discipline: it only ever takes the `show` lock, never `engine`, so an engine
 /// recompile (which holds `engine` while it stops the controller) cannot deadlock on it.
@@ -1155,7 +1258,8 @@ impl ClipHost for AppCellHost {
     fn clip_effect(&self, track: Uuid, clip: usize) -> Option<ClipEffect> {
         let state = self.app.try_state::<AppState>()?;
         let show = state.show.lock().unwrap();
-        let layer = show.track(track)?.clips.get(clip)?.layers.first()?;
+        let cell = show.track(track)?.clips.get(clip)?;
+        let layer = cell.layers.first()?;
         match &layer.source {
             Source::Shader {
                 effect_id,
@@ -1165,22 +1269,39 @@ impl ClipHost for AppCellHost {
                 effect_id: effect_id.clone(),
                 params: params.clone(),
                 palette: palette.clone(),
+                fade_time: cell.fade_time,
             }),
         }
     }
 
-    fn active_changed(&self, track: Uuid, active: Option<usize>) {
-        let mut zones = Vec::new();
+    fn track_behaviour(&self, track: Uuid) -> Option<TrackBehaviour> {
+        let state = self.app.try_state::<AppState>()?;
+        let show = state.show.lock().unwrap();
+        let t = show.track(track)?;
+        Some(TrackBehaviour {
+            transition: t.transition,
+            launch: t.launch,
+        })
+    }
+
+    fn armed_changed(&self, track: Uuid, armed: Option<usize>) {
         if let Some(state) = self.app.try_state::<AppState>() {
-            let mut show = state.show.lock().unwrap();
-            if let Some(t) = show.track_mut(track) {
+            let mut map = state.armed.lock().unwrap();
+            match armed {
+                Some(clip) => map.insert(track, clip),
+                None => map.remove(&track),
+            };
+        }
+        let _ = self.app.emit("cells-changed", track);
+    }
+
+    fn active_changed(&self, track: Uuid, active: Option<usize>) {
+        if let Some(state) = self.app.try_state::<AppState>() {
+            if let Some(t) = state.show.lock().unwrap().track_mut(track) {
                 t.active = active;
-                zones = t.destination.zones.clone();
             }
         }
-        for zone in zones {
-            let _ = self.app.emit("cells-changed", zone);
-        }
+        let _ = self.app.emit("cells-changed", track);
     }
 }
 
@@ -1190,12 +1311,6 @@ fn refresh_all_cells(engine: &EngineHandle) {
     for slot in 0..engine.track_count() {
         engine.refresh_clips(slot);
     }
-}
-
-/// The engine slot of a zone's home track (phase 1 bridge). The engine numbers tracks
-/// in `Show::tracks` order, and every engine is assembled from this same show.
-fn track_slot(state: &AppState, zone: Uuid) -> Option<usize> {
-    state.show.lock().unwrap().home_track_index(zone)
 }
 
 fn zone_slot(state: &AppState, id: Uuid) -> Option<usize> {
@@ -1328,23 +1443,30 @@ fn main_set_zone_strobe_rate(state: State<AppState>, zone: Uuid, rate: f32) {
 // --- Device manager (network output) ---
 
 /// Edit the running show and recompile the engine onto it (reusing the GPU). Live values
-/// are folded into the show first so the recompile does not reset faders; the preview
-/// WebSocket moves to a fresh port, so the UI is nudged to re-fetch.
+/// are folded into the show FIRST — by the engine's current zone/track order, before the
+/// edit can add or remove a track and shift the slots — so the recompile does not reset
+/// faders; the tempo and freeze carry over; the preview WebSocket moves to a fresh port,
+/// so the UI is nudged to re-fetch.
 fn recompile_running_show(app: &AppHandle, edit: impl FnOnce(&mut Show)) -> Result<(), String> {
     let state = app.state::<AppState>();
     let show = {
         let mut show = state.show.lock().unwrap();
-        edit(&mut show);
         if let Some(engine) = state.engine.lock().unwrap().as_ref() {
             fold_live_into_show(engine, &mut show);
         }
+        edit(&mut show);
+        pad_grids(&mut show);
         show.clone()
     };
     let (cfg, port) = preview_config(AdapterPreference::Software, virtual_sink());
     let mut guard = state.engine.lock().unwrap();
     let engine = guard.take().ok_or("engine is not running")?;
+    let (bpm, frozen) = (engine.bpm(), engine.is_frozen());
     match engine.recompile_show(show, cfg) {
         Ok(new) => {
+            new.set_frozen(frozen);
+            new.set_bpm(bpm);
+            state.armed.lock().unwrap().clear();
             *guard = Some(new);
             if let Some(port) = port {
                 *state.preview_port.lock().unwrap() = port;
@@ -2092,27 +2214,19 @@ fn main_effect_catalogue() -> Vec<EffectListingInfo> {
         .collect()
 }
 
-/// The scene grid of a zone: its home track's clips and which is running (live model
-/// phase 1 bridge — the per-zone grid UI reaches the zone's own track).
-#[tauri::command]
-fn main_zone_grid(state: State<AppState>, zone: Uuid) -> Vec<CellInfo> {
-    let show = state.show.lock().unwrap();
-    show.home_track(zone).map(grid_dto).unwrap_or_default()
-}
-
 /// Write an effect (with optional stored `params` / colour table) into a zone's cell,
 /// replacing whatever it held. Show state only — firing is the caller's choice. `None`
 /// when the zone does not exist; an out-of-range index leaves the grid unchanged.
 fn write_cell(
     state: &AppState,
-    zone: Uuid,
+    track: Uuid,
     index: usize,
     effect_id: String,
     params: Option<ParamSet>,
     palette: Option<Vec<[f32; 3]>>,
 ) -> Option<Vec<CellInfo>> {
     let mut show = state.show.lock().unwrap();
-    let zs = show.home_track_mut(zone)?;
+    let zs = show.track_mut(track)?;
     if index < zs.clips.len() {
         let mut layer = Layer::shader(effect_id, params.unwrap_or_default());
         let Source::Shader { palette: p, .. } = &mut layer.source;
@@ -2124,7 +2238,7 @@ fn write_cell(
             .filter(|p| !p.is_empty());
         zs.clips[index] = Cell::single(layer);
     }
-    Some(grid_dto(zs))
+    Some(grid_dto(zs, armed_of(state, track)))
 }
 
 /// Assign an effect to a cell AND fire it (picking an effect for a cell plays it):
@@ -2136,16 +2250,16 @@ fn write_cell(
 #[tauri::command]
 fn main_assign_cell(
     state: State<AppState>,
-    zone: Uuid,
+    track: Uuid,
     index: usize,
     effect_id: String,
     params: Option<ParamSet>,
     palette: Option<Vec<[f32; 3]>>,
 ) -> Vec<CellInfo> {
-    let Some(slot) = track_slot(&state, zone) else {
+    let Some(slot) = track_slot(&state, track) else {
         return Vec::new();
     };
-    let Some(dto) = write_cell(&state, zone, index, effect_id, params, palette) else {
+    let Some(dto) = write_cell(&state, track, index, effect_id, params, palette) else {
         return Vec::new();
     };
     // Play it through the cell's `trigger` target (restart: the cell may already be the
@@ -2163,16 +2277,16 @@ fn main_assign_cell(
 #[tauri::command]
 fn main_assign_cell_silent(
     state: State<AppState>,
-    zone: Uuid,
+    track: Uuid,
     index: usize,
     effect_id: String,
     params: Option<ParamSet>,
     palette: Option<Vec<[f32; 3]>>,
 ) -> Vec<CellInfo> {
-    let Some(slot) = track_slot(&state, zone) else {
+    let Some(slot) = track_slot(&state, track) else {
         return Vec::new();
     };
-    let Some(dto) = write_cell(&state, zone, index, effect_id, params, palette) else {
+    let Some(dto) = write_cell(&state, track, index, effect_id, params, palette) else {
         return Vec::new();
     };
     if let Some(engine) = state.engine.lock().unwrap().as_ref() {
@@ -2184,16 +2298,16 @@ fn main_assign_cell_silent(
 /// Trigger an already-assigned cell (make it the zone's active content). An empty
 /// cell clears the zone (stops it). Returns the updated grid.
 #[tauri::command]
-fn main_trigger_cell(state: State<AppState>, zone: Uuid, index: usize) -> Vec<CellInfo> {
-    let Some(slot) = track_slot(&state, zone) else {
+fn main_trigger_cell(state: State<AppState>, track: Uuid, index: usize) -> Vec<CellInfo> {
+    let Some(slot) = track_slot(&state, track) else {
         return Vec::new();
     };
     let dto = {
         let show = state.show.lock().unwrap();
-        let Some(zs) = show.home_track(zone) else {
+        let Some(zs) = show.track(track) else {
             return Vec::new();
         };
-        grid_dto(zs)
+        grid_dto(zs, armed_of(&state, track))
     };
     // The same tree target a pad in latch mode fires (M9): one way to play a cell. The
     // running cell updates asynchronously and arrives as `cells-changed`.
@@ -2205,21 +2319,21 @@ fn main_trigger_cell(state: State<AppState>, zone: Uuid, index: usize) -> Vec<Ce
 
 /// Empty a cell. If it was the running cell, the zone stops (clears its output).
 #[tauri::command]
-fn main_clear_cell(state: State<AppState>, zone: Uuid, index: usize) -> Vec<CellInfo> {
-    let Some(slot) = track_slot(&state, zone) else {
+fn main_clear_cell(state: State<AppState>, track: Uuid, index: usize) -> Vec<CellInfo> {
+    let Some(slot) = track_slot(&state, track) else {
         return Vec::new();
     };
     let (dto, was_active) = {
         let mut show = state.show.lock().unwrap();
-        let Some(zs) = show.home_track_mut(zone) else {
+        let Some(zs) = show.track_mut(track) else {
             return Vec::new();
         };
         if index >= zs.clips.len() {
-            return grid_dto(zs);
+            return grid_dto(zs, armed_of(&state, track));
         }
         zs.clips[index] = Cell::empty();
         let was_active = zs.active == Some(index);
-        (grid_dto(zs), was_active)
+        (grid_dto(zs, armed_of(&state, track)), was_active)
     };
     if let Some(engine) = state.engine.lock().unwrap().as_ref() {
         if was_active {
@@ -2238,19 +2352,19 @@ fn main_clear_cell(state: State<AppState>, zone: Uuid, index: usize) -> Vec<Cell
 #[tauri::command]
 fn main_rename_cell(
     state: State<AppState>,
-    zone: Uuid,
+    track: Uuid,
     index: usize,
     name: String,
 ) -> Vec<CellInfo> {
     let mut show = state.show.lock().unwrap();
-    let Some(zs) = show.home_track_mut(zone) else {
+    let Some(zs) = show.track_mut(track) else {
         return Vec::new();
     };
     if let Some(cell) = zs.clips.get_mut(index) {
         let name = name.trim();
         cell.cell_name = (!name.is_empty()).then(|| name.to_string());
     }
-    grid_dto(zs)
+    grid_dto(zs, armed_of(&state, track))
 }
 
 /// Give a cell its own grid colour (sRGB 0–255). A UI label like the name: not light,
@@ -2258,18 +2372,18 @@ fn main_rename_cell(
 #[tauri::command]
 fn main_set_cell_color(
     state: State<AppState>,
-    zone: Uuid,
+    track: Uuid,
     index: usize,
     color: [u8; 3],
 ) -> Vec<CellInfo> {
     let mut show = state.show.lock().unwrap();
-    let Some(zs) = show.home_track_mut(zone) else {
+    let Some(zs) = show.track_mut(track) else {
         return Vec::new();
     };
     if let Some(cell) = zs.clips.get_mut(index) {
         cell.cell_color = Some(color);
     }
-    grid_dto(zs)
+    grid_dto(zs, armed_of(&state, track))
 }
 
 // --- Main operation window (M8 step 5): the effect parameter panel ---
@@ -2291,13 +2405,13 @@ fn panel_cell(zs: &Track, cell: Option<usize>) -> Option<usize> {
 #[tauri::command]
 fn main_effect_panel(
     state: State<AppState>,
-    zone: Uuid,
+    track: Uuid,
     cell: Option<usize>,
     draft: Option<String>,
 ) -> EffectPanelInfo {
     let show = state.show.lock().unwrap();
     let empty = |cell_index: Option<usize>, active: bool| EffectPanelInfo {
-        zone_id: zone,
+        track_id: track,
         cell_index,
         active,
         draft: false,
@@ -2306,12 +2420,16 @@ fn main_effect_panel(
         params: Vec::new(),
         palette: None,
         palette_max: prisma_render::PALETTE_MAX,
+        fade: 0.0,
     };
-    let Some(zs) = show.home_track(zone) else {
+    let Some(zs) = show.track(track) else {
         return empty(None, false);
     };
     let index = panel_cell(zs, cell);
     let active = index.is_some() && index == zs.active;
+    let fade = index
+        .and_then(|i| zs.clips.get(i))
+        .map_or(0.0, |c| c.fade_time.as_secs_f64());
     // The cell's single layer (M8: one effect per cell). An empty cell has no layer, so
     // the panel shows its empty state.
     let effect = index
@@ -2377,7 +2495,7 @@ fn main_effect_panel(
         .and_then(|m| m.palette)
         .map(|defaults| stored_palette.unwrap_or_else(|| defaults.to_vec()));
     EffectPanelInfo {
-        zone_id: zone,
+        track_id: track,
         cell_index: index,
         active,
         draft: is_draft,
@@ -2386,6 +2504,7 @@ fn main_effect_panel(
         params,
         palette,
         palette_max: prisma_render::PALETTE_MAX,
+        fade,
     }
 }
 
@@ -2396,7 +2515,7 @@ fn main_effect_panel(
 #[tauri::command]
 fn main_set_palette(
     state: State<AppState>,
-    zone: Uuid,
+    track: Uuid,
     colors: Vec<[f32; 3]>,
     cell: Option<usize>,
 ) {
@@ -2407,7 +2526,7 @@ fn main_set_palette(
     }
     let live = {
         let mut show = state.show.lock().unwrap();
-        let Some(zs) = show.home_track_mut(zone) else {
+        let Some(zs) = show.track_mut(track) else {
             return;
         };
         let index = panel_cell(zs, cell);
@@ -2422,7 +2541,7 @@ fn main_set_palette(
     if !live {
         return; // a cell that is not playing: stored for when it is played
     }
-    if let Some(slot) = track_slot(&state, zone) {
+    if let Some(slot) = track_slot(&state, track) {
         if let Some(engine) = state.engine.lock().unwrap().as_ref() {
             engine.set_track_palette(slot, colors);
         }
@@ -2438,14 +2557,14 @@ fn main_set_palette(
 #[tauri::command]
 fn main_set_param(
     state: State<AppState>,
-    zone: Uuid,
+    track: Uuid,
     name: String,
     value: f32,
     cell: Option<usize>,
 ) {
     let (live, track) = {
         let mut show = state.show.lock().unwrap();
-        let Some(zs) = show.home_track_mut(zone) else {
+        let Some(zs) = show.track_mut(track) else {
             return;
         };
         let index = panel_cell(zs, cell);
@@ -2462,6 +2581,367 @@ fn main_set_param(
     }
     if let Some(engine) = state.engine.lock().unwrap().as_ref() {
         engine.set_track_param(track, &name, value);
+    }
+}
+
+// --- Live model phase 2: the track grid, scenes, Arm / GO, tempo ---
+
+/// One track column of the grid (LIVE-MODEL-SPEC §7).
+#[derive(Serialize)]
+struct TrackInfo {
+    id: Uuid,
+    name: String,
+    /// Destination zones (phase 2: exactly the one it was created for).
+    zones: Vec<Uuid>,
+    /// The destination zones' names, joined for the header.
+    destination: String,
+    /// The first destination zone's display colour (the header strip, the pads).
+    color: [u8; 3],
+    blend_mode: BlendMode,
+    opacity: f32,
+    mute: bool,
+    solo: bool,
+    transition: TrackTransition,
+    launch: LaunchMode,
+    active: Option<usize>,
+    armed: Option<usize>,
+    clips: Vec<CellInfo>,
+}
+
+/// One grid row's label.
+#[derive(Serialize)]
+struct SceneInfo {
+    index: usize,
+    name: Option<String>,
+    color: Option<[u8; 3]>,
+}
+
+/// The whole grid: tracks in compositing order, one scene per row.
+#[derive(Serialize)]
+struct GridInfo {
+    tracks: Vec<TrackInfo>,
+    scenes: Vec<SceneInfo>,
+}
+
+/// A track's armed clip, as the clip controller last reported it.
+fn armed_of(state: &AppState, track: Uuid) -> Option<usize> {
+    state.armed.lock().unwrap().get(&track).copied()
+}
+
+/// The engine slot of a track. The engine numbers tracks in `Show::tracks` order, and
+/// every engine is assembled from this same show.
+fn track_slot(state: &AppState, track: Uuid) -> Option<usize> {
+    state
+        .show
+        .lock()
+        .unwrap()
+        .tracks
+        .iter()
+        .position(|t| t.id == track)
+}
+
+/// Run `f` on the engine with a track's slot, if both exist.
+fn with_track_engine(state: &AppState, track: Uuid, f: impl FnOnce(&EngineHandle, usize)) {
+    let Some(slot) = track_slot(state, track) else {
+        return;
+    };
+    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        f(engine, slot);
+    }
+}
+
+/// The grid of the running show: every track with its clips and live controls, and
+/// one scene per row.
+#[tauri::command]
+fn main_grid(state: State<AppState>) -> GridInfo {
+    let show = state.show.lock().unwrap();
+    let engine = state.engine.lock().unwrap();
+    let tracks: Vec<TrackInfo> = show
+        .tracks
+        .iter()
+        .enumerate()
+        .map(|(slot, t)| {
+            let zone = |id: &Uuid| show.patch.zones.iter().find(|z| z.id == *id);
+            let live = engine.as_ref().and_then(|e| e.track_live(slot));
+            TrackInfo {
+                id: t.id,
+                name: t.name.clone(),
+                zones: t.destination.zones.clone(),
+                destination: t
+                    .destination
+                    .zones
+                    .iter()
+                    .filter_map(|id| zone(id).map(|z| z.name.clone()))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                color: t
+                    .destination
+                    .zones
+                    .first()
+                    .and_then(zone)
+                    .map_or([128, 128, 128], |z| z.display_color),
+                blend_mode: t.blend_mode,
+                opacity: live.map_or(t.opacity, |l| l.opacity),
+                mute: live.map_or(t.mute, |l| l.mute),
+                solo: live.map_or(t.solo, |l| l.solo),
+                transition: t.transition,
+                launch: t.launch,
+                active: t.active,
+                armed: armed_of(&state, t.id),
+                clips: grid_dto(t, armed_of(&state, t.id)),
+            }
+        })
+        .collect();
+    let rows = show.tracks.iter().map(|t| t.clips.len()).max().unwrap_or(0);
+    let scenes = (0..rows)
+        .map(|i| {
+            let label = show.scenes.get(i);
+            SceneInfo {
+                index: i,
+                name: label.and_then(|l| l.name.clone()),
+                color: label.and_then(|l| l.color),
+            }
+        })
+        .collect();
+    GridInfo { tracks, scenes }
+}
+
+/// Arm (or disarm) a clip for GO — Shift+click, the global "Modo armar", or an
+/// Arm-mode track's launch all reach this same state.
+#[tauri::command]
+fn main_arm_cell(state: State<AppState>, track: Uuid, index: usize) {
+    with_track_engine(&state, track, |e, slot| {
+        e.arm_clip(slot, index);
+    });
+}
+
+/// Stop a track (fade out with its transition; a second stop during it cuts).
+#[tauri::command]
+fn main_stop_track(state: State<AppState>, track: Uuid) {
+    with_track_engine(&state, track, |e, slot| {
+        e.stop_track(slot);
+    });
+}
+
+/// Launch grid row `row` on every track that has a clip there (`arm` = arm instead).
+#[tauri::command]
+fn main_launch_scene(state: State<AppState>, row: usize, arm: bool) {
+    if let Some(e) = state.engine.lock().unwrap().as_ref() {
+        if arm {
+            e.arm_scene(row);
+        } else {
+            e.launch_scene(row);
+        }
+    }
+}
+
+/// Stop every track (each with its transition; a second press during the fades cuts).
+#[tauri::command]
+fn main_stop_all(state: State<AppState>) {
+    if let Some(e) = state.engine.lock().unwrap().as_ref() {
+        e.stop_all();
+    }
+}
+
+/// GO: play every armed clip in the same frame.
+#[tauri::command]
+fn main_arm_go(state: State<AppState>) {
+    if let Some(e) = state.engine.lock().unwrap().as_ref() {
+        e.go();
+    }
+}
+
+/// A track's opacity (`0..=1`), live, and stored in the show.
+#[tauri::command]
+fn main_set_track_opacity(state: State<AppState>, track: Uuid, value: f32) {
+    let value = value.clamp(0.0, 1.0);
+    if let Some(t) = state.show.lock().unwrap().track_mut(track) {
+        t.opacity = value;
+    }
+    with_track_engine(&state, track, |e, slot| e.set_track_opacity(slot, value));
+}
+
+/// Mute a track, live, and store it in the show.
+#[tauri::command]
+fn main_set_track_mute(state: State<AppState>, track: Uuid, on: bool) {
+    if let Some(t) = state.show.lock().unwrap().track_mut(track) {
+        t.mute = on;
+    }
+    with_track_engine(&state, track, |e, slot| e.set_track_mute(slot, on));
+}
+
+/// Solo a track, live, and store it in the show.
+#[tauri::command]
+fn main_set_track_solo(state: State<AppState>, track: Uuid, on: bool) {
+    if let Some(t) = state.show.lock().unwrap().track_mut(track) {
+        t.solo = on;
+    }
+    with_track_engine(&state, track, |e, slot| e.set_track_solo(slot, on));
+}
+
+/// The track popover: its transition and launch mode. Read by the clip controller at
+/// each launch, so it applies at once — no recompile.
+#[tauri::command]
+fn main_set_track_behaviour(
+    state: State<AppState>,
+    track: Uuid,
+    transition: TrackTransition,
+    launch: LaunchMode,
+) {
+    if let Some(t) = state.show.lock().unwrap().track_mut(track) {
+        t.transition = TrackTransition {
+            time: transition.time.clamp(0.0, 600.0),
+            ..transition
+        };
+        t.launch = launch;
+    }
+}
+
+/// How a track blends onto the tracks before it (the track popover). Live, no recompile.
+#[tauri::command]
+fn main_set_track_blend(state: State<AppState>, track: Uuid, mode: BlendMode) {
+    if let Some(t) = state.show.lock().unwrap().track_mut(track) {
+        t.blend_mode = mode;
+    }
+    with_track_engine(&state, track, |e, slot| {
+        e.set_track_blend(slot, mode);
+    });
+}
+
+/// A clip's own fade in seconds (0 = the track's transition).
+#[tauri::command]
+fn main_set_cell_fade(state: State<AppState>, track: Uuid, index: usize, seconds: f64) {
+    if let Some(cell) = state
+        .show
+        .lock()
+        .unwrap()
+        .track_mut(track)
+        .and_then(|t| t.clips.get_mut(index))
+    {
+        cell.fade_time = std::time::Duration::from_secs_f64(seconds.clamp(0.0, 600.0));
+    }
+}
+
+/// Rename a track (a label only: no recompile).
+#[tauri::command]
+fn main_rename_track(state: State<AppState>, track: Uuid, name: String) {
+    let name = name.trim();
+    if name.is_empty() {
+        return;
+    }
+    if let Some(t) = state.show.lock().unwrap().track_mut(track) {
+        t.name = name.to_string();
+    }
+}
+
+/// "+ Track" on a zone: a new track "Track n" reaching only that zone, after the zone's
+/// last track. A destination change recompiles the running show (LIVE-MODEL-SPEC §4.4).
+/// Returns the new track's id, so the UI can open its name for editing.
+#[tauri::command]
+fn main_add_track(app: AppHandle, zone: Uuid) -> Result<Uuid, String> {
+    let known = {
+        let state = app.state::<AppState>();
+        let show = state.show.lock().unwrap();
+        show.patch.zones.iter().any(|z| z.id == zone)
+    };
+    if !known {
+        return Err("no such zone".into());
+    }
+    let mut new_id = Uuid::nil();
+    recompile_running_show(&app, |show| {
+        let mut track = Track::new(
+            next_track_name(show),
+            prisma_engine::Destination::zone(zone),
+        );
+        track.clips.resize_with(GRID_CELLS, Cell::empty);
+        new_id = track.id;
+        let at = show
+            .tracks
+            .iter()
+            .rposition(|t| t.destination.reaches(zone))
+            .map_or(show.tracks.len(), |i| i + 1);
+        show.tracks.insert(at, track);
+    })?;
+    Ok(new_id)
+}
+
+/// "Track n" with the smallest `n` no track of the show is named after.
+fn next_track_name(show: &Show) -> String {
+    (1..)
+        .map(|n| format!("Track {n}"))
+        .find(|name| !show.tracks.iter().any(|t| &t.name == name))
+        .expect("an unused number exists")
+}
+
+/// Reorder: move `track` to sit just before `before` (or last when `None`). Only among the
+/// tracks of the same zone — order is compositing order inside a zone (later = on top);
+/// across zones it means nothing. Recompiles the running show.
+#[tauri::command]
+fn main_move_track(app: AppHandle, track: Uuid, before: Option<Uuid>) -> Result<(), String> {
+    recompile_running_show(&app, |show| move_track(&mut show.tracks, track, before))
+}
+
+/// Move `track` just before `before` (or after the last track of its zone when `None`),
+/// only when both reach the same zones; anything else leaves the order unchanged.
+fn move_track(tracks: &mut Vec<Track>, track: Uuid, before: Option<Uuid>) {
+    let Some(from) = tracks.iter().position(|t| t.id == track) else {
+        return;
+    };
+    let zones = tracks[from].destination.zones.clone();
+    let same = |t: &Track| t.destination.zones == zones;
+    if let Some(b) = before {
+        if b == track || !tracks.iter().any(|t| t.id == b && same(t)) {
+            return;
+        }
+    }
+    let moved = tracks.remove(from);
+    let at = match before {
+        Some(b) => tracks
+            .iter()
+            .position(|t| t.id == b)
+            .expect("checked above"),
+        None => tracks
+            .iter()
+            .rposition(same)
+            .map_or(tracks.len(), |i| i + 1),
+    };
+    tracks.insert(at, moved);
+}
+
+/// Delete a track and its clips. Recompiles the running show.
+#[tauri::command]
+fn main_remove_track(app: AppHandle, track: Uuid) -> Result<(), String> {
+    recompile_running_show(&app, |show| show.tracks.retain(|t| t.id != track))
+}
+
+/// The tempo in the global bar.
+#[derive(Serialize)]
+struct ClockInfo {
+    bpm: f64,
+}
+
+#[tauri::command]
+fn main_clock(state: State<AppState>) -> ClockInfo {
+    let bpm = state
+        .engine
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map_or(120.0, |e| e.bpm());
+    ClockInfo { bpm }
+}
+
+#[tauri::command]
+fn main_set_bpm(state: State<AppState>, bpm: f64) {
+    if let Some(e) = state.engine.lock().unwrap().as_ref() {
+        e.set_bpm(bpm);
+    }
+}
+
+#[tauri::command]
+fn main_tap(state: State<AppState>) {
+    if let Some(e) = state.engine.lock().unwrap().as_ref() {
+        e.tap();
     }
 }
 
@@ -2531,10 +3011,29 @@ fn main() {
             main_new_show,
             main_open_show,
             main_effect_catalogue,
-            main_zone_grid,
             main_assign_cell,
             main_assign_cell_silent,
             main_trigger_cell,
+            main_recovery_info,
+            main_set_track_blend,
+            main_stop_all,
+            main_move_track,
+            main_grid,
+            main_arm_cell,
+            main_stop_track,
+            main_launch_scene,
+            main_arm_go,
+            main_set_track_opacity,
+            main_set_track_mute,
+            main_set_track_solo,
+            main_set_track_behaviour,
+            main_set_cell_fade,
+            main_rename_track,
+            main_add_track,
+            main_remove_track,
+            main_clock,
+            main_set_bpm,
+            main_tap,
             main_clear_cell,
             main_rename_cell,
             main_set_cell_color,
@@ -2575,17 +3074,39 @@ fn main() {
                 .unwrap_or_default();
 
             let last_show_file = config_dir.join("last-show.txt");
-            let mut show = read_last_show(&last_show_file)
-                .and_then(|p| std::fs::read_to_string(&p).ok())
-                .and_then(|json| load_show(&json).ok())
-                .map(|mut s| {
-                    s.patch.fill_zone_members_from_ownership();
-                    s.patch.fit_matrix_size();
-                    // An old save (empty or 16-cell grids) is padded to the full grid.
-                    pad_grids(&mut s);
-                    s
+            let prepare = |json: String| {
+                load_show(&json)
+                    .ok()
+                    .map(|mut s| {
+                        s.patch.fill_zone_members_from_ownership();
+                        s.patch.fit_matrix_size();
+                        // An old save (empty or 16-cell grids) is padded to the full grid.
+                        pad_grids(&mut s);
+                        s
+                    })
+                    .filter(|s| s.patch.compile().is_ok())
+            };
+            // An autosave on disk means the last session ended with unsaved changes:
+            // recover it (and keep a backup); otherwise reopen the last saved show.
+            let autosave = autosave::Autosave::new(&config_dir);
+            let last_saved = read_last_show(&last_show_file);
+            let recovered_show = autosave.read().and_then(prepare);
+            let recovered = recovered_show.is_some().then(|| {
+                autosave.rotate_backups();
+                RecoveryInfo {
+                    last_saved: last_saved
+                        .as_ref()
+                        .filter(|p| autosave::exists(p))
+                        .map(|p| p.to_string_lossy().into_owned()),
+                }
+            });
+            let mut show = recovered_show
+                .or_else(|| {
+                    last_saved
+                        .as_ref()
+                        .and_then(|p| std::fs::read_to_string(p).ok())
+                        .and_then(prepare)
                 })
-                .filter(|s| s.patch.compile().is_ok())
                 .unwrap_or_else(empty_show);
             // A show from before the device manager inherits the old app-wide target.
             prepare_show_network(&mut show, &network);
@@ -2695,7 +3216,27 @@ fn main() {
                 midi_config: Mutex::new(midi_config),
                 midi_config_path,
                 midi_error: Mutex::new(None),
+                armed: Mutex::new(Default::default()),
+                autosave,
+                autosave_state: Mutex::new((
+                    if recovered.is_some() {
+                        autosave::Baseline::Recovered
+                    } else {
+                        autosave::Baseline::Pending
+                    },
+                    None,
+                )),
+                recovered: Mutex::new(recovered),
             });
+            // Autosave: a snapshot every couple of seconds, off every hot path.
+            let autosaver = app.handle().clone();
+            std::thread::Builder::new()
+                .name("prisma-autosave".into())
+                .spawn(move || loop {
+                    std::thread::sleep(autosave::INTERVAL);
+                    autosave_tick(&autosaver);
+                })
+                .expect("spawn autosave thread");
             // Track clips play from the Parameter Tree; the engine keeps this host
             // across every recompile. Set after `manage` — the host reads the state.
             if let Some(engine) = app.state::<AppState>().engine.lock().unwrap().as_ref() {
@@ -2732,6 +3273,8 @@ fn main() {
         .expect("failed to build the Prisma app")
         .run(|app_handle, event| {
             if let RunEvent::ExitRequested { .. } = event {
+                // Last autosave step while the engine still holds the live values.
+                autosave_tick(app_handle);
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     // Close the MIDI input before the engine, so no input thread is writing
                     // while it tears down; darken the LEDs, then close the output.
@@ -2833,34 +3376,79 @@ mod tests {
     #[test]
     fn pad_grids_fills_short_tracks_and_keeps_authored_clips() {
         // Idempotent: it fills a track with no clips and pads a short one, keeping its
-        // authored clips at their index (so a loaded show's real content survives), and
-        // gives a zone without its own track one.
+        // authored clips at their index (so a loaded show's real content survives). It
+        // never adds tracks: removing a zone's only track must stick.
         let mut show = Show::new("t", empty_patch());
         assert!(show.tracks[0].clips.is_empty());
-        // A second track with one authored clip (a distinctive fade time).
         let mut authored = Track::new("extra", prisma_engine::Destination::default());
         authored.clips = vec![Cell::empty()];
         authored.clips[0].fade_time = std::time::Duration::from_millis(250);
         show.tracks.push(authored);
-        // And a zone that lost its own track.
-        let zone = show.patch.zones[0].id;
-        show.tracks.remove(0);
 
         pad_grids(&mut show);
         pad_grids(&mut show);
 
+        assert_eq!(show.tracks.len(), 2, "no track added or removed");
+        assert_eq!(show.tracks[0].clips.len(), GRID_CELLS, "empty track seeded");
+        assert_eq!(show.tracks[1].clips.len(), GRID_CELLS, "short track padded");
         assert_eq!(
-            show.tracks.len(),
-            2,
-            "the zone got its own track back, once"
-        );
-        let home = show.home_track(zone).expect("home track restored");
-        assert_eq!(home.clips.len(), GRID_CELLS, "empty track seeded");
-        assert_eq!(show.tracks[0].clips.len(), GRID_CELLS, "short track padded");
-        assert_eq!(
-            show.tracks[0].clips[0].fade_time,
+            show.tracks[1].clips[0].fade_time,
             std::time::Duration::from_millis(250),
             "authored clip kept at its index"
+        );
+
+        show.tracks.clear();
+        pad_grids(&mut show);
+        assert!(
+            show.tracks.is_empty(),
+            "a zone with no track stays without one"
+        );
+    }
+
+    #[test]
+    fn new_tracks_are_named_track_n_with_the_first_free_number() {
+        let mut show = Show::new("t", empty_patch());
+        assert_eq!(next_track_name(&show), "Track 1");
+        show.tracks[0].name = "Track 1".into();
+        let mut t = Track::new("Track 3", prisma_engine::Destination::default());
+        show.tracks.push(t.clone());
+        assert_eq!(next_track_name(&show), "Track 2");
+        t.name = "Track 2".into();
+        show.tracks.push(t);
+        assert_eq!(next_track_name(&show), "Track 4");
+    }
+
+    #[test]
+    fn a_cell_shows_its_effects_first_colour_group() {
+        let mut p = ParamSet::new();
+        p.set("r", 0.5);
+        p.set("g", 0.25);
+        p.set("b", 0.0);
+        assert_eq!(effect_main_color("solid", &p), Some([0.5, 0.25, 0.0]));
+        assert_eq!(effect_main_color("no-such-effect", &p), None);
+    }
+
+    #[test]
+    fn tracks_reorder_only_within_their_zone() {
+        let za = Uuid::new_v4();
+        let zb = Uuid::new_v4();
+        let t = |name: &str, z: Uuid| Track::new(name, prisma_engine::Destination::zone(z));
+        let mut tracks = vec![t("a1", za), t("a2", za), t("a3", za), t("b1", zb)];
+        let ids: Vec<Uuid> = tracks.iter().map(|t| t.id).collect();
+        let names = |ts: &[Track]| ts.iter().map(|t| t.name.clone()).collect::<Vec<_>>();
+        move_track(&mut tracks, ids[2], Some(ids[0]));
+        assert_eq!(names(&tracks), ["a3", "a1", "a2", "b1"]);
+        move_track(&mut tracks, ids[2], None);
+        assert_eq!(
+            names(&tracks),
+            ["a1", "a2", "a3", "b1"],
+            "last of its zone, not of the show"
+        );
+        move_track(&mut tracks, ids[0], Some(ids[3]));
+        assert_eq!(
+            names(&tracks),
+            ["a1", "a2", "a3", "b1"],
+            "another zone: unchanged"
         );
     }
 }

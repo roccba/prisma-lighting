@@ -515,6 +515,7 @@ fn track(
         zones: vec![zone],
         blend_mode: mode,
         opacity,
+        live: None,
         effects: vec![effect],
     }
 }
