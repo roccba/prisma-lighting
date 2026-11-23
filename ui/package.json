@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test:e2e": "podman run --rm -v \"$PWD\":/ui:z -w /ui --ipc=host mcr.microsoft.com/playwright:v1.65.1-noble npx playwright test --grep-invert @screenshot",
     "test:e2e:screens": "podman run --rm -v \"$PWD\":/ui:z -w /ui --ipc=host mcr.microsoft.com/playwright:v1.65.1-noble npx playwright test --project=webkit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e:ci": "playwright test --grep-invert @screenshot"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

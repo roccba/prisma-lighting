@@ -1,0 +1,148 @@
+name: CI
+
+# Every push and pull request: the same gates as before a commit (CLAUDE.md), minus the
+# reference screenshots, which only run on the reference machine (fonts differ elsewhere).
+# Three independent jobs: the Rust workspace, the Tauri app, the UI.
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  workspace:
+    name: Rust workspace (fmt, clippy, tests)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+
+      # The GPU tests run on lavapipe (Mesa's software Vulkan), deterministic and headless.
+      - name: Install software Vulkan
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers libvulkan1
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      # Not `-D warnings`: a few known pre-existing warnings are accepted (CLAUDE.md gates).
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets
+
+      - name: Tests
+        run: cargo test --workspace
+
+  app:
+    name: Tauri app (fmt, clippy, tests)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libssl-dev \
+            libasound2-dev \
+            mesa-vulkan-drivers \
+            libvulkan1
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      # Tauri embeds ui/dist at compile time.
+      - name: Build the UI
+        run: |
+          npm --prefix ui ci
+          npm --prefix ui run build
+
+      - name: Format
+        working-directory: app
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: app
+        run: cargo clippy
+
+      # Includes ui_fixture_is_current: the UI tests' fixture matches the demo show.
+      - name: Tests
+        working-directory: app
+        run: cargo test
+
+  ui:
+    name: UI (types, build, Vitest, Playwright)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Types
+        run: |
+          npx tsc --noEmit -p .
+          npx tsc --noEmit -p e2e
+
+      - name: Build
+        run: npm run build
+
+      - name: Vitest
+        run: npm test
+
+      - name: Install the Playwright browsers
+        run: npx playwright install --with-deps webkit chromium
+
+      # The geometric tests in WebKit (Linux's webview) and Chromium (Windows' WebView2).
+      - name: Playwright (geometric)
+        run: npm run test:e2e:ci
+
+      - name: Keep the Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: ui/test-results/
+          retention-days: 7
