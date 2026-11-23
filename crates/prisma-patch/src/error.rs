@@ -51,6 +51,10 @@ pub enum PatchError {
     /// a zero axis. A matrix must have at least one cell on every axis to hold any
     /// content, so a zero is a construction/edit error refused at load.
     ZoneMappingSizeZero { zone: Uuid, mapping_size: [u32; 3] },
+    /// A group lists a fixture that does not exist in the patch.
+    DanglingGroupMember { group: Uuid, fixture: Uuid },
+    /// A group lists the same fixture twice.
+    DuplicateGroupMember { group: Uuid, fixture: Uuid },
 }
 
 impl fmt::Display for PatchError {
@@ -114,6 +118,13 @@ impl fmt::Display for PatchError {
                 "zone {zone} has a zero axis in its mapping size {mapping_size:?} \
                  (every axis must be >= 1)"
             ),
+            PatchError::DanglingGroupMember { group, fixture } => write!(
+                f,
+                "group {group} lists fixture {fixture}, which does not exist"
+            ),
+            PatchError::DuplicateGroupMember { group, fixture } => {
+                write!(f, "group {group} lists fixture {fixture} twice")
+            }
         }
     }
 }

@@ -68,6 +68,7 @@ fn patch() -> Patch {
             zone: ZA,
         }],
         zones: vec![zone(ZA, "A", 0, 0), zone(ZB, "B", 2, 1)],
+        groups: Vec::new(),
     }
 }
 

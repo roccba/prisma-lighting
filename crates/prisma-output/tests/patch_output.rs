@@ -64,6 +64,7 @@ fn grb_patch() -> Patch {
             zone: Uuid::nil(),
         }],
         zones: vec![],
+        groups: Vec::new(),
     }
 }
 

@@ -8,6 +8,7 @@
 
 use crate::error::PatchError;
 use crate::fixture::Fixture;
+use crate::group::Group;
 use crate::index::PatchIndex;
 use crate::zone::Zone;
 use serde::{Deserialize, Serialize};
@@ -25,6 +26,9 @@ pub struct Patch {
     pub matrix_size: [u32; 3],
     pub fixtures: Vec<Fixture>,
     pub zones: Vec<Zone>,
+    /// Saved fixture groups (LIVE-MODEL-SPEC §3.1). Absent in older files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<Group>,
 }
 
 impl Patch {
@@ -39,7 +43,13 @@ impl Patch {
         self.validate_addresses()?;
         self.validate_zone_refs()?;
         self.validate_zone_mapping_sizes()?;
+        self.validate_groups()?;
         Ok(())
+    }
+
+    /// Look up a group by id.
+    pub fn group(&self, id: Uuid) -> Option<&Group> {
+        self.groups.iter().find(|g| g.id == id)
     }
 
     /// Compile the patch into its runtime [`PatchIndex`]: assign global pixel
@@ -194,6 +204,27 @@ impl Patch {
                     zone: zone.id,
                     mapping_size: zone.mapping_size,
                 });
+            }
+        }
+        Ok(())
+    }
+
+    /// Every group member is a fixture of the patch, listed once.
+    fn validate_groups(&self) -> Result<(), PatchError> {
+        for group in &self.groups {
+            for (i, &member) in group.members.iter().enumerate() {
+                if self.fixture(member).is_none() {
+                    return Err(PatchError::DanglingGroupMember {
+                        group: group.id,
+                        fixture: member,
+                    });
+                }
+                if group.members[..i].contains(&member) {
+                    return Err(PatchError::DuplicateGroupMember {
+                        group: group.id,
+                        fixture: member,
+                    });
+                }
             }
         }
         Ok(())

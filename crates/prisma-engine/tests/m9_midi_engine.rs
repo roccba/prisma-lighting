@@ -36,6 +36,7 @@ fn show(zones: Vec<Zone>) -> Show {
             matrix_size: [1, 1, 1],
             fixtures: Vec::new(),
             zones,
+            groups: Vec::new(),
         },
     )
 }

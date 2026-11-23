@@ -68,7 +68,55 @@ function setCellColorLike(track: string, index: number, color: number[]) {
   if (c) c.color = color;
   return gridTrack(track)?.clips ?? [];
 }
-mockWindows("main");
+// Group edits in the editor (LIVE-MODEL-SPEC §8.5 step 1), on the fixture's patch, with the
+// same rules as the app: "Grupo n" with the smallest free n, members distinct.
+interface MockGroup {
+  id: string;
+  name: string;
+  members: string[];
+  display_color: number[];
+}
+let groupSeq = 0;
+function editorState() {
+  return fx.editor_get_state as { patch: { groups?: MockGroup[] }; can_undo: boolean };
+}
+function groups(): MockGroup[] {
+  const p = editorState().patch;
+  p.groups ??= [];
+  return p.groups;
+}
+function groupEdit(cmd: string, a: Record<string, unknown>): unknown {
+  const gs = groups();
+  const g = gs.find((x) => x.id === a.group);
+  if (cmd === "editor_add_group") {
+    let n = 1;
+    while (gs.some((x) => x.name.toLowerCase() === `grupo ${n}`)) n++;
+    const id = `00000000-0000-4000-8000-${String(++groupSeq).padStart(12, "0")}`;
+    gs.push({ id, name: `Grupo ${n}`, members: [...new Set(a.members as string[])], display_color: [69, 123, 157] });
+    editorState().can_undo = true;
+    return [structuredClone(fx.editor_get_state), id];
+  }
+  if (!g) throw new Error(`group ${String(a.group)} not found`);
+  if (cmd === "editor_rename_group") {
+    const name = (a.name as string).trim();
+    if (!name) throw new Error("El nombre no puede estar vacío.");
+    if (gs.some((x) => x !== g && x.name.toLowerCase() === name.toLowerCase())) {
+      throw new Error(`Ya existe un grupo llamado «${name}».`);
+    }
+    g.name = name;
+  } else if (cmd === "editor_set_group_members") {
+    g.members = a.members as string[];
+  } else if (cmd === "editor_set_group_color") {
+    g.display_color = a.color as number[];
+  } else if (cmd === "editor_remove_group") {
+    gs.splice(gs.indexOf(g), 1);
+  }
+  editorState().can_undo = true;
+  return structuredClone(fx.editor_get_state);
+}
+
+// `?window=editor` opens the patch editor instead of the main window.
+mockWindows(new URLSearchParams(location.search).get("window") ?? "main");
 mockIPC(
   (cmd, args) => {
     window.__calls.push({ cmd, args });
@@ -86,6 +134,7 @@ mockIPC(
       setTimeout(() => emit("scene-fired", a.row).catch(() => {}), 0);
       return null;
     }
+    if (cmd.startsWith("editor_") && cmd.includes("_group")) return groupEdit(cmd, a);
     if (cmd === "main_effect_panel") {
       const cell = a.cell ?? null;
       return structuredClone(

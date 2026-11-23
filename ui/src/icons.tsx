@@ -203,7 +203,25 @@ export function Pencil(p: IconProps) {
   );
 }
 
-/** Grid — matrix / render resolution. */
+/** Up — move earlier in an order. */
+export function ArrowUp(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 19V5M6 11l6-6 6 6" />
+    </Svg>
+  );
+}
+
+/** Down — move later in an order. */
+export function ArrowDown(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 5v14M6 13l6 6 6-6" />
+    </Svg>
+  );
+}
+
+/** Grid — matrix / render resolution.*/
 export function Grid(p: IconProps) {
   return (
     <Svg {...p}>

@@ -237,6 +237,7 @@ pub fn wedding_rig() -> Patch {
         matrix_size: MATRIX,
         fixtures,
         zones,
+        groups: Vec::new(),
     }
 }
 

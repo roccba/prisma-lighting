@@ -108,6 +108,7 @@ fn build_patch() -> Patch {
                 BlendMode::Add,
             ),
         ],
+        groups: Vec::new(),
     }
 }
 

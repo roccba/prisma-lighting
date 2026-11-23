@@ -78,6 +78,7 @@ fn two_zone_patch() -> Patch {
                 world_transform: None,
             },
         ],
+        groups: Vec::new(),
     }
 }
 

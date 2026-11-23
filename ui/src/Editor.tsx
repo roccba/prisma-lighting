@@ -235,7 +235,13 @@ export default function Editor() {
             selection={selection}
             onSelectionChange={setSelection}
           />
-          <GroupsPanel />
+          <GroupsPanel
+            patch={patch}
+            selection={selection}
+            onSelectionChange={setSelection}
+            onEditor={setEditor}
+            onError={setNotice}
+          />
         </aside>
         <main className="center">
           <Canvas

@@ -705,6 +705,7 @@ mod tests {
             matrix_size: [1, 1, 1],
             fixtures: vec![fixture],
             zones: vec![],
+            groups: Vec::new(),
         };
         let index = patch.compile().unwrap();
         let plan = OutputPlan::compile(&patch, &index).unwrap();
@@ -734,6 +735,7 @@ mod tests {
             matrix_size: [1, 1, 1],
             fixtures: vec![fixture],
             zones: vec![],
+            groups: Vec::new(),
         };
         let index = patch.compile().unwrap();
         let plan = OutputPlan::compile(&patch, &index).unwrap();
@@ -837,6 +839,7 @@ mod tests {
             matrix_size: [1, 1, 1],
             fixtures: vec![fixture],
             zones: vec![],
+            groups: Vec::new(),
         };
         let index = patch.compile().unwrap();
         let plan = OutputPlan::compile(&patch, &index).unwrap();
@@ -880,6 +883,7 @@ mod tests {
             matrix_size: [2, 1, 1],
             fixtures: vec![f],
             zones: vec![],
+            groups: Vec::new(),
         };
         let index = patch.compile().unwrap();
         let plan = OutputPlan::compile(&patch, &index).unwrap();
@@ -945,6 +949,7 @@ mod tests {
             matrix_size: [2, 1, 1],
             fixtures: vec![f1, f2],
             zones: vec![],
+            groups: Vec::new(),
         };
         let index = patch.compile().unwrap();
         let plan = OutputPlan::compile(&patch, &index).unwrap();
@@ -973,6 +978,7 @@ mod tests {
                 display_color: prisma_patch::default_display_color(),
                 world_transform: None,
             }],
+            groups: Vec::new(),
         };
         let index = patch.compile().unwrap();
         let plan = OutputPlan::compile(&patch, &index).unwrap();
@@ -989,6 +995,7 @@ mod tests {
             matrix_size: [1, 1, 1],
             fixtures: vec![fixture],
             zones: vec![],
+            groups: Vec::new(),
         };
         let index = patch.compile().unwrap();
         let plan = OutputPlan::compile(&patch, &index).unwrap();
@@ -1009,6 +1016,7 @@ mod tests {
             matrix_size: [1, 1, 1],
             fixtures: vec![fixture],
             zones: vec![],
+            groups: Vec::new(),
         };
         // Note: Patch::validate also catches this; here we exercise the plan's
         // own guard directly by bypassing validate.

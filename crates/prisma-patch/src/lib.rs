@@ -25,6 +25,7 @@
 pub mod error;
 pub mod fixture;
 pub mod geometry;
+pub mod group;
 pub mod index;
 pub mod patch;
 pub mod report;
@@ -41,6 +42,7 @@ pub use fixture::{
     WhiteMode, WhiteProfile, WireOrder,
 };
 pub use geometry::{cell_of, Rect, WorldTransform};
+pub use group::Group;
 pub use index::{LayoutGeneration, PatchIndex, ZoneMembership};
 pub use patch::Patch;
 pub use report::{Diagnostic, Mark};

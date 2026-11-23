@@ -135,7 +135,13 @@ pub fn editor_place_fixtures(
         .map(|(i, f)| (base + i, f))
         .collect();
     draft
-        .apply(EditOp::InsertFixtures { at }, None)
+        .apply(
+            EditOp::InsertFixtures {
+                at,
+                memberships: Vec::new(),
+            },
+            None,
+        )
         .map_err(|e| e.to_string())?;
     Ok(state_of(&draft))
 }
@@ -436,6 +442,113 @@ pub(crate) fn apply_editor_draft(app: &AppHandle, resume: bool) -> Result<(), St
 #[tauri::command]
 pub fn editor_apply_to_live(app: AppHandle) -> Result<(), String> {
     apply_editor_draft(&app, false)
+}
+
+// --- Groups (LIVE-MODEL-SPEC §3.1, phase 5 step 1) ---
+
+/// A group name that no other group (but `except`) uses, case-insensitively.
+fn group_name_clash(draft: &PatchDraft, name: &str, except: Option<Uuid>) -> bool {
+    draft
+        .patch()
+        .groups
+        .iter()
+        .any(|g| Some(g.id) != except && g.name.trim().to_lowercase() == name.to_lowercase())
+}
+
+/// Create a group from `members` (fixture ids in selection order; may be empty), named
+/// "Grupo n" with the smallest free n, appended to the list (undoable).
+#[tauri::command]
+pub fn editor_add_group(
+    state: State<AppState>,
+    members: Vec<Uuid>,
+) -> Result<(EditorState, Uuid), String> {
+    let mut draft = state.draft.locked();
+    let n = (1..=draft.patch().groups.len() + 1)
+        .find(|n| !group_name_clash(&draft, &format!("Grupo {n}"), None))
+        .unwrap_or(draft.patch().groups.len() + 1);
+    let at = draft.patch().groups.len();
+    let mut seen = Vec::with_capacity(members.len());
+    for m in members {
+        if !seen.contains(&m) {
+            seen.push(m);
+        }
+    }
+    let group = Group {
+        id: Uuid::new_v4(),
+        name: format!("Grupo {n}"),
+        members: seen,
+        display_color: ZONE_COLORS[at % ZONE_COLORS.len()],
+    };
+    let id = group.id;
+    draft
+        .apply(EditOp::AddGroup { at, group }, None)
+        .map_err(|e| e.to_string())?;
+    Ok((state_of(&draft), id))
+}
+
+/// Rename a group (undoable). Non-empty and unique among groups, case-insensitive.
+#[tauri::command]
+pub fn editor_rename_group(
+    state: State<AppState>,
+    group: Uuid,
+    name: String,
+) -> Result<EditorState, String> {
+    let mut draft = state.draft.locked();
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("El nombre no puede estar vacío.".into());
+    }
+    if group_name_clash(&draft, trimmed, Some(group)) {
+        return Err(format!("Ya existe un grupo llamado «{trimmed}»."));
+    }
+    draft
+        .apply(
+            EditOp::RenameGroup {
+                group,
+                name: trimmed.to_string(),
+            },
+            None,
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(state_of(&draft))
+}
+
+/// Change a group's colour (undoable).
+#[tauri::command]
+pub fn editor_set_group_color(
+    state: State<AppState>,
+    group: Uuid,
+    color: [u8; 3],
+) -> Result<EditorState, String> {
+    let mut draft = state.draft.locked();
+    draft
+        .apply(EditOp::SetGroupColor { group, color }, None)
+        .map_err(|e| e.to_string())?;
+    Ok(state_of(&draft))
+}
+
+/// Replace a group's members, in element order (undoable): reorder, add or remove.
+#[tauri::command]
+pub fn editor_set_group_members(
+    state: State<AppState>,
+    group: Uuid,
+    members: Vec<Uuid>,
+) -> Result<EditorState, String> {
+    let mut draft = state.draft.locked();
+    draft
+        .apply(EditOp::SetGroupMembers { group, members }, None)
+        .map_err(|e| e.to_string())?;
+    Ok(state_of(&draft))
+}
+
+/// Delete a group (undoable). Its fixtures are untouched.
+#[tauri::command]
+pub fn editor_remove_group(state: State<AppState>, group: Uuid) -> Result<EditorState, String> {
+    let mut draft = state.draft.locked();
+    draft
+        .apply(EditOp::RemoveGroup { group }, None)
+        .map_err(|e| e.to_string())?;
+    Ok(state_of(&draft))
 }
 
 /// Delete the given fixtures (undoable).

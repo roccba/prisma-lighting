@@ -33,6 +33,7 @@ fn empty_show() -> Show {
             display_color: [80, 80, 80],
             world_transform: None,
         }],
+        groups: Vec::new(),
     };
     Show::new("empty", patch)
 }

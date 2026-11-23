@@ -52,7 +52,7 @@ use prisma_engine::{FocusKind, KeyBinding, KeyCombo};
 use prisma_engine::{LaunchMode, TrackTransition};
 use prisma_midi::io::{input_port_names, MidiInputLink, MidiIoError, MidiOutputLink};
 use prisma_midi::{DeviceProfile, APC40_KEYWORDS};
-use prisma_patch::{load_patch, save_patch, BlendMode, Diagnostic, Patch, Zone};
+use prisma_patch::{load_patch, save_patch, BlendMode, Diagnostic, Group, Patch, Zone};
 use prisma_preview::sink::WebSocketSink;
 use prisma_render::{AdapterPreference, ColorChannel, ParamRole, Requires};
 use serde::{Deserialize, Serialize};
@@ -135,6 +135,11 @@ fn main() {
             editor_add_zone,
             editor_rename_zone,
             editor_remove_zone,
+            editor_add_group,
+            editor_rename_group,
+            editor_set_group_color,
+            editor_set_group_members,
+            editor_remove_group,
             editor_highlight,
             editor_apply_to_live,
             editor_preview_port,

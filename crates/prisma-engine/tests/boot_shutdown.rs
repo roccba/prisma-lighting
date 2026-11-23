@@ -70,6 +70,7 @@ fn build_patch() -> Patch {
             display_color: [200, 60, 60],
             world_transform: None,
         }],
+        groups: Vec::new(),
     }
 }
 

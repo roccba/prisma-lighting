@@ -118,6 +118,7 @@ fn sample_patch() -> (Patch, Uuid, Uuid) {
                 world_transform: None,
             },
         ],
+        groups: Vec::new(),
     };
     (patch, fa, fb)
 }

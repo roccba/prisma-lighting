@@ -242,6 +242,7 @@ fn two_pixels_one_cell() -> Patch {
             zone: Uuid::nil(),
         }],
         zones: vec![],
+        groups: Vec::new(),
     }
 }
 

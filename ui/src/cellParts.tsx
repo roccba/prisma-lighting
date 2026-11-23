@@ -41,10 +41,12 @@ export function RenameInput({
   initial,
   onCommit,
   onCancel,
+  label = "Nombre de la celda",
 }: {
   initial: string;
   onCommit: (name: string) => void;
   onCancel: () => void;
+  label?: string;
 }) {
   const [text, setText] = useState(initial);
   const done = useRef(false);
@@ -66,7 +68,7 @@ export function RenameInput({
       value={text}
       maxLength={64}
       spellCheck={false}
-      aria-label="Nombre de la celda"
+      aria-label={label}
       onChange={(e) => setText(e.target.value)}
       onPointerDown={(e) => e.stopPropagation()}
       onKeyDown={(e) => {

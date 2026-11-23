@@ -212,3 +212,11 @@ export async function learnFrames(page: Page): Promise<LearnFrame[]> {
     return out;
   });
 }
+
+/** Open the patch editor on the demo rig (the harness's `?window=editor`). */
+export async function openEditor(page: Page, viewport = VIEWPORTS[0]) {
+  await page.setViewportSize(viewport);
+  await page.goto("/e2e/harness.html?window=editor");
+  await expect(page.locator(".groups-sector")).toBeVisible();
+  await expect(page.locator(".fixture-list .pr-listrow").first()).toBeVisible();
+}

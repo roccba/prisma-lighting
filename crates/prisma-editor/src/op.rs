@@ -23,7 +23,7 @@
 //! shared cells are valid choices, not faults at all (§2.4/§4.4).
 
 use glam::Vec3;
-use prisma_patch::{DisplayColor, Fixture, Patch, Zone};
+use prisma_patch::{DisplayColor, Fixture, Group, Patch, Zone};
 use uuid::Uuid;
 
 /// A DMX address for one pixel: the pair an edit sets or restores.
@@ -46,7 +46,14 @@ pub enum EditOp {
     /// restore fixtures at their *original* positions (so the vector — and thus the
     /// derived global index order — is reproduced exactly). Indices must be
     /// ascending and in range as they are applied in order.
-    InsertFixtures { at: Vec<(usize, Fixture)> },
+    ///
+    /// `memberships` puts inserted fixtures back into groups: the inverse of a removal
+    /// carries each removed fixture's position in every group it was in, ascending per
+    /// group, so the group orders are reproduced exactly. Placement passes none.
+    InsertFixtures {
+        at: Vec<(usize, Fixture)>,
+        memberships: Vec<Membership>,
+    },
     /// Remove fixtures by id. `apply` captures each removed fixture with its index,
     /// so the inverse ([`InsertFixtures`](EditOp::InsertFixtures)) restores it
     /// exactly.
@@ -83,6 +90,26 @@ pub enum EditOp {
     /// `apply` captures the zone and its index, so the inverse ([`AddZone`](
     /// EditOp::AddZone)) restores it exactly.
     RemoveZone { zone: Uuid },
+    /// Add a group at index `at` in `Patch::groups` (past the end appends). Its members
+    /// must exist and be distinct. Inverse: [`RemoveGroup`](EditOp::RemoveGroup).
+    AddGroup { at: usize, group: Group },
+    /// Remove a group by id; `apply` captures it and its index for the inverse.
+    RemoveGroup { group: Uuid },
+    /// Rename a group.
+    RenameGroup { group: Uuid, name: String },
+    /// Change a group's display colour.
+    SetGroupColor { group: Uuid, color: DisplayColor },
+    /// Replace a group's members (fixture ids, in element order) — reorder, add and
+    /// remove are all this op. Members must exist and be distinct.
+    SetGroupMembers { group: Uuid, members: Vec<Uuid> },
+}
+
+/// A fixture's place in a group: `fixture` sits at `position` in `group`'s members.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Membership {
+    pub group: Uuid,
+    pub position: usize,
+    pub fixture: Uuid,
 }
 
 /// Why an op could not be applied. These are **structural** rejections (the op does
@@ -116,6 +143,19 @@ pub enum EditError {
         zone: Uuid,
         fixtures: usize,
     },
+    GroupNotFound(Uuid),
+    /// An add named a group id already present.
+    DuplicateGroupId(Uuid),
+    /// A group's members name a fixture that does not exist.
+    GroupMemberNotFound {
+        group: Uuid,
+        fixture: Uuid,
+    },
+    /// A group's members list a fixture twice.
+    DuplicateGroupMember {
+        group: Uuid,
+        fixture: Uuid,
+    },
 }
 
 impl std::fmt::Display for EditError {
@@ -143,6 +183,14 @@ impl std::fmt::Display for EditError {
                 f,
                 "cannot remove zone {zone}: {fixtures} fixture(s) still belong to it"
             ),
+            EditError::GroupNotFound(id) => write!(f, "group {id} not found"),
+            EditError::DuplicateGroupId(id) => write!(f, "duplicate group id {id}"),
+            EditError::GroupMemberNotFound { group, fixture } => {
+                write!(f, "group {group}: fixture {fixture} not found")
+            }
+            EditError::DuplicateGroupMember { group, fixture } => {
+                write!(f, "group {group} lists fixture {fixture} twice")
+            }
         }
     }
 }
@@ -161,6 +209,8 @@ pub enum CoalesceKey {
     ZoneName(Uuid),
     ZoneColor(Uuid),
     ZoneMapping(Uuid),
+    GroupName(Uuid),
+    GroupColor(Uuid),
 }
 
 impl EditOp {
@@ -179,10 +229,16 @@ impl EditOp {
             EditOp::RenameZone { zone, .. } => Some(CoalesceKey::ZoneName(*zone)),
             EditOp::SetZoneColor { zone, .. } => Some(CoalesceKey::ZoneColor(*zone)),
             EditOp::SetZoneMappingSize { zone, .. } => Some(CoalesceKey::ZoneMapping(*zone)),
+            EditOp::RenameGroup { group, .. } => Some(CoalesceKey::GroupName(*group)),
+            EditOp::SetGroupColor { group, .. } => Some(CoalesceKey::GroupColor(*group)),
+            // A member edit is one discrete action (a drop, a button), never a drag stream.
+            EditOp::SetGroupMembers { .. } => None,
             EditOp::InsertFixtures { .. }
             | EditOp::RemoveFixtures { .. }
             | EditOp::AddZone { .. }
-            | EditOp::RemoveZone { .. } => None,
+            | EditOp::RemoveZone { .. }
+            | EditOp::AddGroup { .. }
+            | EditOp::RemoveGroup { .. } => None,
         }
     }
 }
@@ -191,7 +247,7 @@ impl EditOp {
 /// left untouched (pre-conditions are checked before any mutation).
 pub fn apply(patch: &mut Patch, op: EditOp) -> Result<EditOp, EditError> {
     match op {
-        EditOp::InsertFixtures { at } => {
+        EditOp::InsertFixtures { at, memberships } => {
             // Validate first: indices ascending & in range against the growing
             // length, and no id collision with existing or inserted fixtures.
             let base = patch.fixtures.len();
@@ -213,9 +269,59 @@ pub fn apply(patch: &mut Patch, op: EditOp) -> Result<EditOp, EditError> {
                 }
                 prev = Some(*index);
             }
+            // Memberships: the group exists, the fixture is one being inserted and not
+            // already a member, and each position fits the group as it grows.
+            let mut growth: Vec<(Uuid, usize)> = Vec::new();
+            for m in &memberships {
+                let g = patch
+                    .groups
+                    .iter()
+                    .find(|g| g.id == m.group)
+                    .ok_or(EditError::GroupNotFound(m.group))?;
+                if !at.iter().any(|(_, f)| f.id == m.fixture) {
+                    return Err(EditError::GroupMemberNotFound {
+                        group: m.group,
+                        fixture: m.fixture,
+                    });
+                }
+                if g.contains(m.fixture)
+                    || memberships
+                        .iter()
+                        .filter(|o| o.group == m.group && o.fixture == m.fixture)
+                        .count()
+                        > 1
+                {
+                    return Err(EditError::DuplicateGroupMember {
+                        group: m.group,
+                        fixture: m.fixture,
+                    });
+                }
+                let added = match growth.iter_mut().find(|(id, _)| *id == m.group) {
+                    Some((_, n)) => {
+                        *n += 1;
+                        *n - 1
+                    }
+                    None => {
+                        growth.push((m.group, 1));
+                        0
+                    }
+                };
+                let len = g.members.len() + added;
+                if m.position > len {
+                    return Err(EditError::InsertIndexOutOfBounds {
+                        index: m.position,
+                        len,
+                    });
+                }
+            }
             let ids: Vec<Uuid> = at.iter().map(|(_, f)| f.id).collect();
             for (index, fixture) in at {
                 patch.fixtures.insert(index, fixture);
+            }
+            for m in memberships {
+                if let Some(g) = patch.groups.iter_mut().find(|g| g.id == m.group) {
+                    g.members.insert(m.position, m.fixture);
+                }
             }
             Ok(EditOp::RemoveFixtures { ids })
         }
@@ -235,8 +341,28 @@ pub fn apply(patch: &mut Patch, op: EditOp) -> Result<EditOp, EditError> {
                     removed.push((index, fixture.clone()));
                 }
             }
+            // Their places in groups, ascending per group, so re-inserting in this order
+            // puts each back exactly where it was.
+            let mut memberships = Vec::new();
+            for g in &patch.groups {
+                for (position, &fixture) in g.members.iter().enumerate() {
+                    if ids.contains(&fixture) {
+                        memberships.push(Membership {
+                            group: g.id,
+                            position,
+                            fixture,
+                        });
+                    }
+                }
+            }
             patch.fixtures.retain(|f| !ids.contains(&f.id));
-            Ok(EditOp::InsertFixtures { at: removed })
+            for g in &mut patch.groups {
+                g.members.retain(|m| !ids.contains(m));
+            }
+            Ok(EditOp::InsertFixtures {
+                at: removed,
+                memberships,
+            })
         }
 
         EditOp::SetFixturePositions { fixture, positions } => {
@@ -358,7 +484,75 @@ pub fn apply(patch: &mut Patch, op: EditOp) -> Result<EditOp, EditError> {
                 zone: removed,
             })
         }
+
+        EditOp::AddGroup { at, group } => {
+            if patch.groups.iter().any(|g| g.id == group.id) {
+                return Err(EditError::DuplicateGroupId(group.id));
+            }
+            check_members(patch, group.id, &group.members)?;
+            let id = group.id;
+            let at = at.min(patch.groups.len());
+            patch.groups.insert(at, group);
+            Ok(EditOp::RemoveGroup { group: id })
+        }
+
+        EditOp::RemoveGroup { group } => {
+            let index = patch
+                .groups
+                .iter()
+                .position(|g| g.id == group)
+                .ok_or(EditError::GroupNotFound(group))?;
+            let removed = patch.groups.remove(index);
+            Ok(EditOp::AddGroup {
+                at: index,
+                group: removed,
+            })
+        }
+
+        EditOp::RenameGroup { group, name } => {
+            let g = group_mut(patch, group)?;
+            let old = std::mem::replace(&mut g.name, name);
+            Ok(EditOp::RenameGroup { group, name: old })
+        }
+
+        EditOp::SetGroupColor { group, color } => {
+            let g = group_mut(patch, group)?;
+            let old = std::mem::replace(&mut g.display_color, color);
+            Ok(EditOp::SetGroupColor { group, color: old })
+        }
+
+        EditOp::SetGroupMembers { group, members } => {
+            group_mut(patch, group)?;
+            check_members(patch, group, &members)?;
+            let g = group_mut(patch, group)?;
+            let old = std::mem::replace(&mut g.members, members);
+            Ok(EditOp::SetGroupMembers {
+                group,
+                members: old,
+            })
+        }
     }
+}
+
+/// Every member is a fixture of the patch, listed once.
+fn check_members(patch: &Patch, group: Uuid, members: &[Uuid]) -> Result<(), EditError> {
+    for (i, &fixture) in members.iter().enumerate() {
+        if patch.fixture(fixture).is_none() {
+            return Err(EditError::GroupMemberNotFound { group, fixture });
+        }
+        if members[..i].contains(&fixture) {
+            return Err(EditError::DuplicateGroupMember { group, fixture });
+        }
+    }
+    Ok(())
+}
+
+fn group_mut(patch: &mut Patch, id: Uuid) -> Result<&mut Group, EditError> {
+    patch
+        .groups
+        .iter_mut()
+        .find(|g| g.id == id)
+        .ok_or(EditError::GroupNotFound(id))
 }
 
 fn fixture_mut(patch: &mut Patch, id: Uuid) -> Result<&mut Fixture, EditError> {

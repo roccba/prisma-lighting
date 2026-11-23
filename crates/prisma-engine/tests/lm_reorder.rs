@@ -63,6 +63,7 @@ fn patch() -> Patch {
         matrix_size: [2, 1, 1],
         fixtures: vec![fixture(0x51, ZA, 1), fixture(0x52, ZB, 4)],
         zones: vec![zone(ZA, 0x51, [255, 0, 0]), zone(ZB, 0x52, [0, 0, 255])],
+        groups: Vec::new(),
     }
 }
 

@@ -108,6 +108,7 @@ fn build_patch() -> Patch {
             zone: Uuid::nil(),
         }],
         zones,
+        groups: Vec::new(),
     }
 }
 

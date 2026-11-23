@@ -311,6 +311,7 @@ mod tests {
                 zone: Uuid::nil(),
             }],
             zones: vec![],
+            groups: Vec::new(),
         };
         let index = patch.compile().unwrap();
         let plan = OutputPlan::compile(&patch, &index).unwrap();

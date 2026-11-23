@@ -71,6 +71,7 @@ fn two_zone_patch() -> Patch {
             zone(zone_a, "Booth", fix_a, 0),
             zone(zone_b, "Ceiling", fix_b, 1),
         ],
+        groups: Vec::new(),
     }
 }
 

@@ -69,6 +69,7 @@ fn patch(fixtures: Vec<Fixture>, zones: Vec<Zone>, matrix: [u32; 3]) -> Patch {
         matrix_size: matrix,
         fixtures,
         zones,
+        groups: Vec::new(),
     }
 }
 

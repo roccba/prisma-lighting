@@ -124,6 +124,7 @@ fn build_patch(pixels: u32) -> Patch {
             zone: Uuid::nil(),
         }],
         zones,
+        groups: Vec::new(),
     }
 }
 

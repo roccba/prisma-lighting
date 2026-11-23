@@ -91,6 +91,7 @@ fn build_patch() -> Patch {
             display_color: [128, 128, 128],
             world_transform: None,
         }],
+        groups: Vec::new(),
     }
 }
 

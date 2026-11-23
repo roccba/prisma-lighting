@@ -114,6 +114,7 @@ fn build_patch() -> Patch {
                 world_transform: None,
             },
         ],
+        groups: Vec::new(),
     }
 }
 

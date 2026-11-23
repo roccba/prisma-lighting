@@ -10,7 +10,7 @@
 use glam::Vec3;
 use prisma_editor::{EditOp, GestureId, PatchDraft, PixelAddress};
 use prisma_patch::{
-    BlendMode, ColorOrder, ComponentSet, Fixture, FixtureProfile, GammaCalibration, Patch,
+    BlendMode, ColorOrder, ComponentSet, Fixture, FixtureProfile, GammaCalibration, Group, Patch,
     PatchError, Pixel, Zone,
 };
 use uuid::Uuid;
@@ -20,6 +20,17 @@ const FB: u128 = 0x00B;
 const FC: u128 = 0x00C;
 const ZL: u128 = 0x010;
 const ZR: u128 = 0x011;
+const GA: u128 = 0x020;
+const GB: u128 = 0x021;
+
+fn group(id: u128, members: &[u128]) -> Group {
+    Group {
+        id: Uuid::from_u128(id),
+        name: format!("group-{id}"),
+        members: members.iter().map(|&m| Uuid::from_u128(m)).collect(),
+        display_color: [10, 20, 30],
+    }
+}
 
 fn fixture(id: u128, zone: u128, base_channel: u16, x0: f32) -> Fixture {
     Fixture {
@@ -76,6 +87,8 @@ fn base_patch() -> Patch {
             fixture(FC, ZL, 40, 4.0),
         ],
         zones: vec![zone(ZL, "left"), zone(ZR, "right")],
+        // Two groups, members out of patch order, sharing a fixture.
+        groups: vec![group(GA, &[FC, FA, FB]), group(GB, &[FB, FC])],
     };
     p.fit_matrix_size();
     p
@@ -130,6 +143,7 @@ fn a_sequence_of_edits_undoes_to_the_exact_starting_patch() {
         },
         EditOp::InsertFixtures {
             at: vec![(0, new_fixture(0xDEAD))],
+            memberships: Vec::new(),
         },
     ];
     let n = ops.len();
@@ -360,7 +374,7 @@ impl Lcg {
 fn random_op(rng: &mut Lcg, patch: &Patch, fresh_id: &mut u128) -> EditOp {
     // Guard: if there are no fixtures, only insertion is possible.
     let has_fixtures = !patch.fixtures.is_empty();
-    let kind = if has_fixtures { rng.below(8) } else { 6 };
+    let kind = if has_fixtures { rng.below(12) } else { 6 };
     match kind {
         0 => {
             let f = &patch.fixtures[rng.below(patch.fixtures.len())];
@@ -412,7 +426,45 @@ fn random_op(rng: &mut Lcg, patch: &Patch, fresh_id: &mut u128) -> EditOp {
         5 => EditOp::RemoveFixtures {
             ids: vec![patch.fixtures[rng.below(patch.fixtures.len())].id],
         },
-        7 => EditOp::TranslateFixtures {
+        8 if !patch.groups.is_empty() => {
+            // Any subset of the fixtures, in a random order (reorder / add / remove).
+            let g = &patch.groups[rng.below(patch.groups.len())];
+            let mut pool: Vec<Uuid> = patch.fixtures.iter().map(|f| f.id).collect();
+            let mut members = Vec::new();
+            for _ in 0..rng.below(pool.len() + 1) {
+                members.push(pool.remove(rng.below(pool.len())));
+            }
+            EditOp::SetGroupMembers {
+                group: g.id,
+                members,
+            }
+        }
+        9 => {
+            *fresh_id += 1;
+            let members: Vec<Uuid> = patch
+                .fixtures
+                .iter()
+                .filter(|_| rng.below(2) == 0)
+                .map(|f| f.id)
+                .collect();
+            EditOp::AddGroup {
+                at: rng.below(patch.groups.len() + 2),
+                group: Group {
+                    id: Uuid::from_u128(0x5000 + *fresh_id),
+                    name: "g".into(),
+                    members,
+                    display_color: [1, 2, 3],
+                },
+            }
+        }
+        10 if !patch.groups.is_empty() => EditOp::RemoveGroup {
+            group: patch.groups[rng.below(patch.groups.len())].id,
+        },
+        11 if !patch.groups.is_empty() => EditOp::RenameGroup {
+            group: patch.groups[rng.below(patch.groups.len())].id,
+            name: format!("g{}", rng.next()),
+        },
+        7 | 8 | 10 | 11 => EditOp::TranslateFixtures {
             ids: vec![patch.fixtures[rng.below(patch.fixtures.len())].id],
             delta: rng.vec3(),
         },
@@ -421,6 +473,7 @@ fn random_op(rng: &mut Lcg, patch: &Patch, fresh_id: &mut u128) -> EditOp {
             let index = rng.below(patch.fixtures.len() + 1);
             EditOp::InsertFixtures {
                 at: vec![(index, new_fixture(0x1000 + *fresh_id))],
+                memberships: Vec::new(),
             }
         }
     }
@@ -454,4 +507,57 @@ fn randomised_op_sequences_always_undo_to_the_start() {
         );
         assert!(!draft.can_undo());
     }
+}
+
+#[test]
+fn deleting_a_fixture_leaves_its_groups_and_undo_puts_it_back_in_place() {
+    let start = base_patch();
+    let mut draft = PatchDraft::new(start.clone());
+    let fa = Uuid::from_u128(FA);
+    let fc = Uuid::from_u128(FC);
+    draft
+        .apply(EditOp::RemoveFixtures { ids: vec![fc, fa] }, None)
+        .expect("remove");
+    let ga = draft.patch().group(Uuid::from_u128(GA)).unwrap();
+    assert_eq!(ga.members, vec![Uuid::from_u128(FB)], "both left group A");
+    let gb = draft.patch().group(Uuid::from_u128(GB)).unwrap();
+    assert_eq!(gb.members, vec![Uuid::from_u128(FB)]);
+    draft.patch().validate().expect("still a valid patch");
+
+    assert!(draft.undo());
+    assert_eq!(*draft.patch(), start, "same fixtures, same group orders");
+    assert!(draft.redo());
+    assert!(!draft.patch().groups[0].contains(fa));
+}
+
+#[test]
+fn group_members_must_exist_and_be_distinct() {
+    let mut draft = PatchDraft::new(base_patch());
+    let ga = Uuid::from_u128(GA);
+    let fa = Uuid::from_u128(FA);
+    let ghost = Uuid::from_u128(0xBAD);
+    for members in [vec![fa, ghost], vec![fa, fa]] {
+        assert!(draft
+            .apply(EditOp::SetGroupMembers { group: ga, members }, None)
+            .is_err());
+    }
+    assert_eq!(
+        *draft.patch(),
+        base_patch(),
+        "a refused edit changes nothing"
+    );
+    assert!(!draft.can_undo());
+}
+
+#[test]
+fn a_patch_with_groups_survives_the_file_format() {
+    let p = base_patch();
+    let json = prisma_patch::save_patch(&p).expect("save");
+    assert_eq!(prisma_patch::load_patch(&json).expect("load"), p);
+    // A patch without groups writes no `groups` key (older files load unchanged).
+    let mut bare = p.clone();
+    bare.groups.clear();
+    assert!(!prisma_patch::save_patch(&bare)
+        .unwrap()
+        .contains("\"groups\""));
 }

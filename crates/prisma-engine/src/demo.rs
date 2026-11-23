@@ -277,6 +277,7 @@ fn demo_patch() -> Patch {
             zone(2, "Cortina Este", [230, 180, 60], CURTAIN),
             zone(3, "Cortina Oeste", [110, 190, 100], CURTAIN),
         ],
+        groups: Vec::new(),
     };
     patch.fill_zone_members_from_ownership();
     patch.fit_matrix_size();

@@ -63,6 +63,7 @@ fn patch() -> Patch {
                 world_transform: None,
             })
             .collect(),
+        groups: Vec::new(),
     }
 }
 

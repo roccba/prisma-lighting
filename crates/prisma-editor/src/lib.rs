@@ -29,7 +29,7 @@ pub mod selection;
 
 pub use draft::{GestureId, PatchDraft};
 pub use library::{load_library, save_library, FixtureLibrary, LibraryError};
-pub use op::{CoalesceKey, EditError, EditOp, PixelAddress};
+pub use op::{CoalesceKey, EditError, EditOp, Membership, PixelAddress};
 pub use placement::{
     builtin_fixture_types, instance_name, next_fixture_id, next_free_address, plan, plan_preview,
     FixtureArrangement, FixtureType, MainOrientation, PlacementError, PlacementSpec, PreviewRun,

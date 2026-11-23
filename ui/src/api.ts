@@ -28,12 +28,23 @@ export interface Zone {
   mapping_size: Vec3;
 }
 
+/** An ordered set of fixtures (LIVE-MODEL-SPEC §3.1). Can span zones. */
+export interface Group {
+  id: string;
+  name: string;
+  /** Fixture ids, in element order. */
+  members: string[];
+  display_color: Rgb;
+}
+
 export interface Patch {
   id: string;
   name: string;
   matrix_size: Vec3;
   fixtures: Fixture[];
   zones: Zone[];
+  /** Absent in a patch without groups. */
+  groups?: Group[];
 }
 
 /** One pixel a diagnostic points at (owning fixture + pixel index within it). */
@@ -217,6 +228,19 @@ export const removeZone = (zone: string) => invoke<EditorState>("editor_remove_z
 
 export const renameZone = (zone: string, name: string) =>
   invoke<EditorState>("editor_rename_zone", { zone, name });
+
+// --- Groups (LIVE-MODEL-SPEC §3.1) — every edit undoable ---
+/** Create a group from `members` (selection order). Returns the state and the new id. */
+export const addGroup = (members: string[]) =>
+  invoke<[EditorState, string]>("editor_add_group", { members });
+export const renameGroup = (group: string, name: string) =>
+  invoke<EditorState>("editor_rename_group", { group, name });
+export const setGroupColor = (group: string, color: Rgb) =>
+  invoke<EditorState>("editor_set_group_color", { group, color });
+/** Replace the members, in element order (reorder / add / remove). */
+export const setGroupMembers = (group: string, members: string[]) =>
+  invoke<EditorState>("editor_set_group_members", { group, members });
+export const removeGroup = (group: string) => invoke<EditorState>("editor_remove_group", { group });
 
 export const undo = () => invoke<EditorState>("editor_undo");
 export const redo = () => invoke<EditorState>("editor_redo");

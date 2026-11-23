@@ -96,7 +96,13 @@ fn place(draft: &mut PatchDraft, spec: &PlacementSpec) {
         .map(|(i, f)| (base + i, f))
         .collect();
     draft
-        .apply(EditOp::InsertFixtures { at }, None)
+        .apply(
+            EditOp::InsertFixtures {
+                at,
+                memberships: Vec::new(),
+            },
+            None,
+        )
         .expect("insert applies");
 }
 

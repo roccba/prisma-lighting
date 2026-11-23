@@ -64,6 +64,7 @@ fn one_zone_patch() -> Patch {
             display_color: prisma_patch::default_display_color(),
             world_transform: None,
         }],
+        groups: Vec::new(),
     }
 }
 

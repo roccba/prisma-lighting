@@ -93,6 +93,7 @@ fn build_patch(width: u32, xs: &[f32], zones: &[(&str, Vec<u32>, i32, BlendMode)
                 world_transform: None,
             })
             .collect(),
+        groups: Vec::new(),
     }
 }
 

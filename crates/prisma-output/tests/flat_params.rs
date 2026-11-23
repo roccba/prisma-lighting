@@ -63,6 +63,7 @@ fn two_pixel_patch(gamma: f32) -> Patch {
             zone: Uuid::nil(),
         }],
         zones: vec![],
+        groups: Vec::new(),
     }
 }
 

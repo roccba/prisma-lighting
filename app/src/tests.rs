@@ -137,6 +137,9 @@ fn ui_fixture() -> serde_json::Value {
         "main_last_saved": null,
         "main_recovery_info": null,
         "editor_preview_port": 0,
+        // The patch editor on the demo rig (the harness opens it with `?window=editor`).
+        "editor_get_state": state_of(&PatchDraft::new(show.patch.clone())),
+        "editor_fixture_types": FixtureLibrary::seed().types,
         "control_keys": prisma_engine::keys::default_bindings(),
         "midi_status": midi,
     })

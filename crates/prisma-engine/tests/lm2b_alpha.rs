@@ -84,6 +84,7 @@ fn rig(width: u32, zones: &[(&[u32], i32)]) -> Patch {
                 world_transform: None,
             })
             .collect(),
+        groups: Vec::new(),
     }
 }
 

@@ -54,6 +54,7 @@ pub(crate) fn empty_patch() -> Patch {
             display_color: ZONE_COLORS[0],
             world_transform: None,
         }],
+        groups: Vec::new(),
     };
     patch.fill_zone_members_from_ownership();
     patch.fit_matrix_size();

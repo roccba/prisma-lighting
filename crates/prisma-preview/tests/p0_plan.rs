@@ -68,6 +68,7 @@ fn two_pixel_patch(gamma: f32, components: ComponentSet, order: ColorOrder) -> P
             zone: Uuid::nil(),
         }],
         zones: vec![],
+        groups: Vec::new(),
     }
 }
 

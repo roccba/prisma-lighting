@@ -99,6 +99,7 @@ fn build_patch(width: u32, zones: &[(&str, &[u32], u32, BlendMode)]) -> Patch {
                 world_transform: None,
             })
             .collect(),
+        groups: Vec::new(),
     }
 }
 
@@ -418,6 +419,7 @@ fn an_empty_patch_compiles_and_renders() {
         matrix_size: [1, 1, 1],
         fixtures: vec![],
         zones: vec![],
+        groups: Vec::new(),
     };
     patch.fit_matrix_size();
     assert_eq!(patch.matrix_size, [1, 1, 1]);
