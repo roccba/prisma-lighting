@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { EditorState, Group, Patch, Rgb } from "./api";
 import { addGroup, removeGroup, renameGroup, setGroupColor, setGroupMembers } from "./api";
 import { RenameInput } from "./cellParts";
+import { ColorPicker } from "./ColorPicker";
 import { ArrowDown, ArrowUp, Minus, Pencil, Plus } from "./icons";
 import { Splitter, loadPaneHeight, savePaneHeight } from "./Splitter";
 
@@ -22,8 +23,7 @@ interface Props {
   onError: (msg: string) => void;
 }
 
-const hex = (c: Rgb) => "#" + c.map((v) => v.toString(16).padStart(2, "0")).join("");
-const rgb = (h: string): Rgb => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)) as Rgb;
+const css = (c: Rgb) => `rgb(${c.join(",")})`;
 
 /** Move the members in `picked` one place earlier (`-1`) or later (`+1`), keeping their
  *  relative order; a block already at the edge stays. */
@@ -49,6 +49,19 @@ export function GroupsPanel(p: Props) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const active = groups.find((g) => g.id === activeId) ?? null;
+  // The app's colour selector, open on one group's swatch. The swatch follows the drag
+  // live; closing stores the colour once (one undo step). The ref holds the latest pick,
+  // so a pick and a close in the same gesture are not lost.
+  const [picker, setPicker] = useState<{ group: string; anchor: DOMRect; color: Rgb } | null>(null);
+  const picked = useRef<Rgb | null>(null);
+  const closePicker = () => {
+    const open = picker;
+    const color = picked.current;
+    setPicker(null);
+    picked.current = null;
+    const g = open && groups.find((x) => x.id === open.group);
+    if (g && color && color.join() !== g.display_color.join()) void run(() => setGroupColor(g.id, color));
+  };
 
   const run = async (op: () => Promise<EditorState>) => {
     try {
@@ -158,15 +171,18 @@ export function GroupsPanel(p: Props) {
               onClick={() => pick(g)}
               onDoubleClick={() => setRenaming(g.id)}
             >
-              <label className="zc group-swatch" style={{ background: hex(g.display_color) }} title="Color del grupo">
-                <input
-                  type="color"
-                  value={hex(g.display_color)}
-                  aria-label={`Color de ${g.name}`}
-                  onClick={(e) => e.stopPropagation()}
-                  onChange={(e) => void run(() => setGroupColor(g.id, rgb(e.target.value)))}
-                />
-              </label>
+              <button
+                type="button"
+                className="zc group-swatch"
+                style={{ background: css(picker?.group === g.id ? picker.color : g.display_color) }}
+                title="Color del grupo"
+                aria-label={`Color de ${g.name}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  picked.current = null;
+                  setPicker({ group: g.id, anchor: e.currentTarget.getBoundingClientRect(), color: g.display_color });
+                }}
+              />
               {renaming === g.id ? (
                 <RenameInput
                   initial={g.name}
@@ -248,6 +264,17 @@ export function GroupsPanel(p: Props) {
           </>
         )}
       </section>
+      {picker && (
+        <ColorPicker
+          anchor={picker.anchor}
+          value={picker.color}
+          onChange={(color) => {
+            picked.current = color;
+            setPicker((p) => (p ? { ...p, color } : p));
+          }}
+          onClose={closePicker}
+        />
+      )}
     </>
   );
 }

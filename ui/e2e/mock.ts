@@ -92,7 +92,10 @@ function groupEdit(cmd: string, a: Record<string, unknown>): unknown {
     let n = 1;
     while (gs.some((x) => x.name.toLowerCase() === `grupo ${n}`)) n++;
     const id = `00000000-0000-4000-8000-${String(++groupSeq).padStart(12, "0")}`;
-    gs.push({ id, name: `Grupo ${n}`, members: [...new Set(a.members as string[])], display_color: [69, 123, 157] });
+    // As the app: the first palette colour no group uses.
+    const palette = [[230, 85, 85], [240, 160, 60], [225, 205, 70], [140, 200, 80]];
+    const color = palette.find((c) => !gs.some((x) => x.display_color.join() === c.join())) ?? palette[0];
+    gs.push({ id, name: `Grupo ${n}`, members: [...new Set(a.members as string[])], display_color: color });
     editorState().can_undo = true;
     return [structuredClone(fx.editor_get_state), id];
   }

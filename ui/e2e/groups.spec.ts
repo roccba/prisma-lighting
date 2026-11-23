@@ -99,3 +99,31 @@ for (const viewport of VIEWPORTS) {
     await expect(page.locator(".group-members .pr-listrow").first()).toBeInViewport();
   });
 }
+
+test("each new group gets its own colour; the app's colour selector changes it", async ({ page }) => {
+  await openEditor(page);
+  const fixtures = page.locator(".fixture-list .pr-listrow");
+  for (const i of [0, 1]) {
+    await fixtures.nth(i).click();
+    await page.getByRole("button", { name: "Crear grupo" }).click();
+    await page.getByRole("textbox", { name: "Nombre del grupo" }).press("Enter");
+  }
+  const swatches = page.locator(".group-list .group-swatch");
+  const colours = await swatches.evaluateAll((s) => s.map((e) => getComputedStyle(e).backgroundColor));
+  expect(colours).toHaveLength(2);
+  expect(colours[0]).not.toBe(colours[1]);
+
+  // The swatch opens the app's selector (not the system one); a quick colour picks and
+  // closes, stored as one edit.
+  await clearCalls(page);
+  await swatches.nth(1).click();
+  const picker = page.getByRole("dialog", { name: "Selector de color" });
+  await expect(picker).toBeVisible();
+  await expect(page.locator("input[type=color]")).toHaveCount(0);
+  await picker.locator('[data-cpick="rgb"][data-rgb="255,0,0"]').first().click();
+  await expect(picker).toHaveCount(0);
+  expect(await calls(page, "editor_set_group_color")).toEqual([{ group: expect.any(String), color: [255, 0, 0] }]);
+  await expect(swatches.nth(1)).toHaveCSS("background-color", "rgb(255, 0, 0)");
+  // Opening the selector does not pick the group (the row click is not triggered).
+  await expect(page.locator(".group-list .pr-listrow.is-sel")).toHaveCount(1);
+});

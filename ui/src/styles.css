@@ -283,8 +283,8 @@ html, body, #root {
    the rest. The swatch is a label over a hidden colour input (click = system picker). */
 .groups-sector .group-list { flex: 0 1 auto; max-height: 40%; }
 .groups-sector .group-members { flex: 1 1 auto; }
-.group-swatch { position: relative; cursor: pointer; }
-.group-swatch input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; border: 0; padding: 0; }
+.group-swatch { cursor: pointer; border: 0; padding: 0; width: 12px; height: 12px; }
+.group-swatch:hover { outline: 1px solid var(--text); }
 .group-member-actions { flex: none; display: flex; gap: 3px; padding: 4px 8px; border-bottom: 1px solid var(--line); }
 .group-member-actions .pr-btn { height: 22px; font-size: var(--fs-tiny); display: inline-flex; align-items: center; gap: 3px; padding: 0 6px; }
 .group-member-actions .pr-btn-icon { width: 24px; padding: 0; justify-content: center; }

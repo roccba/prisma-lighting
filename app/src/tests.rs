@@ -319,3 +319,20 @@ fn track_names_and_moves_never_panic() {
     move_track(&mut show.tracks, first, Some(Uuid::new_v4()));
     assert_eq!(show.tracks.iter().map(|t| t.id).collect::<Vec<_>>(), before);
 }
+
+#[test]
+fn a_new_group_gets_a_colour_no_group_has() {
+    let g = |c: [u8; 3]| Group {
+        id: Uuid::new_v4(),
+        name: String::new(),
+        members: vec![],
+        display_color: c,
+    };
+    assert_eq!(next_group_color(&[]), GROUP_COLORS[0]);
+    // The first free one, even with a gap left by a deleted or recoloured group.
+    let taken = [g(GROUP_COLORS[0]), g(GROUP_COLORS[2])];
+    assert_eq!(next_group_color(&taken), GROUP_COLORS[1]);
+    // All taken: the palette repeats.
+    let all: Vec<Group> = GROUP_COLORS.iter().map(|&c| g(c)).collect();
+    assert_eq!(next_group_color(&all), GROUP_COLORS[0]);
+}

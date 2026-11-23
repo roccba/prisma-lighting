@@ -455,6 +455,32 @@ fn group_name_clash(draft: &PatchDraft, name: &str, except: Option<Uuid>) -> boo
         .any(|g| Some(g.id) != except && g.name.trim().to_lowercase() == name.to_lowercase())
 }
 
+/// The colours new groups get, in order (LIVE-MODEL-SPEC §8.5 step 1): distinct hues of
+/// similar weight, so a group master or a canvas mark is told apart at a glance.
+pub(crate) const GROUP_COLORS: [[u8; 3]; 12] = [
+    [230, 85, 85],   // red
+    [240, 160, 60],  // orange
+    [225, 205, 70],  // yellow
+    [140, 200, 80],  // lime
+    [60, 180, 110],  // green
+    [60, 190, 190],  // cyan
+    [70, 140, 225],  // blue
+    [120, 105, 220], // indigo
+    [175, 95, 210],  // purple
+    [225, 95, 170],  // pink
+    [165, 120, 80],  // brown
+    [160, 165, 175], // grey
+];
+
+/// The first palette colour no group uses; when all are taken, the palette repeats.
+pub(crate) fn next_group_color(groups: &[Group]) -> [u8; 3] {
+    GROUP_COLORS
+        .iter()
+        .copied()
+        .find(|c| !groups.iter().any(|g| g.display_color == *c))
+        .unwrap_or(GROUP_COLORS[groups.len() % GROUP_COLORS.len()])
+}
+
 /// Create a group from `members` (fixture ids in selection order; may be empty), named
 /// "Grupo n" with the smallest free n, appended to the list (undoable).
 #[tauri::command]
@@ -477,7 +503,7 @@ pub fn editor_add_group(
         id: Uuid::new_v4(),
         name: format!("Grupo {n}"),
         members: seen,
-        display_color: ZONE_COLORS[at % ZONE_COLORS.len()],
+        display_color: next_group_color(&draft.patch().groups),
     };
     let id = group.id;
     draft
