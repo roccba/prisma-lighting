@@ -121,6 +121,9 @@ pub trait ClipHost: Send + Sync {
     /// A knob changed parameter `name` of `track`'s clip `clip` (normalized `0..=1`):
     /// store it in the clip, like the parameter panel does.
     fn param_stored(&self, _track: Uuid, _clip: usize, _name: &str, _value_norm: f32) {}
+    /// Scene row `row` was fired (launched, or armed) by any transport — the screen, the
+    /// keyboard, a controller. A confirmation of the press for the UI, not a state.
+    fn scene_fired(&self, _row: usize) {}
 }
 
 /// How many `/select/param/{n}` knob targets exist (more than any manifest has
@@ -698,6 +701,7 @@ impl Controller {
 
     /// Launch (or arm) row `row` on every track that has a clip there, in one frame.
     fn scene(&mut self, row: usize, arm: bool) {
+        self.host.scene_fired(row);
         let mut batch = Vec::new();
         for slot in 0..self.tracks.len() {
             let track = self.tracks[slot].track;

@@ -99,6 +99,7 @@ fn show() -> Show {
 struct Host {
     show: Mutex<Option<Show>>,
     selection: Mutex<Vec<(Option<Uuid>, Option<usize>)>>,
+    scenes_fired: Mutex<Vec<usize>>,
 }
 
 impl ClipHost for Host {
@@ -132,6 +133,9 @@ impl ClipHost for Host {
     }
     fn selection_changed(&self, track: Option<Uuid>, clip: Option<usize>) {
         self.selection.lock().unwrap().push((track, clip));
+    }
+    fn scene_fired(&self, row: usize) {
+        self.scenes_fired.lock().unwrap().push(row);
     }
     fn param_stored(&self, track: Uuid, clip: usize, name: &str, value: f32) {
         let mut show = self.show.lock().unwrap();
@@ -267,6 +271,14 @@ fn pads_knobs_and_selection_through_the_engine() {
     wait_for("move right keeps the row", || {
         host.last_selection() == Some((Some(tb), Some(0)))
     });
+    // A scene fired by its path (what the keyboard and a controller write) is reported to
+    // the host, launched or armed — the UI flashes it.
+    assert!(engine.activate_path("/scene/1/launch"));
+    assert!(engine.activate_path("/scene/0/arm"));
+    wait_for("both scene fires reported", || {
+        *host.scenes_fired.lock().unwrap() == [1, 0]
+    });
+
     // Toggles flip (blackout), levels are not actions.
     assert!(engine.activate_path("/master/blackout"));
     wait_for("blackout on the wire", || dark(px(0)) && dark(px(3)));

@@ -580,10 +580,6 @@ export const launchScene = (row: number, arm = false) => invoke<void>("main_laun
 /** Rename a scene row (empty = back to its number). A label only. */
 export const renameScene = (row: number, name: string) => invoke<void>("main_rename_scene", { row, name });
 
-/** A scene row's own colour on the scene column (sRGB 0–255). A label only. */
-export const setSceneColor = (row: number, color: [number, number, number]) =>
-  invoke<void>("main_set_scene_color", { row, color });
-
 /** GO: play every armed clip in the same frame. */
 export const armGo = () => invoke<void>("main_arm_go");
 

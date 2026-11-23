@@ -74,6 +74,10 @@ export async function drag(page: Page, from: { x: number; y: number }, dx: numbe
 export async function enterLearn(page: Page) {
   await page.keyboard.press("Control+m");
   await expect(page.locator(".pr-learn-ind")).toBeVisible();
+  // Learn mode re-reads the mappings asynchronously: wait for their labels to be drawn, or
+  // a screenshot can catch some controls before and some after (a flaky reference).
+  await expect(page.locator("[data-learn-badge]").first()).toBeAttached();
+  await page.waitForTimeout(150);
 }
 
 export interface Box {

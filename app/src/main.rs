@@ -1336,6 +1336,12 @@ impl ClipHost for AppCellHost {
             params.set(name, value_norm);
         }
     }
+
+    /// A scene row fired (any transport): the scene column flashes it — a confirmation of
+    /// the press, not a state.
+    fn scene_fired(&self, row: usize) {
+        let _ = self.app.emit("scene-fired", row);
+    }
 }
 
 /// The selection, as the UI receives it.
@@ -3011,13 +3017,6 @@ fn main_rename_scene(state: State<AppState>, row: usize, name: String) {
     scene_label(&mut show, row).name = (!name.is_empty()).then(|| name.to_string());
 }
 
-/// Give a scene its own colour on the scene column (sRGB 0–255). A label only.
-#[tauri::command]
-fn main_set_scene_color(state: State<AppState>, row: usize, color: [u8; 3]) {
-    let mut show = state.show.lock().unwrap();
-    scene_label(&mut show, row).color = Some(color);
-}
-
 /// Launch grid row `row` on every track that has a clip there (`arm` = arm instead).
 #[tauri::command]
 fn main_launch_scene(state: State<AppState>, row: usize, arm: bool) {
@@ -3402,7 +3401,6 @@ fn main() {
             main_stop_track,
             main_launch_scene,
             main_rename_scene,
-            main_set_scene_color,
             main_arm_go,
             main_set_track_opacity,
             main_set_track_mute,

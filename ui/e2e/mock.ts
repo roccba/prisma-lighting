@@ -21,6 +21,8 @@ const fx = fixture as unknown as Fixture;
 window.__calls = [];
 // The live fixture, for a test to set up a state (an armed clip…) before rendering.
 (window as unknown as { __fixture: Fixture }).__fixture = fx;
+// What the engine emits, for a test to play an event from elsewhere (a controller, a key).
+(window as unknown as { __emit: typeof emit }).__emit = emit;
 
 // --- Writes the UI tests read back. Kept to what the app does with them: a stored
 // parameter changes the cell's panel values and, for a Color cell, its effect colour (the
@@ -74,10 +76,14 @@ mockIPC(
     if (cmd === "plugin:window|is_maximized") return true;
     if (cmd === "main_set_param") return setParamLike(a.track as string, a.cell as number | null, a.name as string, a.value as number);
     if (cmd === "main_set_cell_color") return setCellColorLike(a.track as string, a.index as number, a.color as number[]);
-    if (cmd === "main_rename_scene" || cmd === "main_set_scene_color") {
-      const scene = (fx.main_grid as { scenes: { name: string | null; color: number[] | null }[] }).scenes[a.row as number];
-      if (scene && cmd === "main_rename_scene") scene.name = (a.name as string).trim() || null;
-      if (scene && cmd === "main_set_scene_color") scene.color = a.color as number[];
+    if (cmd === "main_rename_scene") {
+      const scene = (fx.main_grid as { scenes: { name: string | null }[] }).scenes[a.row as number];
+      if (scene) scene.name = (a.name as string).trim() || null;
+      return null;
+    }
+    // The engine reports every fired scene (any transport): the UI flashes it.
+    if (cmd === "main_launch_scene") {
+      setTimeout(() => emit("scene-fired", a.row).catch(() => {}), 0);
       return null;
     }
     if (cmd === "main_effect_panel") {

@@ -9,7 +9,6 @@ import {
   grid as fetchGrid,
   launchScene,
   renameScene,
-  setSceneColor,
   moveTrack,
   PARAM_STORED,
   removeTrack,
@@ -86,6 +85,9 @@ interface TrackGridProps {
 
 const EMPTY: GridInfo = { tracks: [], scenes: [] };
 
+/** How long a fired scene's button flashes (a confirmation, under half a second). */
+const SCENE_FLASH_MS = 350;
+
 
 /** What a cell shows when it has no label colour: its effect's main colour, in the
  *  grid's 0–255 sRGB (the effect keeps it in linear light). */
@@ -138,16 +140,25 @@ export function TrackGrid({
   const [editing, setEditing] = useState<{ track: string; index: number } | null>(null);
   const [renamingTrack, setRenamingTrack] = useState<string | null>(null);
   const [color, setColor] = useState<ColorState | null>(null);
-  // The scene column: right-click → Renombrar (in place), Color…, Armar escena; a plain
-  // click still launches the scene.
+  // The scene column: right-click → Renombrar (in place) or Armar escena; a plain click
+  // launches the scene. A scene button is a trigger like GO: it holds no state. When a
+  // scene fires — from the screen, the keyboard or a controller — its button flashes once,
+  // a confirmation of the press (`n` remounts it so a second fire restarts the flash).
   const [sceneMenu, setSceneMenu] = useState<{ row: number; x: number; y: number } | null>(null);
   const [renamingScene, setRenamingScene] = useState<number | null>(null);
-  const [sceneColor, setSceneColorState] = useState<{ row: number; anchor: DOMRect; original: Rgb | null; value: Rgb } | null>(
-    null,
-  );
-  const sceneColorRef = useRef(sceneColor);
-  sceneColorRef.current = sceneColor;
-  const sceneEls = useRef(new Map<number, HTMLButtonElement>());
+  const [fired, setFired] = useState<{ row: number; n: number } | null>(null);
+  useEffect(() => {
+    let timer: number | undefined;
+    const un = listen<number>("scene-fired", (e) => {
+      setFired((f) => ({ row: e.payload, n: (f?.n ?? 0) + 1 }));
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setFired(null), SCENE_FLASH_MS);
+    });
+    return () => {
+      window.clearTimeout(timer);
+      un.then((f) => f()).catch(() => {});
+    };
+  }, []);
   // The cell copy buffer: a whole clip (effect + params + colour table + label + colour).
   const [clipboard, setClipboard] = useState<CellInfo | null>(null);
   const cellEls = useRef(new Map<string, HTMLDivElement>());
@@ -474,9 +485,7 @@ export function TrackGrid({
     return { column: at + 1, side: before ? ("before" as const) : ("after" as const) };
   })();
   const menuCell = menu ? cellOf(menu.track, menu.index) : undefined;
-  // A scene's colour on the column: the one being picked (previewed), else its own.
-  const sceneShown = (row: number): Rgb | null =>
-    sceneColor?.row === row && sceneColor.value !== NO_COLOR ? sceneColor.value : (g.scenes[row]?.color ?? null);
+
   const headTrack = headMenu ? track(headMenu.track) : undefined;
   const settingsTrack = settings ? track(settings.track) : undefined;
   const dialogSlot = dialog ? g.tracks.findIndex((t) => t.id === dialog) : -1;
@@ -789,15 +798,9 @@ export function TrackGrid({
             ) : (
             <Learnable target={sceneTarget(row)} name={`Escena ${row + 1}`}>
               <button
-                ref={(el) => {
-                  if (el) sceneEls.current.set(row, el);
-                  else sceneEls.current.delete(row);
-                }}
+                key={fired?.row === row ? `fired-${fired.n}` : "idle"}
                 type="button"
-                className={`pr-btn pr-scene-btn${sceneShown(row) ? " has-color" : ""}`}
-                style={
-                  sceneShown(row) ? ({ "--scene-rgb": sceneShown(row)!.join(", ") } as React.CSSProperties) : undefined
-                }
+                className={`pr-btn pr-scene-btn${fired?.row === row ? " is-fired" : ""}`}
                 onClick={(e) => launchScene(row, armMode || e.shiftKey).catch(() => {})}
                 onContextMenu={(e) => {
                   e.preventDefault();
@@ -805,8 +808,8 @@ export function TrackGrid({
                 }}
                 title={
                   armMode
-                    ? "Armar la escena en todos los tracks (clic derecho: renombrar, color)"
-                    : `Lanzar la escena en todos los tracks (Shift = armar${row < 9 ? ` · tecla ${row + 1}` : ""} · clic derecho: renombrar, color)`
+                    ? "Armar la escena en todos los tracks (clic derecho: renombrar)"
+                    : `Lanzar la escena en todos los tracks (Shift = armar${row < 9 ? ` · tecla ${row + 1}` : ""} · clic derecho: renombrar)`
                 }
               >
                 ▶ {g.scenes[row]?.name ?? row + 1}
@@ -924,39 +927,9 @@ export function TrackGrid({
           onClose={() => setSceneMenu(null)}
           items={[
             { label: "Renombrar", onSelect: () => setRenamingScene(sceneMenu.row) },
-            {
-              label: "Color…",
-              onSelect: () => {
-                const el = sceneEls.current.get(sceneMenu.row);
-                if (!el) return;
-                const original = g.scenes[sceneMenu.row]?.color ?? null;
-                setSceneColorState({ row: sceneMenu.row, anchor: el.getBoundingClientRect(), original, value: original ?? NO_COLOR });
-              },
-            },
             "sep",
             { label: "Armar escena", onSelect: () => void launchScene(sceneMenu.row, true).catch(() => {}) },
           ]}
-        />
-      )}
-      {sceneColor && (
-        <CellColorPopover
-          cell={sceneColor.anchor}
-          value={sceneColor.value}
-          onChange={(rgb) => {
-            if (sceneColorRef.current) sceneColorRef.current = { ...sceneColorRef.current, value: rgb };
-            setSceneColorState((c) => (c ? { ...c, value: rgb } : c));
-          }}
-          onClose={() => {
-            const c = sceneColorRef.current;
-            setSceneColorState(null);
-            if (!c) return;
-            const changed = !c.original || c.original.some((v, i) => v !== c.value[i]);
-            if (changed && !(c.original === null && c.value === NO_COLOR)) {
-              setSceneColor(c.row, c.value)
-                .then(refresh)
-                .catch(() => {});
-            }
-          }}
         />
       )}
       {color && <CellColorPopover cell={color.cell} value={color.value} onChange={onColorChange} onClose={onColorClose} />}
