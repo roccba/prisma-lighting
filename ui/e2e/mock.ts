@@ -19,6 +19,8 @@ type Fixture = Record<string, unknown> & {
 const fx = fixture as unknown as Fixture;
 
 window.__calls = [];
+// The live fixture, for a test to set up a state (an armed clip…) before rendering.
+(window as unknown as { __fixture: Fixture }).__fixture = fx;
 
 // --- Writes the UI tests read back. Kept to what the app does with them: a stored
 // parameter changes the cell's panel values and, for a Color cell, its effect colour (the

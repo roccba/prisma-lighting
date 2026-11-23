@@ -23,7 +23,7 @@ import {
   type ZoneInfo,
 } from "./api";
 import { ControlDialog } from "./ControlDialog";
-import { comboOf, focusKind, isBound, isModifierOnly, isReserved } from "./keyboard";
+import { KEYBOARD_OWNERS, shortcutFor } from "./keyboard";
 import { DeviceManager } from "./DeviceManager";
 import { MenuBar, type MenuDef } from "./MenuBar";
 import { EffectParams } from "./EffectParams";
@@ -207,19 +207,8 @@ function MainWindowBody() {
   const learnRef = useRef(false);
   learnRef.current = learn.active;
   useEffect(() => {
-    const blocked = () =>
-      learnRef.current ||
-      document.querySelector('[role="dialog"], [role="menu"], [role="listbox"], .pr-midimenu, .pr-dirmenu-pop, .pr-menu-drop') !== null;
-    const shortcut = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.repeat || isModifierOnly(e) || blocked()) return null;
-      const combo = comboOf(e);
-      if (isReserved(combo) || !isBound(keysRef.current, combo)) return null;
-      // Where the key was pressed — not `document.activeElement`: a field that blurs
-      // itself on Enter (the R / G / B boxes) has already handed the focus to the body by
-      // the time the window sees the key, and Enter would launch the selected clip.
-      const focus = focusKind(e.target instanceof Element ? e.target : document.activeElement);
-      return focus === "other" ? { combo, focus } : null;
-    };
+    const blocked = () => learnRef.current || document.querySelector(KEYBOARD_OWNERS) !== null;
+    const shortcut = (e: KeyboardEvent) => shortcutFor(e, keysRef.current, blocked());
     const onDown = (e: KeyboardEvent) => {
       const hit = shortcut(e);
       if (!hit) return;

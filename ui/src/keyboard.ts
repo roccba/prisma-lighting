@@ -79,3 +79,28 @@ export function isReserved(c: KeyCombo): boolean {
   const menu = c.ctrl && !c.alt && !c.shift && ["N", "O", "S", "M"].includes(c.key);
   return f || menu;
 }
+
+/** The selectors of what owns the keyboard while it is open: no shortcut fires then. */
+export const KEYBOARD_OWNERS =
+  '[role="dialog"], [role="menu"], [role="listbox"], .pr-midimenu, .pr-dirmenu-pop, .pr-menu-drop';
+
+/**
+ * Whether a key event is offered to the shortcuts — the window's one decision before Rust's
+ * (`dispatch`) — and with which combo. `null` when: the page already handled it, a repeat,
+ * a lone modifier, `blocked` (MIDI learn or something that owns the keyboard is open), a
+ * menu key, a combo no shortcut uses, or a key pressed in a text or numeric field. The field
+ * is the event's target — where the key was pressed — not `document.activeElement`: a field
+ * that blurs itself on Enter (the R / G / B boxes) has already handed the focus to the body
+ * by the time the window sees the key.
+ */
+export function shortcutFor(
+  e: KeyboardEvent,
+  keys: KeyBinding[],
+  blocked: boolean,
+): { combo: KeyCombo; focus: FocusKind } | null {
+  if (e.defaultPrevented || e.repeat || isModifierOnly(e) || blocked) return null;
+  const combo = comboOf(e);
+  if (isReserved(combo) || !isBound(keys, combo)) return null;
+  const focus = focusKind(e.target instanceof Element ? e.target : document.activeElement);
+  return focus === "other" ? { combo, focus } : null;
+}

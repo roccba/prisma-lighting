@@ -9,7 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test:e2e": "podman run --rm -v \"$PWD\":/ui:z -w /ui --ipc=host mcr.microsoft.com/playwright:v1.65.1-noble npx playwright test --grep-invert @screenshot",
-    "test:e2e:screens": "podman run --rm -v \"$PWD\":/ui:z -w /ui --ipc=host mcr.microsoft.com/playwright:v1.65.1-noble npx playwright test --project=webkit"
+    "test:e2e:screens": "podman run --rm -v \"$PWD\":/ui:z -w /ui --ipc=host mcr.microsoft.com/playwright:v1.65.1-noble npx playwright test --project=webkit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -19,10 +20,14 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.65.1",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^26.1.0",
     "typescript": "^5.6.3",
-    "vite": "^5.4.11"
+    "vite": "^5.4.11",
+    "vitest": "^3.2.7"
   }
 }

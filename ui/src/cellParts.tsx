@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ColorPicker, type Rgb } from "./ColorPicker";
+import type { CellInfo } from "./api";
 
 // The pieces of a grid cell shared by the track grid: the in-place rename field, the
 // right-click menu, the cell colour popover and the light/dark ink rule.
@@ -231,4 +232,14 @@ export function CellColorPopover({
       <ColorPicker anchor={anchor} value={value} onChange={onChange} onClose={onClose} />
     </>
   );
+}
+
+/** A cell's state, in the words the whole UI uses (LIVE-MODEL-SPEC §7): Vacía (no effect),
+ *  Cargada (an effect, not playing), En vivo (the track's running clip), Armada (waiting
+ *  for GO). A running clip reads En vivo even while a new arm is pending elsewhere. */
+export function cellState(cell: Pick<CellInfo, "effect_id" | "active" | "armed">): string {
+  if (!cell.effect_id) return "Vacía";
+  if (cell.active) return "En vivo";
+  if (cell.armed) return "Armada";
+  return "Cargada";
 }

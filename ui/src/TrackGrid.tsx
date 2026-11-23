@@ -35,7 +35,7 @@ import {
   type TrackTransition,
   type ZoneInfo,
 } from "./api";
-import { CellColorPopover, CellMenu, isLightCell, NO_COLOR, RenameInput, type MenuItem } from "./cellParts";
+import { CellColorPopover, CellMenu, cellState, isLightCell, NO_COLOR, RenameInput, type MenuItem } from "./cellParts";
 import { type Rgb } from "./ColorPicker";
 import { LearnTarget, useMidiLearn } from "./midiLearn";
 import { BlendFields, blendLabel, TrackDialog, TransitionFields } from "./TrackDialog";
@@ -86,13 +86,6 @@ interface TrackGridProps {
 
 const EMPTY: GridInfo = { tracks: [], scenes: [] };
 
-/** A cell's state, in the words the whole UI uses (LIVE-MODEL-SPEC §7). */
-function cellState(cell: CellInfo): string {
-  if (!cell.effect_id) return "Vacía";
-  if (cell.active) return "En vivo";
-  if (cell.armed) return "Armada";
-  return "Cargada";
-}
 
 /** What a cell shows when it has no label colour: its effect's main colour, in the
  *  grid's 0–255 sRGB (the effect keeps it in linear light). */
