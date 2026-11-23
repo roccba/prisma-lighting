@@ -7,7 +7,7 @@ use super::*;
 /// for the Device Manager. Universe numbers are raw port addresses (the UI shows +1).
 #[tauri::command]
 pub fn main_output_get(state: State<AppState>) -> ShowNetwork {
-    state.show.lock().unwrap().network.clone()
+    state.show.locked().network.clone()
 }
 
 /// Apply the Device Manager's staged config (Aplicar / Aceptar) to the running show and
@@ -96,7 +96,7 @@ pub(crate) struct OutputStatusInfo {
 
 #[tauri::command]
 pub fn main_output_status(state: State<AppState>) -> Result<OutputStatusInfo, String> {
-    let guard = state.engine.lock().unwrap();
+    let guard = state.engine.locked();
     let engine = guard.as_ref().ok_or("engine is not running")?;
     let routing = engine.output_routing();
     let (interface_state, interface) = match &routing.interface {
@@ -153,7 +153,7 @@ impl From<&DiscoveredNode> for ScannedNodeInfo {
 /// changes reach the UI as `artnet-node-status` events (`[{ip, status}]`).
 pub(crate) fn ensure_artnet_monitor(app: &AppHandle) -> Result<Arc<NodeMonitor>, String> {
     let state = app.state::<AppState>();
-    let mut slot = state.artnet_monitor.lock().unwrap();
+    let mut slot = state.artnet_monitor.locked();
     if let Some(m) = slot.as_ref() {
         return Ok(Arc::clone(m));
     }
@@ -182,14 +182,13 @@ pub(crate) fn ensure_artnet_monitor(app: &AppHandle) -> Result<Arc<NodeMonitor>,
 pub(crate) fn watch_show_nodes(state: &AppState) {
     let ips: Vec<Ipv4Addr> = state
         .show
-        .lock()
-        .unwrap()
+        .locked()
         .network
         .nodes
         .iter()
         .map(|n| n.ip)
         .collect();
-    if let Some(m) = state.artnet_monitor.lock().unwrap().as_ref() {
+    if let Some(m) = state.artnet_monitor.locked().as_ref() {
         m.set_watched(ips);
     }
 }
@@ -220,13 +219,12 @@ impl NodeStatusInfo {
 /// is not running (port held).
 #[tauri::command]
 pub fn main_node_statuses(state: State<AppState>) -> Vec<NodeStatusInfo> {
-    let Some(monitor) = state.artnet_monitor.lock().unwrap().clone() else {
+    let Some(monitor) = state.artnet_monitor.locked().clone() else {
         return Vec::new();
     };
     let ips: Vec<Ipv4Addr> = state
         .show
-        .lock()
-        .unwrap()
+        .locked()
         .network
         .nodes
         .iter()

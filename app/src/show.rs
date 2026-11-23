@@ -175,8 +175,8 @@ pub(crate) fn fold_live_into_show(engine: &EngineHandle, show: &mut Show) {
 /// folded in, serialized like a `.prisma`. Never holds the show and engine locks
 /// together (the show is cloned first).
 pub(crate) fn show_snapshot(state: &AppState) -> Result<String, String> {
-    let mut show = state.show.lock().unwrap().clone();
-    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+    let mut show = state.show.locked().clone();
+    if let Some(engine) = state.engine.locked().as_ref() {
         fold_live_into_show(engine, &mut show);
     }
     save_show(&show).map_err(|e| e.to_string())
@@ -185,7 +185,7 @@ pub(crate) fn show_snapshot(state: &AppState) -> Result<String, String> {
 /// The operator saved or opened `snapshot`: it is the clean state the autosave compares
 /// against from now on.
 pub(crate) fn mark_saved(state: &AppState, snapshot: String) {
-    let mut g = state.autosave_state.lock().unwrap();
+    let mut g = state.autosave_state.locked();
     let (baseline, last) = &mut *g;
     autosave::mark_clean(baseline, last, snapshot);
 }
@@ -200,7 +200,7 @@ pub(crate) struct RecoveryInfo {
 /// Taken once by the main window at boot: `Some` if this session was recovered.
 #[tauri::command]
 pub fn main_recovery_info(state: State<AppState>) -> Option<RecoveryInfo> {
-    state.recovered.lock().unwrap().take()
+    state.recovered.locked().take()
 }
 
 /// The last opened or saved show file, if any (Archivo → "Abrir el último guardado").
@@ -263,26 +263,26 @@ pub(crate) fn run_show(app: &AppHandle, mut show: Show, path: Option<&Path>) -> 
     show.patch.fit_matrix_size();
     show.patch.compile().map_err(|e| e.to_string())?;
     pad_grids(&mut show);
-    prepare_show_network(&mut show, &state.network.lock().unwrap());
+    prepare_show_network(&mut show, &state.network.locked());
 
     let target = virtual_sink();
     let (config, port) = preview_config(AdapterPreference::Software, target);
-    let mut guard = state.engine.lock().unwrap();
+    let mut guard = state.engine.locked();
     let engine = guard.take().ok_or("engine is not running")?;
     match engine.recompile_show(show.clone(), config) {
         Ok(new) => {
             new.set_frozen(false); // a freshly opened show plays
             *guard = Some(new);
             if let Some(port) = port {
-                *state.preview_port.lock().unwrap() = port;
+                *state.preview_port.locked() = port;
             }
             drop(guard);
             // Adopt the show + its patch as the editable state (so the editor, if opened
             // next, shows this rig), then tell the main window to re-fetch.
-            *state.draft.lock().unwrap() = PatchDraft::new(show.patch.clone());
-            *state.show.lock().unwrap() = show;
+            *state.draft.locked() = PatchDraft::new(show.patch.clone());
+            *state.show.locked() = show;
             watch_show_nodes(&state);
-            if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+            if let Some(engine) = state.engine.locked().as_ref() {
                 refresh_all_cells(engine);
             }
             write_last_show(&state.last_show_file, path);
@@ -307,8 +307,8 @@ pub(crate) fn recompile_running_show(
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
     let show = {
-        let mut show = state.show.lock().unwrap();
-        if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        let mut show = state.show.locked();
+        if let Some(engine) = state.engine.locked().as_ref() {
             fold_live_into_show(engine, &mut show);
         }
         edit(&mut show);
@@ -316,17 +316,17 @@ pub(crate) fn recompile_running_show(
         show.clone()
     };
     let (cfg, port) = preview_config(AdapterPreference::Software, virtual_sink());
-    let mut guard = state.engine.lock().unwrap();
+    let mut guard = state.engine.locked();
     let engine = guard.take().ok_or("engine is not running")?;
     let (bpm, frozen) = (engine.bpm(), engine.is_frozen());
     match engine.recompile_show(show, cfg) {
         Ok(new) => {
             new.set_frozen(frozen);
             new.set_bpm(bpm);
-            state.armed.lock().unwrap().clear();
+            state.armed.locked().clear();
             *guard = Some(new);
             if let Some(port) = port {
-                *state.preview_port.lock().unwrap() = port;
+                *state.preview_port.locked() = port;
             }
             drop(guard);
             watch_show_nodes(&state);

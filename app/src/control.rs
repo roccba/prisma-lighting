@@ -16,7 +16,7 @@ pub(crate) struct SelectionInfo {
 #[tauri::command]
 pub fn main_select(state: State<AppState>, track: Option<Uuid>, clip: Option<usize>) {
     let slot = track.and_then(|t| track_slot(&state, t));
-    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+    if let Some(engine) = state.engine.locked().as_ref() {
         engine.select(slot, slot.and(clip));
     }
 }
@@ -26,11 +26,10 @@ pub fn main_select(state: State<AppState>, track: Option<Uuid>, clip: Option<usi
 pub fn main_selection(state: State<AppState>) -> SelectionInfo {
     let (slot, clip) = state
         .engine
-        .lock()
-        .unwrap()
+        .locked()
         .as_ref()
         .map_or((None, None), |e| e.selection());
-    let track = slot.and_then(|s| state.show.lock().unwrap().tracks.get(s).map(|t| t.id));
+    let track = slot.and_then(|s| state.show.locked().tracks.get(s).map(|t| t.id));
     SelectionInfo { track, clip }
 }
 
@@ -49,8 +48,7 @@ pub fn main_key(app: AppHandle, combo: KeyCombo, focus: FocusKind) -> Option<Str
     }
     let done = state
         .engine
-        .lock()
-        .unwrap()
+        .locked()
         .as_ref()
         .is_some_and(|e| e.activate_path(path));
     if !done {

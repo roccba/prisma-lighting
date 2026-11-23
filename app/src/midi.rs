@@ -19,7 +19,7 @@ pub(crate) fn connect_midi(app: &AppHandle) {
     // default mappings, once, with a notice (LIVE-MODEL-SPEC §8.2).
     if let Some((profile, added)) = state.midi.seed_device_defaults() {
         if let Err(e) = persist_mappings(app, &profile) {
-            eprintln!("prisma: could not save controller mappings: {e}");
+            report_error(app, format!("No se pudieron guardar los mapeos MIDI: {e}"));
         }
         let _ = app.emit(
             "midi-seeded",
@@ -39,17 +39,17 @@ pub(crate) struct SeededInfo {
 }
 
 pub(crate) fn open_midi(state: &AppState) {
-    let mut link = state.midi_link.lock().unwrap();
-    let mut out_link = state.midi_out_link.lock().unwrap();
+    let mut link = state.midi_link.locked();
+    let mut out_link = state.midi_out_link.locked();
     state.midi.set_output(None);
     *link = None;
     *out_link = None;
-    let port = state.midi_config.lock().unwrap().input_port.clone();
+    let port = state.midi_config.locked().input_port.clone();
     let opened = match &port {
         Some(name) => MidiInputLink::open(state.midi.clone(), name),
         None => MidiInputLink::open_by_keywords(state.midi.clone(), APC40_KEYWORDS),
     };
-    *state.midi_error.lock().unwrap() = match opened {
+    *state.midi_error.locked() = match opened {
         Ok(l) => {
             let name = l.port_name().to_string();
             *link = Some(l);
@@ -91,7 +91,18 @@ pub(crate) fn install_midi_listener(app: &AppHandle, midi: &MidiRuntime, mapping
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
             })
-            .expect("spawn MIDI UI notifier")
+    };
+    // Without the notifier the faders do not follow a controller live (they still refresh
+    // on the next read); the rest of MIDI works. Never a reason to stop the app.
+    let notifier = match notifier {
+        Ok(thread) => Some(thread),
+        Err(e) => {
+            report_error(
+                app,
+                format!("MIDI: no se pudo iniciar el aviso a la ventana ({e})"),
+            );
+            None
+        }
     };
     let app = app.clone();
     let last_focus: Mutex<Option<(u16, std::time::Instant)>> = Mutex::new(None);
@@ -100,10 +111,12 @@ pub(crate) fn install_midi_listener(app: &AppHandle, midi: &MidiRuntime, mapping
             match save_mappings(&profile) {
                 Ok(json) => {
                     if let Err(e) = persist_text(&mappings_path, &json) {
-                        eprintln!("prisma: could not save controller mappings: {e}");
+                        report_error(&app, format!("No se pudieron guardar los mapeos MIDI: {e}"));
                     }
                 }
-                Err(e) => eprintln!("prisma: could not serialize controller mappings: {e}"),
+                Err(e) => {
+                    report_error(&app, format!("No se pudieron guardar los mapeos MIDI: {e}"))
+                }
             }
             let _ = app.emit("midi-learned", mapping);
         }
@@ -112,11 +125,13 @@ pub(crate) fn install_midi_listener(app: &AppHandle, midi: &MidiRuntime, mapping
         }
         MidiNotice::Applied { zone, .. } => {
             if !dirty.swap(true, Ordering::Relaxed) {
-                notifier.thread().unpark();
+                if let Some(n) = &notifier {
+                    n.thread().unpark();
+                }
             }
             if let Some(slot) = zone {
                 let now = std::time::Instant::now();
-                let mut last = last_focus.lock().unwrap();
+                let mut last = last_focus.locked();
                 let new_gesture = match *last {
                     Some((prev, at)) => prev != slot || now.duration_since(at) > FOCUS_GESTURE_GAP,
                     None => true,
@@ -170,21 +185,19 @@ pub fn midi_status(state: State<AppState>) -> MidiStatus {
     };
     MidiStatus {
         ports,
-        selected: state.midi_config.lock().unwrap().input_port.clone(),
+        selected: state.midi_config.locked().input_port.clone(),
         connected: state
             .midi_link
-            .lock()
-            .unwrap()
+            .locked()
             .as_ref()
             .map(|l| l.port_name().to_string()),
         output: state
             .midi_out_link
-            .lock()
-            .unwrap()
+            .locked()
             .as_ref()
             .map(|l| l.port_name().to_string()),
         device: state.midi.device().display_name,
-        error: state.midi_error.lock().unwrap().clone().or(list_error),
+        error: state.midi_error.locked().clone().or(list_error),
         learning: state.midi.learning(),
         mappings: state.midi.profile().mappings,
         palette: state
@@ -209,7 +222,7 @@ pub fn midi_set_input(app: AppHandle, port: Option<String>) -> Result<MidiStatus
     let config = MidiConfig { input_port: port };
     let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     persist_text(&state.midi_config_path, &json)?;
-    *state.midi_config.lock().unwrap() = config;
+    *state.midi_config.locked() = config;
     connect_midi(&app);
     Ok(midi_status(state))
 }

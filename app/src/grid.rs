@@ -258,7 +258,7 @@ pub(crate) fn write_cell(
     params: Option<ParamSet>,
     palette: Option<Vec<[f32; 3]>>,
 ) -> Option<Vec<CellInfo>> {
-    let mut show = state.show.lock().unwrap();
+    let mut show = state.show.locked();
     let zs = show.track_mut(track)?;
     if index < zs.clips.len() {
         let mut layer = Layer::shader(effect_id, params.unwrap_or_default());
@@ -298,7 +298,7 @@ pub fn main_assign_cell(
     // Play it through the cell's `trigger` target (restart: the cell may already be the
     // running one, now with a different effect). The controller reads the new content
     // from the show, runs it and reports the running cell back (`cells-changed`).
-    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+    if let Some(engine) = state.engine.locked().as_ref() {
         engine.trigger_clip(slot, index);
     }
     dto
@@ -322,7 +322,7 @@ pub fn main_assign_cell_silent(
     let Some(dto) = write_cell(&state, track, index, effect_id, params, palette) else {
         return Vec::new();
     };
-    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+    if let Some(engine) = state.engine.locked().as_ref() {
         engine.refresh_clips(slot);
     }
     dto
@@ -336,7 +336,7 @@ pub fn main_trigger_cell(state: State<AppState>, track: Uuid, index: usize) -> V
         return Vec::new();
     };
     let dto = {
-        let show = state.show.lock().unwrap();
+        let show = state.show.locked();
         let Some(zs) = show.track(track) else {
             return Vec::new();
         };
@@ -344,7 +344,7 @@ pub fn main_trigger_cell(state: State<AppState>, track: Uuid, index: usize) -> V
     };
     // The same tree target a pad in latch mode fires (M9): one way to play a cell. The
     // running cell updates asynchronously and arrives as `cells-changed`.
-    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+    if let Some(engine) = state.engine.locked().as_ref() {
         engine.fire_clip(slot, index);
     }
     dto
@@ -357,7 +357,7 @@ pub fn main_clear_cell(state: State<AppState>, track: Uuid, index: usize) -> Vec
         return Vec::new();
     };
     let (dto, was_active) = {
-        let mut show = state.show.lock().unwrap();
+        let mut show = state.show.locked();
         let Some(zs) = show.track_mut(track) else {
             return Vec::new();
         };
@@ -368,7 +368,7 @@ pub fn main_clear_cell(state: State<AppState>, track: Uuid, index: usize) -> Vec
         let was_active = zs.active == Some(index);
         (grid_dto(zs, armed_of(&state, track)), was_active)
     };
-    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+    if let Some(engine) = state.engine.locked().as_ref() {
         if was_active {
             // Re-run the now-empty running cell: the zone stops, and its state follows.
             engine.trigger_clip(slot, index);
@@ -389,7 +389,7 @@ pub fn main_rename_cell(
     index: usize,
     name: String,
 ) -> Vec<CellInfo> {
-    let mut show = state.show.lock().unwrap();
+    let mut show = state.show.locked();
     let Some(zs) = show.track_mut(track) else {
         return Vec::new();
     };
@@ -409,7 +409,7 @@ pub fn main_set_cell_color(
     index: usize,
     color: [u8; 3],
 ) -> Vec<CellInfo> {
-    let mut show = state.show.lock().unwrap();
+    let mut show = state.show.locked();
     let Some(zs) = show.track_mut(track) else {
         return Vec::new();
     };
@@ -440,7 +440,7 @@ pub fn main_effect_panel(
     cell: Option<usize>,
     draft: Option<String>,
 ) -> EffectPanelInfo {
-    let show = state.show.lock().unwrap();
+    let show = state.show.locked();
     effect_panel_info(&show, track, cell, draft, armed_of(&state, track))
 }
 
@@ -576,7 +576,7 @@ pub fn main_set_palette(
         return; // a colour table always keeps at least one colour
     }
     let live = {
-        let mut show = state.show.lock().unwrap();
+        let mut show = state.show.locked();
         let Some(zs) = show.track_mut(track) else {
             return;
         };
@@ -593,7 +593,7 @@ pub fn main_set_palette(
         return; // a cell that is not playing: stored for when it is played
     }
     if let Some(slot) = track_slot(&state, track) {
-        if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        if let Some(engine) = state.engine.locked().as_ref() {
             engine.set_track_palette(slot, colors);
         }
     }
@@ -614,7 +614,7 @@ pub fn main_set_param(
     cell: Option<usize>,
 ) {
     let (live, track) = {
-        let mut show = state.show.lock().unwrap();
+        let mut show = state.show.locked();
         let Some(zs) = show.track_mut(track) else {
             return;
         };
@@ -627,7 +627,7 @@ pub fn main_set_param(
         }
         (index.is_some() && index == zs.active, zs.id)
     };
-    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+    if let Some(engine) = state.engine.locked().as_ref() {
         if live {
             engine.set_track_param(track, &name, value);
         }
@@ -681,7 +681,7 @@ pub(crate) struct GridInfo {
 
 /// A track's armed clip, as the clip controller last reported it.
 pub(crate) fn armed_of(state: &AppState, track: Uuid) -> Option<usize> {
-    state.armed.lock().unwrap().get(&track).copied()
+    state.armed.locked().get(&track).copied()
 }
 
 /// The engine slot of a track. The engine numbers tracks in `Show::tracks` order, and
@@ -689,8 +689,7 @@ pub(crate) fn armed_of(state: &AppState, track: Uuid) -> Option<usize> {
 pub(crate) fn track_slot(state: &AppState, track: Uuid) -> Option<usize> {
     state
         .show
-        .lock()
-        .unwrap()
+        .locked()
         .tracks
         .iter()
         .position(|t| t.id == track)
@@ -705,7 +704,7 @@ pub(crate) fn with_track_engine(
     let Some(slot) = track_slot(state, track) else {
         return;
     };
-    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+    if let Some(engine) = state.engine.locked().as_ref() {
         f(engine, slot);
     }
 }
@@ -714,8 +713,8 @@ pub(crate) fn with_track_engine(
 /// one scene per row.
 #[tauri::command]
 pub fn main_grid(state: State<AppState>) -> GridInfo {
-    let show = state.show.lock().unwrap();
-    let engine = state.engine.lock().unwrap();
+    let show = state.show.locked();
+    let engine = state.engine.locked();
     grid_info(
         &show,
         |slot| engine.as_ref().and_then(|e| e.track_live(slot)),
@@ -820,14 +819,14 @@ pub(crate) fn scene_label(show: &mut Show, row: usize) -> &mut prisma_engine::Sc
 #[tauri::command]
 pub fn main_rename_scene(state: State<AppState>, row: usize, name: String) {
     let name = name.trim();
-    let mut show = state.show.lock().unwrap();
+    let mut show = state.show.locked();
     scene_label(&mut show, row).name = (!name.is_empty()).then(|| name.to_string());
 }
 
 /// Launch grid row `row` on every track that has a clip there (`arm` = arm instead).
 #[tauri::command]
 pub fn main_launch_scene(state: State<AppState>, row: usize, arm: bool) {
-    if let Some(e) = state.engine.lock().unwrap().as_ref() {
+    if let Some(e) = state.engine.locked().as_ref() {
         if arm {
             e.arm_scene(row);
         } else {
@@ -839,7 +838,7 @@ pub fn main_launch_scene(state: State<AppState>, row: usize, arm: bool) {
 /// Disarm every armed clip (`/arm/clear`).
 #[tauri::command]
 pub fn main_arm_clear(state: State<AppState>) {
-    if let Some(e) = state.engine.lock().unwrap().as_ref() {
+    if let Some(e) = state.engine.locked().as_ref() {
         e.clear_arm();
     }
 }
@@ -847,7 +846,7 @@ pub fn main_arm_clear(state: State<AppState>) {
 /// Stop every track (each with its transition; a second press during the fades cuts).
 #[tauri::command]
 pub fn main_stop_all(state: State<AppState>) {
-    if let Some(e) = state.engine.lock().unwrap().as_ref() {
+    if let Some(e) = state.engine.locked().as_ref() {
         e.stop_all();
     }
 }
@@ -855,7 +854,7 @@ pub fn main_stop_all(state: State<AppState>) {
 /// GO: play every armed clip in the same frame.
 #[tauri::command]
 pub fn main_arm_go(state: State<AppState>) {
-    if let Some(e) = state.engine.lock().unwrap().as_ref() {
+    if let Some(e) = state.engine.locked().as_ref() {
         e.go();
     }
 }
@@ -864,7 +863,7 @@ pub fn main_arm_go(state: State<AppState>) {
 #[tauri::command]
 pub fn main_set_track_opacity(state: State<AppState>, track: Uuid, value: f32) {
     let value = value.clamp(0.0, 1.0);
-    if let Some(t) = state.show.lock().unwrap().track_mut(track) {
+    if let Some(t) = state.show.locked().track_mut(track) {
         t.opacity = value;
     }
     with_track_engine(&state, track, |e, slot| e.set_track_opacity(slot, value));
@@ -873,7 +872,7 @@ pub fn main_set_track_opacity(state: State<AppState>, track: Uuid, value: f32) {
 /// Mute a track, live, and store it in the show.
 #[tauri::command]
 pub fn main_set_track_mute(state: State<AppState>, track: Uuid, on: bool) {
-    if let Some(t) = state.show.lock().unwrap().track_mut(track) {
+    if let Some(t) = state.show.locked().track_mut(track) {
         t.mute = on;
     }
     with_track_engine(&state, track, |e, slot| e.set_track_mute(slot, on));
@@ -882,7 +881,7 @@ pub fn main_set_track_mute(state: State<AppState>, track: Uuid, on: bool) {
 /// Solo a track, live, and store it in the show.
 #[tauri::command]
 pub fn main_set_track_solo(state: State<AppState>, track: Uuid, on: bool) {
-    if let Some(t) = state.show.lock().unwrap().track_mut(track) {
+    if let Some(t) = state.show.locked().track_mut(track) {
         t.solo = on;
     }
     with_track_engine(&state, track, |e, slot| e.set_track_solo(slot, on));
@@ -897,7 +896,7 @@ pub fn main_set_track_behaviour(
     transition: TrackTransition,
     launch: LaunchMode,
 ) {
-    if let Some(t) = state.show.lock().unwrap().track_mut(track) {
+    if let Some(t) = state.show.locked().track_mut(track) {
         t.transition = TrackTransition {
             time: transition.time.clamp(0.0, 600.0),
             ..transition
@@ -916,7 +915,7 @@ pub fn main_set_track_blend(
     key_softness: Option<f32>,
 ) {
     let key = {
-        let mut show = state.show.lock().unwrap();
+        let mut show = state.show.locked();
         let Some(t) = show.track_mut(track) else {
             return;
         };
@@ -939,8 +938,7 @@ pub fn main_set_track_blend(
 pub fn main_set_cell_fade(state: State<AppState>, track: Uuid, index: usize, seconds: f64) {
     if let Some(cell) = state
         .show
-        .lock()
-        .unwrap()
+        .locked()
         .track_mut(track)
         .and_then(|t| t.clips.get_mut(index))
     {
@@ -955,7 +953,7 @@ pub fn main_rename_track(state: State<AppState>, track: Uuid, name: String) {
     if name.is_empty() {
         return;
     }
-    if let Some(t) = state.show.lock().unwrap().track_mut(track) {
+    if let Some(t) = state.show.locked().track_mut(track) {
         t.name = name.to_string();
     }
 }
@@ -967,7 +965,7 @@ pub fn main_rename_track(state: State<AppState>, track: Uuid, name: String) {
 pub fn main_add_track(app: AppHandle, zone: Uuid) -> Result<Uuid, String> {
     let known = {
         let state = app.state::<AppState>();
-        let show = state.show.lock().unwrap();
+        let show = state.show.locked();
         show.patch.zones.iter().any(|z| z.id == zone)
     };
     if !known {
@@ -993,10 +991,11 @@ pub fn main_add_track(app: AppHandle, zone: Uuid) -> Result<Uuid, String> {
 
 /// "Track n" with the smallest `n` no track of the show is named after.
 pub(crate) fn next_track_name(show: &Show) -> String {
-    (1..)
+    // n tracks use at most n of the numbers 1..=n+1, so one of them is free.
+    (1..=show.tracks.len() + 1)
         .map(|n| format!("Track {n}"))
         .find(|name| !show.tracks.iter().any(|t| &t.name == name))
-        .expect("an unused number exists")
+        .unwrap_or_else(|| format!("Track {}", show.tracks.len() + 1))
 }
 
 /// Reorder: move `track` to sit just before `before` (or last when `None`). The order is
@@ -1008,7 +1007,7 @@ pub(crate) fn next_track_name(show: &Show) -> String {
 pub fn main_move_track(app: AppHandle, track: Uuid, before: Option<Uuid>) -> Result<(), String> {
     let state = app.state::<AppState>();
     let order: Vec<Uuid> = {
-        let mut show = state.show.lock().unwrap();
+        let mut show = state.show.locked();
         let old: Vec<Uuid> = show.tracks.iter().map(|t| t.id).collect();
         move_track(&mut show.tracks, track, before);
         let order: Vec<Uuid> = show.tracks.iter().map(|t| t.id).collect();
@@ -1019,8 +1018,7 @@ pub fn main_move_track(app: AppHandle, track: Uuid, before: Option<Uuid>) -> Res
     };
     let live = state
         .engine
-        .lock()
-        .unwrap()
+        .locked()
         .as_ref()
         .is_some_and(|e| e.reorder_tracks(&order));
     if !live {
@@ -1046,7 +1044,7 @@ pub(crate) fn move_track(tracks: &mut Vec<Track>, track: Uuid, before: Option<Uu
         Some(b) => tracks
             .iter()
             .position(|t| t.id == b)
-            .expect("checked above"),
+            .unwrap_or(tracks.len()),
         None => tracks.len(),
     };
     tracks.insert(at, moved);
@@ -1062,7 +1060,7 @@ pub fn main_set_track_destination(
 ) -> Result<(), String> {
     let zones = {
         let state = app.state::<AppState>();
-        let show = state.show.lock().unwrap();
+        let show = state.show.locked();
         let zones = destination_zones(&show.patch, &zones)?;
         match show.track(track) {
             None => return Err("no such track".into()),

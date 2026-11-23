@@ -2,6 +2,53 @@
 //! configuration, and the small helpers every part of the shell uses.
 
 use super::*;
+use std::sync::{MutexGuard, OnceLock, PoisonError};
+
+// --- No error brings the app down (LIVE-MODEL-SPEC §10.3 item 5) ----------------------
+
+/// Locking the shell's state never panics. A `Mutex` is "poisoned" when a thread panicked
+/// while holding it; `lock().unwrap()` would then panic in every command that touches it
+/// afterwards, and the app would be dead. The state is still usable (every command leaves
+/// it consistent between its own statements), so a poisoned lock is simply taken.
+pub(crate) trait LockExt<T> {
+    fn locked(&self) -> MutexGuard<'_, T>;
+}
+
+impl<T> LockExt<T> for Mutex<T> {
+    fn locked(&self) -> MutexGuard<'_, T> {
+        self.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// An error the operator should see but that does not stop anything: logged, and sent to
+/// the window's status line (`app-error`).
+pub(crate) fn report_error(app: &AppHandle, msg: impl Into<String>) {
+    let msg = msg.into();
+    eprintln!("prisma: {msg}");
+    let _ = app.emit("app-error", msg);
+}
+
+/// The app, for the panic hook (set once the app exists).
+static APP: OnceLock<AppHandle> = OnceLock::new();
+
+/// A panic on any thread (a command, the MIDI listener, the autosave…) is logged as before
+/// and also reported on the status line. Combined with [`LockExt`], the app keeps running.
+pub(crate) fn install_panic_hook(app: &AppHandle) {
+    let _ = APP.set(app.clone());
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default(info);
+        let what = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "error sin descripción".into());
+        if let Some(app) = APP.get() {
+            let _ = app.emit("app-error", format!("Error interno: {what}"));
+        }
+    }));
+}
 
 /// How many assignable clips each track has (8 columns × 5 rows — the common
 /// pad-controller layout, shown as the zone's grid until the track grid lands in
@@ -163,4 +210,20 @@ pub(crate) fn persist_text(path: &Path, text: &str) -> Result<(), String> {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     std::fs::write(path, text).map_err(|e| e.to_string())
+}
+
+/// The app-config directory without an `AppHandle` (for a boot failure, before the app
+/// exists): the same place Tauri's `app_config_dir` resolves to.
+pub(crate) fn dirs_config() -> Option<PathBuf> {
+    let base = if cfg!(windows) {
+        std::env::var_os("APPDATA").map(PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"))
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+    };
+    base.map(|b| b.join("com.prisma.lighting"))
 }

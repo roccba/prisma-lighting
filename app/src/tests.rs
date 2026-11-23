@@ -290,3 +290,29 @@ fn a_destination_is_the_patchs_zones_in_patch_order() {
     assert!(destination_zones(&patch, &[]).is_err());
     assert!(destination_zones(&patch, &[Uuid::new_v4()]).is_err());
 }
+
+#[test]
+fn a_poisoned_lock_is_taken_not_a_panic() {
+    let m = Arc::new(Mutex::new(5));
+    let m2 = Arc::clone(&m);
+    let _ = std::thread::spawn(move || {
+        let _g = m2.lock().unwrap();
+        panic!("a command panicked while holding the state");
+    })
+    .join();
+    assert!(m.is_poisoned());
+    *m.locked() += 1;
+    assert_eq!(*m.locked(), 6, "the state is still usable");
+}
+
+#[test]
+fn track_names_and_moves_never_panic() {
+    let mut show = prisma_engine::demo::demo_show();
+    let name = next_track_name(&show);
+    assert!(!show.tracks.iter().any(|t| t.name == name));
+    let first = show.tracks[0].id;
+    // Before a track that is not there: nothing moves.
+    let before: Vec<_> = show.tracks.iter().map(|t| t.id).collect();
+    move_track(&mut show.tracks, first, Some(Uuid::new_v4()));
+    assert_eq!(show.tracks.iter().map(|t| t.id).collect::<Vec<_>>(), before);
+}

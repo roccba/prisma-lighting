@@ -45,7 +45,7 @@ pub(crate) struct AppCellHost {
 impl ClipHost for AppCellHost {
     fn clip_effect(&self, track: Uuid, clip: usize) -> Option<ClipEffect> {
         let state = self.app.try_state::<AppState>()?;
-        let show = state.show.lock().unwrap();
+        let show = state.show.locked();
         let cell = show.track(track)?.clips.get(clip)?;
         let layer = cell.layers.first()?;
         match &layer.source {
@@ -64,7 +64,7 @@ impl ClipHost for AppCellHost {
 
     fn track_behaviour(&self, track: Uuid) -> Option<TrackBehaviour> {
         let state = self.app.try_state::<AppState>()?;
-        let show = state.show.lock().unwrap();
+        let show = state.show.locked();
         let t = show.track(track)?;
         Some(TrackBehaviour {
             transition: t.transition,
@@ -74,7 +74,7 @@ impl ClipHost for AppCellHost {
 
     fn armed_changed(&self, track: Uuid, armed: Option<usize>) {
         if let Some(state) = self.app.try_state::<AppState>() {
-            let mut map = state.armed.lock().unwrap();
+            let mut map = state.armed.locked();
             match armed {
                 Some(clip) => map.insert(track, clip),
                 None => map.remove(&track),
@@ -85,7 +85,7 @@ impl ClipHost for AppCellHost {
 
     fn active_changed(&self, track: Uuid, active: Option<usize>) {
         if let Some(state) = self.app.try_state::<AppState>() {
-            if let Some(t) = state.show.lock().unwrap().track_mut(track) {
+            if let Some(t) = state.show.locked().track_mut(track) {
                 t.active = active;
             }
         }
@@ -106,7 +106,7 @@ impl ClipHost for AppCellHost {
         let Some(state) = self.app.try_state::<AppState>() else {
             return;
         };
-        let mut show = state.show.lock().unwrap();
+        let mut show = state.show.locked();
         let layer = show
             .track_mut(track)
             .and_then(|t| t.clips.get_mut(clip))
@@ -135,8 +135,7 @@ pub(crate) fn refresh_all_cells(engine: &EngineHandle) {
 pub(crate) fn zone_slot(state: &AppState, id: Uuid) -> Option<usize> {
     state
         .show
-        .lock()
-        .unwrap()
+        .locked()
         .patch
         .zones
         .iter()
@@ -151,8 +150,8 @@ pub fn main_zones(state: State<AppState>) -> Vec<ZoneInfo> {
     // Identity comes from the show's embedded patch (the single source of truth, so a
     // hot patch edit is reflected here); the live controls come from the engine. Clone
     // the show first, then drop its lock before taking the engine lock.
-    let show = state.show.lock().unwrap().clone();
-    let guard = state.engine.lock().unwrap();
+    let show = state.show.locked().clone();
+    let guard = state.engine.locked();
     zone_infos(&show, |slot| guard.as_ref().map(|e| e.zone_live(slot)))
 }
 
@@ -215,7 +214,7 @@ pub fn main_set_zone_dimmer(state: State<AppState>, zone: Uuid, value: f32) {
     let Some(slot) = zone_slot(&state, zone) else {
         return;
     };
-    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+    if let Some(engine) = state.engine.locked().as_ref() {
         engine.set_zone_dimmer(slot, value);
     }
 }
@@ -227,7 +226,7 @@ pub fn main_set_zone_speed(state: State<AppState>, zone: Uuid, value: f32) {
     let Some(slot) = zone_slot(&state, zone) else {
         return;
     };
-    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+    if let Some(engine) = state.engine.locked().as_ref() {
         engine.set_zone_speed(slot, value);
     }
 }
@@ -238,7 +237,7 @@ pub fn main_set_zone_solo(state: State<AppState>, zone: Uuid, on: bool) {
     let Some(slot) = zone_slot(&state, zone) else {
         return;
     };
-    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+    if let Some(engine) = state.engine.locked().as_ref() {
         engine.set_zone_solo(slot, on);
     }
 }
@@ -249,7 +248,7 @@ pub fn main_set_zone_blackout(state: State<AppState>, zone: Uuid, on: bool) {
     let Some(slot) = zone_slot(&state, zone) else {
         return;
     };
-    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+    if let Some(engine) = state.engine.locked().as_ref() {
         engine.set_zone_blackout(slot, on);
     }
 }
@@ -261,7 +260,7 @@ pub fn main_set_zone_strobe_on(state: State<AppState>, zone: Uuid, on: bool) {
     let Some(slot) = zone_slot(&state, zone) else {
         return;
     };
-    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+    if let Some(engine) = state.engine.locked().as_ref() {
         engine.set_zone_strobe_on(slot, on);
     }
 }
@@ -272,7 +271,7 @@ pub fn main_set_zone_strobe_rate(state: State<AppState>, zone: Uuid, rate: f32) 
     let Some(slot) = zone_slot(&state, zone) else {
         return;
     };
-    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+    if let Some(engine) = state.engine.locked().as_ref() {
         engine.set_zone_strobe_rate(slot, rate);
     }
 }
@@ -283,7 +282,7 @@ pub fn main_set_zone_white(state: State<AppState>, zone: Uuid, auto: bool, kelvi
     let Some(slot) = zone_slot(&state, zone) else {
         return;
     };
-    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+    if let Some(engine) = state.engine.locked().as_ref() {
         engine.set_zone_white(slot, auto, kelvin);
     }
 }
@@ -302,9 +301,9 @@ pub(crate) struct MasterInfo {
 /// Read the master section (dimmer, blackout, global strobe) for the global bar.
 #[tauri::command]
 pub fn main_master(state: State<AppState>) -> MasterInfo {
-    let guard = state.engine.lock().unwrap();
+    let guard = state.engine.locked();
     let Some(engine) = guard.as_ref() else {
-        return master_info(&state.show.lock().unwrap());
+        return master_info(&state.show.locked());
     };
     let m = engine.live().master();
     MasterInfo {
@@ -329,7 +328,7 @@ pub(crate) fn master_info(show: &Show) -> MasterInfo {
 /// Set the master dimmer (the global-bar fader), real 0..1.
 #[tauri::command]
 pub fn main_set_master_dimmer(state: State<AppState>, value: f32) {
-    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+    if let Some(engine) = state.engine.locked().as_ref() {
         engine.set_master_dimmer(value);
     }
 }
@@ -337,7 +336,7 @@ pub fn main_set_master_dimmer(state: State<AppState>, value: f32) {
 /// Toggle the master blackout (kills all output while holding the fader value).
 #[tauri::command]
 pub fn main_set_master_blackout(state: State<AppState>, on: bool) {
-    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+    if let Some(engine) = state.engine.locked().as_ref() {
         engine.set_master_blackout(on);
     }
 }
@@ -345,7 +344,7 @@ pub fn main_set_master_blackout(state: State<AppState>, on: bool) {
 /// Engage/release the global strobe.
 #[tauri::command]
 pub fn main_set_master_strobe_on(state: State<AppState>, on: bool) {
-    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+    if let Some(engine) = state.engine.locked().as_ref() {
         engine.set_master_strobe_on(on);
     }
 }
@@ -353,7 +352,7 @@ pub fn main_set_master_strobe_on(state: State<AppState>, on: bool) {
 /// Set the global strobe speed in Hz (1–25), engaged or not.
 #[tauri::command]
 pub fn main_set_master_strobe_rate(state: State<AppState>, rate: f32) {
-    if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+    if let Some(engine) = state.engine.locked().as_ref() {
         engine.set_master_strobe_rate(rate);
     }
 }
@@ -366,25 +365,20 @@ pub(crate) struct ClockInfo {
 
 #[tauri::command]
 pub fn main_clock(state: State<AppState>) -> ClockInfo {
-    let bpm = state
-        .engine
-        .lock()
-        .unwrap()
-        .as_ref()
-        .map_or(120.0, |e| e.bpm());
+    let bpm = state.engine.locked().as_ref().map_or(120.0, |e| e.bpm());
     ClockInfo { bpm }
 }
 
 #[tauri::command]
 pub fn main_set_bpm(state: State<AppState>, bpm: f64) {
-    if let Some(e) = state.engine.lock().unwrap().as_ref() {
+    if let Some(e) = state.engine.locked().as_ref() {
         e.set_bpm(bpm);
     }
 }
 
 #[tauri::command]
 pub fn main_tap(state: State<AppState>) {
-    if let Some(e) = state.engine.lock().unwrap().as_ref() {
+    if let Some(e) = state.engine.locked().as_ref() {
         e.tap();
     }
 }

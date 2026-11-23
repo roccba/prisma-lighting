@@ -137,7 +137,7 @@ pub(crate) fn autosave_tick(app: &AppHandle) {
         return;
     };
     let (step, dirty) = {
-        let mut g = state.autosave_state.lock().unwrap();
+        let mut g = state.autosave_state.locked();
         let (baseline, last) = &mut *g;
         autosave::step(baseline, last, snap.clone())
     };
@@ -145,7 +145,7 @@ pub(crate) fn autosave_tick(app: &AppHandle) {
         autosave::Step::Idle => {}
         autosave::Step::Write => {
             if let Err(e) = state.autosave.write(&snap) {
-                eprintln!("prisma: autosave failed: {e}");
+                report_error(app, format!("El autoguardado falló: {e}"));
             }
         }
         autosave::Step::Clear => state.autosave.clear(),

@@ -223,6 +223,8 @@ fn main() {
         ])
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // From here on a panic anywhere is reported on the status line, not just logged.
+            install_panic_hook(app.handle());
             // The app boots EMPTY (no zones, no patch, nothing running) unless a last show
             // is remembered — then it reopens that `.prisma` (which carries its own embedded
             // patch). This is the "start from zero, or resume the last show" behaviour.
@@ -416,16 +418,22 @@ fn main() {
             });
             // Autosave: a snapshot every couple of seconds, off every hot path.
             let autosaver = app.handle().clone();
-            std::thread::Builder::new()
+            let spawned = std::thread::Builder::new()
                 .name("prisma-autosave".into())
                 .spawn(move || loop {
                     std::thread::sleep(autosave::INTERVAL);
                     autosave_tick(&autosaver);
-                })
-                .expect("spawn autosave thread");
+                });
+            if let Err(e) = spawned {
+                // The app runs without autosave; saving by hand still works.
+                report_error(
+                    app.handle(),
+                    format!("El autoguardado no pudo iniciarse ({e}); guardá a mano"),
+                );
+            }
             // Track clips play from the Parameter Tree; the engine keeps this host
             // across every recompile. Set after `manage` — the host reads the state.
-            if let Some(engine) = app.state::<AppState>().engine.lock().unwrap().as_ref() {
+            if let Some(engine) = app.state::<AppState>().engine.locked().as_ref() {
                 engine.set_clip_host(Arc::new(AppCellHost {
                     app: app.handle().clone(),
                 }));
@@ -456,7 +464,19 @@ fn main() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("failed to build the Prisma app")
+        .unwrap_or_else(|e| {
+            // The window could not be built (a boot error from `setup`, or the webview
+            // itself): there is no status line to show it on. Release builds have no
+            // console either, so it is written next to the boot-error file and the app
+            // exits cleanly instead of panicking.
+            let msg = format!("Prisma could not start: {e}\n");
+            eprintln!("prisma: {msg}");
+            if let Some(dir) = dirs_config() {
+                let _ = std::fs::create_dir_all(&dir);
+                let _ = std::fs::write(dir.join("boot-error.txt"), &msg);
+            }
+            std::process::exit(1)
+        })
         .run(|app_handle, event| {
             if let RunEvent::ExitRequested { .. } = event {
                 // Last autosave step while the engine still holds the live values.
@@ -464,11 +484,11 @@ fn main() {
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     // Close the MIDI input before the engine, so no input thread is writing
                     // while it tears down; darken the LEDs, then close the output.
-                    state.midi_link.lock().unwrap().take();
+                    state.midi_link.locked().take();
                     state.midi.clear_leds();
                     state.midi.set_output(None);
-                    state.midi_out_link.lock().unwrap().take();
-                    if let Some(engine) = state.engine.lock().unwrap().take() {
+                    state.midi_out_link.locked().take();
+                    if let Some(engine) = state.engine.locked().take() {
                         let report = engine.shutdown();
                         eprintln!(
                             "prisma: engine shut down cleanly \

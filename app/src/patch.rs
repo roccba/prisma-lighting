@@ -31,7 +31,7 @@ pub(crate) fn state_of(draft: &PatchDraft) -> EditorState {
 
 #[tauri::command]
 pub fn editor_get_state(state: State<AppState>) -> EditorState {
-    state_of(&state.draft.lock().unwrap())
+    state_of(&state.draft.locked())
 }
 
 /// Aggregate properties of a fixture selection (§5.4), or `null` if empty.
@@ -40,19 +40,19 @@ pub fn editor_selection_aggregate(
     state: State<AppState>,
     ids: Vec<Uuid>,
 ) -> Option<SelectionAggregate> {
-    aggregate(state.draft.lock().unwrap().patch(), &ids)
+    aggregate(state.draft.locked().patch(), &ids)
 }
 
 /// The fixture types the placement dialog offers — the operator's library (§3.2).
 #[tauri::command]
 pub fn editor_fixture_types(state: State<AppState>) -> Vec<FixtureType> {
-    state.library.lock().unwrap().types.clone()
+    state.library.locked().types.clone()
 }
 
 /// The whole fixture library, for the manager UI (§3.2).
 #[tauri::command]
 pub fn editor_library_get(state: State<AppState>) -> FixtureLibrary {
-    state.library.lock().unwrap().clone()
+    state.library.locked().clone()
 }
 
 /// Add a fixture type to the library; persist and return the updated library.
@@ -61,7 +61,7 @@ pub fn editor_library_add_type(
     state: State<AppState>,
     ty: FixtureType,
 ) -> Result<FixtureLibrary, String> {
-    let mut lib = state.library.lock().unwrap();
+    let mut lib = state.library.locked();
     lib.add_type(ty);
     persist_library(&state.library_path, &lib)?;
     Ok(lib.clone())
@@ -74,7 +74,7 @@ pub fn editor_library_update_type(
     index: usize,
     ty: FixtureType,
 ) -> Result<FixtureLibrary, String> {
-    let mut lib = state.library.lock().unwrap();
+    let mut lib = state.library.locked();
     lib.update_type(index, ty).map_err(|e| e.to_string())?;
     persist_library(&state.library_path, &lib)?;
     Ok(lib.clone())
@@ -86,7 +86,7 @@ pub fn editor_library_remove_type(
     state: State<AppState>,
     index: usize,
 ) -> Result<FixtureLibrary, String> {
-    let mut lib = state.library.lock().unwrap();
+    let mut lib = state.library.locked();
     lib.remove_type(index).map_err(|e| e.to_string())?;
     persist_library(&state.library_path, &lib)?;
     Ok(lib.clone())
@@ -95,14 +95,14 @@ pub fn editor_library_remove_type(
 /// Suggest the next free DMX address, to prefill the placement dialog (§4.3).
 #[tauri::command]
 pub fn editor_next_free_address(state: State<AppState>) -> [u16; 2] {
-    let (u, c) = next_free_address(state.draft.lock().unwrap().patch());
+    let (u, c) = next_free_address(state.draft.locked().patch());
     [u, c]
 }
 
 /// The next free fixture ID, to prefill "Iniciar ID de instalación".
 #[tauri::command]
 pub fn editor_next_fixture_id(state: State<AppState>) -> u32 {
-    next_fixture_id(state.draft.lock().unwrap().patch())
+    next_fixture_id(state.draft.locked().patch())
 }
 
 /// A placement error in the operator's words (the dialog shows it verbatim).
@@ -126,7 +126,7 @@ pub fn editor_place_fixtures(
     state: State<AppState>,
     spec: PlacementSpec,
 ) -> Result<EditorState, String> {
-    let mut draft = state.draft.lock().unwrap();
+    let mut draft = state.draft.locked();
     let fixtures = plan(&spec).map_err(|e| placement_error_text(&e))?;
     let base = draft.patch().fixtures.len();
     let at = fixtures
@@ -154,7 +154,7 @@ pub fn editor_translate_fixtures(
     ids: Vec<Uuid>,
     delta: [f32; 3],
 ) -> Result<EditorState, String> {
-    let mut draft = state.draft.lock().unwrap();
+    let mut draft = state.draft.locked();
     if ids.is_empty() {
         return Ok(state_of(&draft));
     }
@@ -181,7 +181,7 @@ pub fn editor_set_zone_mapping_size(
     size: [u32; 2],
 ) -> Result<EditorState, String> {
     const MAX_MATRIX: u32 = 512;
-    let mut draft = state.draft.lock().unwrap();
+    let mut draft = state.draft.locked();
     let z = draft
         .patch()
         .zones
@@ -213,7 +213,7 @@ pub(crate) const ZONE_COLORS: [[u8; 3]; 6] = [
 /// the canvas / active-zone placement. Returns the updated editor state.
 #[tauri::command]
 pub fn editor_add_zone(state: State<AppState>, name: String) -> Result<EditorState, String> {
-    let mut draft = state.draft.lock().unwrap();
+    let mut draft = state.draft.locked();
     // Zone names must be unique (case-insensitive, trimmed). An empty name auto-generates
     // a unique "Zona N" (picking the first free N, not `len()+1` which collided after a
     // delete); a provided name that already exists is rejected so two zones never share a
@@ -267,7 +267,7 @@ pub fn editor_rename_zone(
     zone: Uuid,
     name: String,
 ) -> Result<EditorState, String> {
-    let mut draft = state.draft.lock().unwrap();
+    let mut draft = state.draft.locked();
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return Err("El nombre no puede estar vacío.".into());
@@ -296,7 +296,7 @@ pub fn editor_rename_zone(
 /// how many, so the UI can tell the operator to reassign or delete them first.
 #[tauri::command]
 pub fn editor_remove_zone(state: State<AppState>, zone: Uuid) -> Result<EditorState, String> {
-    let mut draft = state.draft.lock().unwrap();
+    let mut draft = state.draft.locked();
     draft
         .apply(EditOp::RemoveZone { zone }, None)
         .map_err(|e| e.to_string())?;
@@ -308,7 +308,7 @@ pub fn editor_remove_zone(state: State<AppState>, zone: Uuid) -> Result<EditorSt
 /// engine, not the draft — this is the editor↔engine seam that makes Highlight possible.
 #[tauri::command]
 pub fn editor_highlight(state: State<AppState>, ids: Vec<Uuid>, blink: bool) {
-    if let Some(engine) = state.engine.lock().unwrap().as_mut() {
+    if let Some(engine) = state.engine.locked().as_mut() {
         engine.highlight(&ids, blink);
     }
 }
@@ -318,7 +318,7 @@ pub fn editor_highlight(state: State<AppState>, ids: Vec<Uuid>, blink: bool) {
 /// when a recompile rebinds a fresh one).
 #[tauri::command]
 pub fn editor_preview_port(state: State<AppState>) -> u16 {
-    *state.preview_port.lock().unwrap()
+    *state.preview_port.locked()
 }
 
 /// Apply the editor's current draft to the **running show** (§7, M8 hot patch editing):
@@ -343,21 +343,21 @@ pub(crate) fn apply_editor_draft(app: &AppHandle, resume: bool) -> Result<(), St
     // engine untouched (it keeps running); only a genuine post-validation assembly fault
     // (e.g. GPU) can now reach the teardown path. The render path needs Zone::members
     // (the editor only tracks fixture→zone ownership), so derive them first.
-    let mut patch = state.draft.lock().unwrap().patch().clone();
+    let mut patch = state.draft.locked().patch().clone();
     patch.fill_zone_members_from_ownership();
     patch.fit_matrix_size(); // world stays derived from the rig on every apply-to-live
     patch.compile().map_err(|e| e.to_string())?;
 
     // Adopt the edited patch into the running show.
     let show = {
-        let mut show = state.show.lock().unwrap();
+        let mut show = state.show.locked();
         // Preserve live state across the recompile (which rebuilds the Parameter Tree):
         // fold the engine's CURRENT live values back into the show model, keyed by the
         // OLD zone order (still matching the engine + `show.zones` here, before the
         // reconcile). The reconcile keeps these by zone id, and `recompile_show` re-seeds
         // from them — so auto-applying an edit does not reset the operator's master /
         // colour / dimmers.
-        if let Some(engine) = state.engine.lock().unwrap().as_ref() {
+        if let Some(engine) = state.engine.locked().as_ref() {
             fold_live_into_show(engine, &mut show);
         }
         // Reconcile to the new zone set: one ZoneShow per patch zone, in patch order,
@@ -409,17 +409,17 @@ pub(crate) fn apply_editor_draft(app: &AppHandle, resume: bool) -> Result<(), St
     // viewer reconnects to the new port (re-queried on reconnect).
     let target = virtual_sink();
     let (config, port) = preview_config(AdapterPreference::Software, target);
-    let mut guard = state.engine.lock().unwrap();
+    let mut guard = state.engine.locked();
     let engine = guard.take().ok_or("engine is not running")?;
     let bpm = engine.bpm();
     match engine.recompile_show(show, config) {
         Ok(new) => {
             new.set_frozen(!resume);
             new.set_bpm(bpm);
-            state.armed.lock().unwrap().clear();
+            state.armed.locked().clear();
             *guard = Some(new);
             if let Some(port) = port {
-                *state.preview_port.lock().unwrap() = port;
+                *state.preview_port.locked() = port;
             }
             drop(guard);
             // Tell the main window to re-fetch zones/grids — the zone set, names or
@@ -444,7 +444,7 @@ pub fn editor_remove_fixtures(
     state: State<AppState>,
     ids: Vec<Uuid>,
 ) -> Result<EditorState, String> {
-    let mut draft = state.draft.lock().unwrap();
+    let mut draft = state.draft.locked();
     if ids.is_empty() {
         return Ok(state_of(&draft));
     }
@@ -460,7 +460,7 @@ pub fn editor_remove_fixtures(
 /// write it, then clear the dirty flag.
 #[tauri::command]
 pub fn editor_save_to(state: State<AppState>, path: String) -> Result<EditorState, String> {
-    let mut draft = state.draft.lock().unwrap();
+    let mut draft = state.draft.locked();
     let json = save_patch(draft.patch()).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| e.to_string())?;
     draft.mark_saved();
@@ -476,7 +476,7 @@ pub fn editor_save_to(state: State<AppState>, path: String) -> Result<EditorStat
 pub fn editor_open_from(state: State<AppState>, path: String) -> Result<EditorState, String> {
     let json = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let patch = load_patch(&json).map_err(|e| e.to_string())?;
-    let mut draft = state.draft.lock().unwrap();
+    let mut draft = state.draft.locked();
     *draft = PatchDraft::new(patch);
     Ok(state_of(&draft))
 }
@@ -522,7 +522,7 @@ pub async fn main_open_editor(app: AppHandle) -> Result<(), String> {
         return Ok(());
     }
     // Freeze the show content while the editor is open (§7).
-    if let Some(engine) = app.state::<AppState>().engine.lock().unwrap().as_ref() {
+    if let Some(engine) = app.state::<AppState>().engine.locked().as_ref() {
         engine.set_frozen(true);
     }
     let win = match editor_window_builder(&app).and_then(|b| b.build()) {
@@ -534,7 +534,7 @@ pub async fn main_open_editor(app: AppHandle) -> Result<(), String> {
             if let Ok(dir) = app.path().app_config_dir() {
                 let _ = std::fs::write(dir.join("editor-error.txt"), &msg);
             }
-            if let Some(engine) = app.state::<AppState>().engine.lock().unwrap().as_ref() {
+            if let Some(engine) = app.state::<AppState>().engine.locked().as_ref() {
                 engine.set_frozen(false);
             }
             return Err(msg);
@@ -551,7 +551,7 @@ pub async fn main_open_editor(app: AppHandle) -> Result<(), String> {
         if matches!(event, WindowEvent::Destroyed) {
             if let Err(e) = apply_editor_draft(&handle, true) {
                 eprintln!("prisma: editor-close recompile failed: {e}");
-                if let Some(engine) = handle.state::<AppState>().engine.lock().unwrap().as_ref() {
+                if let Some(engine) = handle.state::<AppState>().engine.locked().as_ref() {
                     engine.set_frozen(false);
                 }
                 // The previous layout keeps running (fail-safe), but that must NOT be
@@ -565,14 +565,14 @@ pub async fn main_open_editor(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn editor_undo(state: State<AppState>) -> EditorState {
-    let mut draft = state.draft.lock().unwrap();
+    let mut draft = state.draft.locked();
     draft.undo();
     state_of(&draft)
 }
 
 #[tauri::command]
 pub fn editor_redo(state: State<AppState>) -> EditorState {
-    let mut draft = state.draft.lock().unwrap();
+    let mut draft = state.draft.locked();
     draft.redo();
     state_of(&draft)
 }

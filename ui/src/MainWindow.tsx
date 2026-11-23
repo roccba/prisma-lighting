@@ -413,6 +413,25 @@ function MainWindowBody() {
       un.then((f) => f()).catch(() => {});
     };
   }, []);
+  // Errors from the backend that do not belong to a command the window called (the
+  // autosave, saving MIDI mappings, a panic on any thread): the app keeps running and the
+  // operator sees them here, whichever window caused them.
+  useEffect(() => {
+    const un = listen<string>("app-error", (e) => {
+      setError(e.payload);
+    });
+    // A command that failed and that no caller handled (a `Result::Err` from Rust becomes
+    // a rejected promise) is shown too, instead of only reaching the console.
+    const rejected = (e: PromiseRejectionEvent) => {
+      e.preventDefault();
+      setError(e.reason instanceof Error ? e.reason.message : String(e.reason));
+    };
+    window.addEventListener("unhandledrejection", rejected);
+    return () => {
+      window.removeEventListener("unhandledrejection", rejected);
+      un.then((f) => f()).catch(() => {});
+    };
+  }, []);
   // Placeholder for menu entries whose feature is not implemented yet.
   const soon = () => showNotice("Función no disponible todavía");
 
