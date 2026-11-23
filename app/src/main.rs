@@ -2993,6 +2993,31 @@ fn main_stop_track(state: State<AppState>, track: Uuid) {
     });
 }
 
+/// The scene label of grid row `row`, created (and the rows before it) if missing.
+fn scene_label(show: &mut Show, row: usize) -> &mut prisma_engine::SceneLabel {
+    if show.scenes.len() <= row {
+        show.scenes
+            .resize_with(row + 1, prisma_engine::SceneLabel::default);
+    }
+    &mut show.scenes[row]
+}
+
+/// Rename a scene (the scene column's right-click → Renombrar). An empty name goes back to
+/// the row number. A label only: no recompile.
+#[tauri::command]
+fn main_rename_scene(state: State<AppState>, row: usize, name: String) {
+    let name = name.trim();
+    let mut show = state.show.lock().unwrap();
+    scene_label(&mut show, row).name = (!name.is_empty()).then(|| name.to_string());
+}
+
+/// Give a scene its own colour on the scene column (sRGB 0–255). A label only.
+#[tauri::command]
+fn main_set_scene_color(state: State<AppState>, row: usize, color: [u8; 3]) {
+    let mut show = state.show.lock().unwrap();
+    scene_label(&mut show, row).color = Some(color);
+}
+
 /// Launch grid row `row` on every track that has a clip there (`arm` = arm instead).
 #[tauri::command]
 fn main_launch_scene(state: State<AppState>, row: usize, arm: bool) {
@@ -3376,6 +3401,8 @@ fn main() {
             main_arm_cell,
             main_stop_track,
             main_launch_scene,
+            main_rename_scene,
+            main_set_scene_color,
             main_arm_go,
             main_set_track_opacity,
             main_set_track_mute,
@@ -3906,6 +3933,22 @@ mod tests {
         p.set("b", 0.0);
         assert_eq!(effect_main_color("solid", &p), Some([0.5, 0.25, 0.0]));
         assert_eq!(effect_main_color("no-such-effect", &p), None);
+    }
+
+    #[test]
+    fn a_scene_label_is_made_on_demand_and_an_empty_name_clears_it() {
+        let mut show = empty_show();
+        assert!(show.scenes.is_empty());
+        scene_label(&mut show, 2).name = Some("Fuerte".into());
+        assert_eq!(
+            show.scenes.len(),
+            3,
+            "the rows before it get an empty label"
+        );
+        assert_eq!(show.scenes[2].name.as_deref(), Some("Fuerte"));
+        scene_label(&mut show, 0).color = Some([10, 20, 30]);
+        assert_eq!(show.scenes.len(), 3);
+        assert_eq!(show.scenes[0].color, Some([10, 20, 30]));
     }
 
     #[test]

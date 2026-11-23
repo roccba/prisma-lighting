@@ -72,6 +72,12 @@ mockIPC(
     if (cmd === "plugin:window|is_maximized") return true;
     if (cmd === "main_set_param") return setParamLike(a.track as string, a.cell as number | null, a.name as string, a.value as number);
     if (cmd === "main_set_cell_color") return setCellColorLike(a.track as string, a.index as number, a.color as number[]);
+    if (cmd === "main_rename_scene" || cmd === "main_set_scene_color") {
+      const scene = (fx.main_grid as { scenes: { name: string | null; color: number[] | null }[] }).scenes[a.row as number];
+      if (scene && cmd === "main_rename_scene") scene.name = (a.name as string).trim() || null;
+      if (scene && cmd === "main_set_scene_color") scene.color = a.color as number[];
+      return null;
+    }
     if (cmd === "main_effect_panel") {
       const cell = a.cell ?? null;
       return structuredClone(

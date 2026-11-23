@@ -18,3 +18,20 @@ for (const viewport of VIEWPORTS) {
     }
   }
 }
+
+// The track's ⋯ popover and its settings dialog (§10.3 item 1), each on its own.
+test("track popover @screenshot", async ({ page }) => {
+  await openDemo(page, { density: "normal" });
+  await page.locator(".pr-thead[data-track]").nth(3).locator(".pr-thead-more").click();
+  const pop = page.locator(".pr-tsettings");
+  await expect(pop).toBeVisible();
+  await expect(pop).toHaveScreenshot("track-popover.png", { animations: "disabled", caret: "hide" });
+});
+
+test("track settings dialog @screenshot", async ({ page }) => {
+  await openDemo(page, { density: "normal" });
+  await page.locator(".pr-thead[data-track]").nth(3).dblclick();
+  const dialog = page.locator(".pr-trackdlg");
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveScreenshot("track-dialog.png", { animations: "disabled", caret: "hide" });
+});
