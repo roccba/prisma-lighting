@@ -111,6 +111,12 @@ jobs:
   ui:
     name: UI (types, build, Vitest, Playwright)
     runs-on: ubuntu-24.04
+    # The official Playwright image, the same version the local `npm run test:e2e` uses: its
+    # browsers and their system libraries are already there (installing them took 6 min).
+    # Keep the tag in step with @playwright/test in ui/package.json.
+    container:
+      image: mcr.microsoft.com/playwright:v1.65.1-noble
+      options: --ipc=host
     defaults:
       run:
         working-directory: ui
@@ -137,9 +143,6 @@ jobs:
 
       - name: Vitest
         run: npm test
-
-      - name: Install the Playwright browsers
-        run: npx playwright install --with-deps webkit chromium
 
       # The geometric tests in WebKit (Linux's webview) and Chromium (Windows' WebView2).
       - name: Playwright (geometric)
