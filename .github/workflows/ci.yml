@@ -6,10 +6,16 @@ name: CI
 
 on:
   push:
+    # A push that only touches documentation does not run the gates.
+    paths-ignore:
+      - "**/*.md"
   pull_request:
+    paths-ignore:
+      - "**/*.md"
 
+# One run per branch: a newer push cancels the run still going for the same branch.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -28,7 +34,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache Rust build
-        uses: swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2
 
       # The GPU tests run on lavapipe (Mesa's software Vulkan), deterministic and headless.
       - name: Install software Vulkan
@@ -58,7 +64,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache Rust build
-        uses: swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2
         with:
           workspaces: app
 
