@@ -51,12 +51,12 @@
 
 use std::sync::mpsc;
 
-use prisma_core::show::{Show, Source, Track, TrackTransition};
+use prisma_core::show::{Show, Source, Track, TrackTransition, ZoneReach};
 use prisma_core::source::{priority, SourceId};
 use prisma_core::tree::ParameterTree;
 use prisma_core::zone::ZoneStates;
 use prisma_core::{ClockSnapshot, Easing, OverlapSnapshot, ParamHandle, TimeBase, Transition};
-use prisma_patch::{BlendMode, Patch, PatchIndex};
+use prisma_patch::{cell_of, BlendMode, Patch, PatchIndex};
 use prisma_render::blend::Compositor;
 use prisma_render::effect::{EffectInstance, EffectParams};
 use prisma_render::live_params::LiveParams;
@@ -83,19 +83,79 @@ pub fn track_param_prefix(track: Uuid) -> String {
     format!("/track/{track}/layer/0")
 }
 
-/// The zone slots (`Patch::zones` positions) a track reaches, in destination order,
-/// without duplicates; zones absent from the patch are skipped. The compositor and
-/// the clip controller both size a track's instances from this, so they agree.
+/// The zone slots (`Patch::zones` positions) a track reaches — directly or through
+/// its groups — each once, in [`Destination::reach`](prisma_core::show::Destination::reach)
+/// order. The compositor and the clip controller both size a track's instances from
+/// this, so they agree.
 pub fn destination_slots(patch: &Patch, track: &Track) -> Vec<usize> {
-    let mut slots: Vec<usize> = Vec::with_capacity(track.destination.zones.len());
-    for id in &track.destination.zones {
-        if let Some(slot) = patch.zones.iter().position(|z| z.id == *id) {
-            if !slots.contains(&slot) {
-                slots.push(slot);
+    track
+        .destination
+        .reach(patch)
+        .into_iter()
+        .map(|(slot, _)| slot)
+        .collect()
+}
+
+/// Parallel to [`destination_slots`]: per reached zone, the groups the track is
+/// confined to there (`None` = the whole zone).
+pub fn destination_groups(patch: &Patch, track: &Track) -> Vec<Option<Vec<Uuid>>> {
+    track
+        .destination
+        .reach(patch)
+        .into_iter()
+        .map(|(_, reach)| match reach {
+            ZoneReach::Whole => None,
+            ZoneReach::Groups(g) => Some(g),
+        })
+        .collect()
+}
+
+/// The cells of zone `slot`'s texture (`mapping`, row-major, one `u32` each, 1 =
+/// inside) that the fixtures of `groups` light: each pixel of a member fixture the zone
+/// owns, through its world cell, to the zone texel the placement pass samples for that
+/// cell (nearest, the inverse of `place.wgsl`). Where several world cells share one
+/// texel (a zone matrix coarser than its footprint) the texel is in when any of them
+/// is — the same cell sharing as everywhere else (§5.2.1).
+pub fn group_zone_mask(
+    patch: &Patch,
+    slot: usize,
+    groups: &[Uuid],
+    footprint: Footprint,
+    mapping: (u32, u32),
+) -> Vec<u32> {
+    let (mw, mh) = (mapping.0.max(1), mapping.1.max(1));
+    let mut mask = vec![0u32; (mw as usize) * (mh as usize)];
+    let Some(zone) = patch.zones.get(slot) else {
+        return mask;
+    };
+    if footprint.is_empty() {
+        return mask;
+    }
+    let member = |id: Uuid| {
+        groups
+            .iter()
+            .any(|g| patch.group(*g).is_some_and(|g| g.contains(id)))
+    };
+    for fixture in patch
+        .fixtures
+        .iter()
+        .filter(|f| f.zone == zone.id && member(f.id))
+    {
+        for pixel in &fixture.pixels {
+            let Some(c) = cell_of(pixel.position) else {
+                continue;
+            };
+            let u = (c[0] as f32 + 0.5 - footprint.origin[0]) / footprint.size[0];
+            let v = (c[1] as f32 + 0.5 - footprint.origin[1]) / footprint.size[1];
+            if !(0.0..1.0).contains(&u) || !(0.0..1.0).contains(&v) {
+                continue;
             }
+            let sx = ((u * mw as f32).floor() as u32).min(mw - 1);
+            let sy = ((v * mh as f32).floor() as u32).min(mh - 1);
+            mask[(sy * mw + sx) as usize] = 1;
         }
     }
-    slots
+    mask
 }
 
 /// One track as the compositor builds it: which zones it reaches, how it blends
@@ -114,6 +174,9 @@ pub struct TrackContent {
     /// Parallel to `zones`; `None` = nothing playing in that zone. Shorter than
     /// `zones` means `None` for the rest.
     pub effects: Vec<Option<EffectInstance>>,
+    /// Parallel to `zones`: the groups the track is confined to in that zone (masked
+    /// to their cells), `None` = the whole zone. Shorter than `zones` means whole.
+    pub groups: Vec<Option<Vec<Uuid>>>,
 }
 
 impl TrackContent {
@@ -130,6 +193,7 @@ impl TrackContent {
                 opacity: 1.0,
                 live: None,
                 effects: vec![effect],
+                groups: Vec::new(),
             })
             .collect()
     }
@@ -189,6 +253,7 @@ pub fn build_track_effects(
         .enumerate()
         .map(|(t, track)| {
             let zones = destination_slots(patch, track);
+            let groups = destination_groups(patch, track);
             let effects = track
                 .active_clip()
                 .and_then(|cell| cell.layers.first())
@@ -216,6 +281,7 @@ pub fn build_track_effects(
                 opacity: track.opacity,
                 live: live.get(t).cloned(),
                 effects,
+                groups,
             }
         })
         .collect()
@@ -522,10 +588,16 @@ struct Instance {
     /// nesting launch and the next render, e.g. two launches landing in one frame).
     below_rendered: bool,
     targets: Targets,
+    /// The track reaches this zone through groups: their cells in the zone's texture
+    /// space, uploaded once. `None` = the whole zone.
+    /// An `Arc` so the fold can hold it while `render` borrows the instance (a
+    /// reference count, not an allocation).
+    mask: Option<std::sync::Arc<wgpu::Buffer>>,
 }
 
 impl Instance {
     /// Whether this instance puts anything into its zone (playing or fading out).
+    /// (A group mask never makes it silent: it confines, it does not switch off.)
     fn has_content(&self) -> bool {
         self.effect.is_some() || (self.fade.is_some() && !self.below.is_silent())
     }
@@ -814,17 +886,31 @@ impl ZoneCompositor {
             (z.mapping_size[0].max(1), z.mapping_size[1].max(1))
         };
 
+        // Footprints first: a group mask maps world cells to zone texels through them.
+        let coverage_masks = zone_cell_coverage(patch, index);
+        let footprints: Vec<Footprint> = (0..zone_count)
+            .map(|slot| footprint_from_coverage(&coverage_masks[slot], world.0))
+            .collect();
+
         // Distribute each track's instances to the zones it reaches, in track order.
         let mut per_zone: Vec<Vec<Instance>> = (0..zone_count).map(|_| Vec::new()).collect();
         let mut track_slots: Vec<TrackSlot> = Vec::with_capacity(tracks.len());
         for (t, track) in tracks.into_iter().enumerate() {
             let mut effects = track.effects.into_iter();
+            let mut groups = track.groups.into_iter();
             let mut at = Vec::with_capacity(track.zones.len());
             for &zone in &track.zones {
                 let effect = effects.next().flatten();
+                let confined = groups.next().flatten();
                 if zone >= zone_count {
                     continue;
                 }
+                let mask = confined.map(|g| {
+                    std::sync::Arc::new(create_cell_mask(
+                        gpu,
+                        &group_zone_mask(patch, zone, &g, footprints[zone], mapping_of(zone)),
+                    ))
+                });
                 let (w, h) = mapping_of(zone);
                 at.push(At {
                     zone,
@@ -840,6 +926,7 @@ impl ZoneCompositor {
                     fade: None,
                     below_rendered: false,
                     targets: Targets::new(gpu, w, h),
+                    mask,
                 });
             }
             track_slots.push(TrackSlot {
@@ -849,14 +936,13 @@ impl ZoneCompositor {
             });
         }
 
-        let coverage_masks = zone_cell_coverage(patch, index);
         let slots: Vec<ZoneSlot> = per_zone
             .into_iter()
             .enumerate()
             .map(|(slot, instances)| {
                 let zone = &patch.zones[slot];
                 let mapping = mapping_of(slot);
-                let footprint = footprint_from_coverage(&coverage_masks[slot], world.0);
+                let footprint = footprints[slot];
                 ZoneSlot {
                     mapping,
                     footprint,
@@ -1085,7 +1171,9 @@ impl ZoneCompositor {
 
         let only = &instances[last];
         let f = frames[only.track];
-        let plain = only.blend_mode == BlendMode::Normal && f.opacity * f.presence >= 1.0;
+        let plain = only.blend_mode == BlendMode::Normal
+            && f.opacity * f.presence >= 1.0
+            && only.mask.is_none();
         if playing == 1 && plain && only.fade.is_none() && !force_fold {
             let inst = &mut instances[last];
             if let Some(effect) = inst.effect.as_mut() {
@@ -1104,13 +1192,20 @@ impl ZoneCompositor {
             }
             let f = frames[inst.track];
             let (mode, opacity, key) = (inst.blend_mode, f.opacity * f.presence, inst.key);
+            let mask = inst.mask.clone();
             let Some(tex) = inst.render(gpu, compositor, clock, *mapping) else {
                 continue;
             };
-            if k == last {
-                compositor.blend_keyed(gpu, acc, tex, &view(zone_tex), mode, opacity, key);
+            let out = if k == last {
+                view(zone_tex)
             } else {
-                compositor.blend_keyed(gpu, acc, tex, &view(other), mode, opacity, key);
+                view(other)
+            };
+            match &mask {
+                Some(m) => compositor.blend_masked(gpu, acc, tex, &out, mode, opacity, key, m),
+                None => compositor.blend_keyed(gpu, acc, tex, &out, mode, opacity, key),
+            }
+            if k != last {
                 std::mem::swap(&mut acc, &mut other);
             }
         }

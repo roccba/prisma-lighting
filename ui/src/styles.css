@@ -281,7 +281,7 @@ html, body, #root {
 .groups-sector { flex: 0 0 auto; }
 /* Groups (LIVE-MODEL-SPEC §3.1): the list keeps a compact height, the members below take
    the rest. The swatch is a label over a hidden colour input (click = system picker). */
-.groups-sector .group-list { flex: 0 1 auto; max-height: 40%; }
+.groups-sector .group-list { flex: 0 1 auto; max-height: 45%; }
 .groups-sector .group-members { flex: 1 1 auto; }
 .group-swatch { cursor: pointer; border: 0; padding: 0; width: 12px; height: 12px; }
 .group-swatch:hover { outline: 1px solid var(--text); }

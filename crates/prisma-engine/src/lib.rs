@@ -74,7 +74,7 @@ pub use prisma_core::mappings::{
 };
 pub use prisma_midi::{MidiNotice, MidiRuntime};
 pub use zone_content::{
-    build_track_effects, build_track_instances, destination_slots, seed_live_from_show,
-    track_param_prefix, CompositorOptions, Fade, TrackContent, TrackLive, ZoneCommand,
-    ZoneCommandSender, ZoneCompositor,
+    build_track_effects, build_track_instances, destination_groups, destination_slots,
+    group_zone_mask, seed_live_from_show, track_param_prefix, CompositorOptions, Fade,
+    TrackContent, TrackLive, ZoneCommand, ZoneCommandSender, ZoneCompositor,
 };

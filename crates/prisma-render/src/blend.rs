@@ -260,6 +260,37 @@ impl Compositor {
         );
     }
 
+    /// [`blend_keyed`](Self::blend_keyed) confined to `coverage` (one `u32` per texel of
+    /// `dst`, non-zero = inside): outside it `dst` passes through untouched. A track that
+    /// reaches a zone through groups blends this way, with the groups' cells
+    /// (LIVE-MODEL-SPEC §4.1 step 3).
+    #[allow(clippy::too_many_arguments)]
+    pub fn blend_masked(
+        &self,
+        gpu: &crate::Gpu,
+        dst: &wgpu::Texture,
+        src: &wgpu::Texture,
+        out: &wgpu::TextureView,
+        mode: BlendMode,
+        opacity: f32,
+        key: [f32; 2],
+        coverage: &wgpu::Buffer,
+    ) {
+        self.blend_inner_with(
+            gpu,
+            dst,
+            src,
+            out,
+            blend_code(mode),
+            opacity,
+            key,
+            2,
+            [1.0; 4],
+            &self.dummy_mask,
+            coverage,
+        );
+    }
+
     /// A clip transition: `out = mix(dst, src, t)` on all four premultiplied channels.
     /// Unlike `Normal` at opacity `t`, transparent areas of `src` still fade `dst` out.
     pub fn crossfade(
@@ -329,14 +360,43 @@ impl Compositor {
         cell_mask: &wgpu::Buffer,
         coverage: &wgpu::Buffer,
     ) {
-        let scale = zone_scale.unwrap_or([1.0; 4]);
+        self.blend_inner_with(
+            gpu,
+            dst,
+            src,
+            out,
+            mode,
+            opacity,
+            key,
+            u32::from(zone_scale.is_some()),
+            zone_scale.unwrap_or([1.0; 4]),
+            cell_mask,
+            coverage,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn blend_inner_with(
+        &self,
+        gpu: &crate::Gpu,
+        dst: &wgpu::Texture,
+        src: &wgpu::Texture,
+        out: &wgpu::TextureView,
+        mode: u32,
+        opacity: f32,
+        key: [f32; 2],
+        use_mask: u32,
+        scale: [f32; 4],
+        cell_mask: &wgpu::Buffer,
+        coverage: &wgpu::Buffer,
+    ) {
         gpu.queue.write_buffer(
             &self.uniform,
             0,
             bytemuck::bytes_of(&BlendParams {
                 mode,
                 opacity,
-                use_mask: u32::from(zone_scale.is_some()),
+                use_mask,
                 _pad0: 0,
                 zone_scale: scale,
                 key: [key[0], key[1], 0.0, 0.0],

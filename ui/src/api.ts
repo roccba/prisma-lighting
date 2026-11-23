@@ -506,11 +506,13 @@ export interface TrackInfo {
   id: string;
   name: string;
   zones: string[];
-  /** The destination zones' names, joined. */
+  /** Destination groups (phase 5), in patch order. */
+  groups: string[];
+  /** The destination's zone names then group names, joined. */
   destination: string;
-  /** The first destination zone's display colour (sRGB 0–255): pads and cells. */
+  /** The first destination zone's display colour, else the first group's (sRGB 0–255). */
   color: [number, number, number];
-  /** Every destination zone's display colour, parallel to `zones`: the header strip. */
+  /** Every destination zone's then group's display colour: the header strip. */
   colors: [number, number, number][];
   blend_mode: BlendMode;
   /** LumaKey: where the source starts to show, and how far above it it is full (0..1). */
@@ -532,9 +534,19 @@ export interface SceneInfo {
   color: [number, number, number] | null;
 }
 
+/** A patch group, as a track destination (LIVE-MODEL-SPEC §3.1). */
+export interface GroupInfo {
+  id: string;
+  name: string;
+  color: [number, number, number];
+  /** Fixture count (an empty group reaches nothing). */
+  members: number;
+}
+
 export interface GridInfo {
   tracks: TrackInfo[];
   scenes: SceneInfo[];
+  groups: GroupInfo[];
 }
 
 /** One entry the effect picker offers. */
@@ -637,8 +649,8 @@ export const renameTrack = (track: string, name: string) => invoke<void>("main_r
 
 /** "Aplicar destino": the zones a track reaches (at least one). Recompiles the running
  *  show; the window re-fetches on `layout-changed`. */
-export const setTrackDestination = (track: string, zones: string[]) =>
-  invoke<void>("main_set_track_destination", { track, zones });
+export const setTrackDestination = (track: string, zones: string[], groups: string[]) =>
+  invoke<void>("main_set_track_destination", { track, zones, groups });
 
 /** "+ Track" on a zone (recompiles; the window re-fetches on `layout-changed`). */
 /** Resolves to the new track's id. */

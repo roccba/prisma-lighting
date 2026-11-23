@@ -37,7 +37,8 @@
 struct BlendParams {
     mode: u32,
     opacity: f32,
-    // 1 = zone composite (consult the mask and apply zone_scale), 0 = layer blend.
+    // 1 = zone composite (consult the mask and apply zone_scale), 0 = layer blend,
+    // 2 = layer blend confined to a coverage mask (a track's groups in its zone).
     use_mask: u32,
     _pad0: u32,
     // rgb = zone dimmer x colour filter, a = zone dimmer (its opacity on overlapped
@@ -97,6 +98,15 @@ fn fs(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let a = textureLoad(dst_tex, p, 0);
     var b = textureLoad(src_tex, p, 0);
 
+    // A track that reaches its zone through groups (LIVE-MODEL-SPEC §4.1 step 3): the
+    // same coverage rule as a zone, in the zone's own texture space — outside the
+    // groups' cells the track leaves what is below untouched. No zone scaling.
+    if (bp.use_mask == 2u) {
+        let width = i32(textureDimensions(dst_tex).x);
+        if (zone_coverage[u32(p.y * width + p.x)] == 0u) {
+            return a;
+        }
+    }
     if (bp.use_mask == 1u) {
         let width = i32(textureDimensions(dst_tex).x);
         let cell = u32(p.y * width + p.x);

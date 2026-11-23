@@ -157,6 +157,7 @@ fn track(zone: usize, live: Option<TrackLive>, effect: Option<EffectInstance>) -
         opacity: 1.0,
         live,
         effects: vec![effect],
+        groups: Vec::new(),
     }
 }
 

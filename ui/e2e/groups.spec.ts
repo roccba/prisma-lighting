@@ -4,6 +4,10 @@
 import { expect, test } from "@playwright/test";
 import { calls, clearCalls, layoutProblems, openEditor, VIEWPORTS } from "./helpers";
 
+// The demo rig already has three groups (Tubos pares, Tubos impares, Bordes de cortinas);
+// the tests add theirs after them.
+const DEMO_GROUPS = 3;
+
 test("a group is made from the selection, in the order it was selected", async ({ page }) => {
   await openEditor(page);
   const fixtures = page.locator(".fixture-list .pr-listrow");
@@ -27,7 +31,8 @@ test("a group is made from the selection, in the order it was selected", async (
   expect(await calls(page, "editor_rename_group")).toEqual([
     { group: expect.any(String), name: "Pares" },
   ]);
-  await expect(page.locator(".group-list .pr-listrow .nm")).toHaveText(["Pares"]);
+  await expect(page.locator(".group-list .pr-listrow .nm")).toHaveCount(DEMO_GROUPS + 1);
+  await expect(page.locator(".group-list .pr-listrow .nm").last()).toHaveText("Pares");
 
   // Members, numbered, in selection order: what was 1st, 4th, 2nd in the zone's list.
   const members = page.locator(".group-members .pr-listrow .nm");
@@ -69,13 +74,13 @@ test("members are reordered, added and removed from the selection; the group is 
   await expect(members).toHaveText([names[1], names[2], names[4]]);
 
   // Picking the group selects its fixtures (in the zone's list too).
-  await page.locator(".group-list .pr-listrow").first().click();
+  await page.locator(".group-list .pr-listrow").last().click();
   await expect(page.locator(".fixture-list .pr-listrow.is-sel")).toHaveCount(3);
 
   await clearCalls(page);
   await page.getByRole("button", { name: "Eliminar grupo" }).click();
   expect(await calls(page, "editor_remove_group")).toHaveLength(1);
-  await expect(page.locator(".group-list .pr-listrow")).toHaveCount(0);
+  await expect(page.locator(".group-list .pr-listrow")).toHaveCount(DEMO_GROUPS);
   await expect(page.locator(".group-members")).toHaveCount(0);
 });
 
@@ -110,20 +115,20 @@ test("each new group gets its own colour; the app's colour selector changes it",
   }
   const swatches = page.locator(".group-list .group-swatch");
   const colours = await swatches.evaluateAll((s) => s.map((e) => getComputedStyle(e).backgroundColor));
-  expect(colours).toHaveLength(2);
-  expect(colours[0]).not.toBe(colours[1]);
+  expect(colours).toHaveLength(DEMO_GROUPS + 2);
+  expect(new Set(colours).size, "no two groups share a colour").toBe(colours.length);
 
   // The swatch opens the app's selector (not the system one); a quick colour picks and
   // closes, stored as one edit.
   await clearCalls(page);
-  await swatches.nth(1).click();
+  await swatches.nth(DEMO_GROUPS + 1).click();
   const picker = page.getByRole("dialog", { name: "Selector de color" });
   await expect(picker).toBeVisible();
   await expect(page.locator("input[type=color]")).toHaveCount(0);
   await picker.locator('[data-cpick="rgb"][data-rgb="255,0,0"]').first().click();
   await expect(picker).toHaveCount(0);
   expect(await calls(page, "editor_set_group_color")).toEqual([{ group: expect.any(String), color: [255, 0, 0] }]);
-  await expect(swatches.nth(1)).toHaveCSS("background-color", "rgb(255, 0, 0)");
+  await expect(swatches.nth(DEMO_GROUPS + 1)).toHaveCSS("background-color", "rgb(255, 0, 0)");
   // Opening the selector does not pick the group (the row click is not triggered).
   await expect(page.locator(".group-list .pr-listrow.is-sel")).toHaveCount(1);
 });

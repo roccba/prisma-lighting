@@ -259,29 +259,85 @@ impl ZoneShow {
     }
 }
 
-/// Where a track's clips render (LIVE-MODEL-SPEC §3). Groups join in phase 5.
+/// Where a track's clips render (LIVE-MODEL-SPEC §3, §4.1): whole zones and/or groups.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Destination {
     /// Patch zone ids. A track that reaches several zones gets one effect instance
     /// per zone, each at that zone's own `mapping_size`.
     #[serde(default)]
     pub zones: Vec<Uuid>,
+    /// Patch group ids (phase 5). A group reaches every zone that owns one of its
+    /// fixtures; there the track renders as for the whole zone and is masked to the
+    /// group's cells. Absent in older files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<Uuid>,
+}
+
+/// How a track reaches one zone ([`Destination::reach`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ZoneReach {
+    /// The whole zone (it is in the destination's zones).
+    Whole,
+    /// Only the cells of these groups' fixtures in the zone, in destination order.
+    Groups(Vec<Uuid>),
 }
 
 impl Destination {
     /// A destination of exactly one zone.
     pub fn zone(zone: Uuid) -> Destination {
-        Destination { zones: vec![zone] }
+        Destination {
+            zones: vec![zone],
+            groups: Vec::new(),
+        }
     }
 
-    /// Whether this destination reaches `zone`.
+    /// Whether this destination names `zone` directly (not through a group).
     pub fn reaches(&self, zone: Uuid) -> bool {
         self.zones.contains(&zone)
     }
 
-    /// Whether it reaches nothing.
+    /// Whether it names nothing (no zone, no group).
     pub fn is_empty(&self) -> bool {
-        self.zones.is_empty()
+        self.zones.is_empty() && self.groups.is_empty()
+    }
+
+    /// Every zone slot (`Patch::zones` position) this destination reaches, each once,
+    /// and how: the named zones first, in destination order, then the zones reached
+    /// only through groups, in patch order. A zone named directly is reached
+    /// [`Whole`](ZoneReach::Whole) even when a group of it is named too (the zone wins,
+    /// LIVE-MODEL-SPEC §8.5). Unknown zones and groups, and groups with no fixture in a
+    /// zone, reach nothing there. The compositor and the clip controller both size a
+    /// track's instances from this, so they agree.
+    pub fn reach(&self, patch: &Patch) -> Vec<(usize, ZoneReach)> {
+        let mut out: Vec<(usize, ZoneReach)> = Vec::new();
+        for id in &self.zones {
+            if let Some(slot) = patch.zones.iter().position(|z| z.id == *id) {
+                if !out.iter().any(|(s, _)| *s == slot) {
+                    out.push((slot, ZoneReach::Whole));
+                }
+            }
+        }
+        for (slot, zone) in patch.zones.iter().enumerate() {
+            if out.iter().any(|(s, _)| *s == slot) {
+                continue;
+            }
+            let groups: Vec<Uuid> = self
+                .groups
+                .iter()
+                .filter(|g| {
+                    patch.group(**g).is_some_and(|g| {
+                        g.members
+                            .iter()
+                            .any(|m| patch.fixture(*m).is_some_and(|f| f.zone == zone.id))
+                    })
+                })
+                .copied()
+                .collect();
+            if !groups.is_empty() {
+                out.push((slot, ZoneReach::Groups(groups)));
+            }
+        }
+        out
     }
 }
 
@@ -753,6 +809,14 @@ impl Show {
                 .find(|&&zone| !self.patch.zones.iter().any(|z| z.id == zone))
             {
                 return Err(ShowError::UnknownDestinationZone { track: t.id, zone });
+            }
+            if let Some(&group) = t
+                .destination
+                .groups
+                .iter()
+                .find(|&&g| self.patch.group(g).is_none())
+            {
+                return Err(ShowError::UnknownDestinationGroup { track: t.id, group });
             }
             if let Some(active) = t.active {
                 if active >= t.clips.len() {

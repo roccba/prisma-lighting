@@ -41,7 +41,7 @@ export function moveMembers(members: string[], picked: Set<string>, dir: -1 | 1)
 export function GroupsPanel(p: Props) {
   const { patch, selection } = p;
   const groups: Group[] = patch.groups ?? [];
-  const [h, setH] = useState(() => loadPaneHeight(GROUPS_H_KEY, 260));
+  const [h, setH] = useState(() => loadPaneHeight(GROUPS_H_KEY, 300));
   const changeH = (v: number) => {
     setH(v);
     savePaneHeight(GROUPS_H_KEY, v);

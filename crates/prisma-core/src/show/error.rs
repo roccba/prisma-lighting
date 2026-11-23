@@ -29,6 +29,8 @@ pub enum ShowError {
     DuplicateTrack { track: Uuid },
     /// A track's destination names a zone absent from the embedded patch.
     UnknownDestinationZone { track: Uuid, zone: Uuid },
+    /// A track's destination names a group absent from the embedded patch.
+    UnknownDestinationGroup { track: Uuid, group: Uuid },
     /// The network/output config is malformed (e.g. a reversed universe range).
     InvalidNetwork(String),
     /// The embedded patch failed its own validation.
@@ -77,6 +79,10 @@ impl std::fmt::Display for ShowError {
             ShowError::UnknownDestinationZone { track, zone } => write!(
                 f,
                 "track {track} targets zone {zone}, which is not in the patch"
+            ),
+            ShowError::UnknownDestinationGroup { track, group } => write!(
+                f,
+                "track {track} targets group {group}, which is not in the patch"
             ),
             ShowError::InvalidNetwork(msg) => write!(f, "network config invalid: {msg}"),
             ShowError::Patch(e) => write!(f, "embedded patch invalid: {e}"),

@@ -162,6 +162,7 @@ fn two_zone_track(effects: Vec<Option<EffectInstance>>) -> TrackContent {
         opacity: 1.0,
         live: None,
         effects,
+        groups: Vec::new(),
     }
 }
 
@@ -267,6 +268,7 @@ fn a_reorder_changes_the_fold_without_restarting_anything() {
         opacity: 1.0,
         live: None,
         effects,
+        groups: Vec::new(),
     };
     // Track 0: an animated wave. Track 1: opaque grey, Normal, on top of it.
     let build = |n: u128| {

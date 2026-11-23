@@ -170,6 +170,7 @@ fn track(zone: usize, mode: BlendMode, effect: Option<EffectInstance>) -> TrackC
         opacity: 1.0,
         live: None,
         effects: vec![effect],
+        groups: Vec::new(),
     }
 }
 

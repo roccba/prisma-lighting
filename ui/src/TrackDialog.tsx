@@ -9,6 +9,7 @@ import {
   setTrackOpacity,
   type BlendMode,
   type Easing,
+  type GroupInfo,
   type LaunchMode,
   type MapTarget,
   type TrackInfo,
@@ -162,6 +163,7 @@ export function TrackDialog({
   track,
   slot,
   zones,
+  groups = [],
   layoutLocked = false,
   onPatch,
   onClose,
@@ -170,6 +172,8 @@ export function TrackDialog({
   /** The track's position in the grid (its MIDI targets are relative to the bank window). */
   slot: number;
   zones: ZoneInfo[];
+  /** The patch's groups, offered as destinations next to the zones. */
+  groups?: GroupInfo[];
   /** Vista → Bloquear layout: the destination cannot change. */
   layoutLocked?: boolean;
   /** Mirror a live change into the grid at once (the engine confirms on the next fetch). */
@@ -178,13 +182,17 @@ export function TrackDialog({
 }) {
   const [name, setName] = useState(track.name);
   const [dest, setDest] = useState<string[]>(track.zones);
+  const [destGroups, setDestGroups] = useState<string[]>(track.groups ?? []);
   const [applying, setApplying] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const { bank, mappings, armed, arm, unmap } = useMidiLearn();
 
   // The grid re-fetches after a recompile: follow the stored destination.
-  const stored = track.zones.join();
-  useEffect(() => setDest(track.zones), [stored]); // eslint-disable-line react-hooks/exhaustive-deps
+  const stored = `${track.zones.join()}|${(track.groups ?? []).join()}`;
+  useEffect(() => {
+    setDest(track.zones);
+    setDestGroups(track.groups ?? []);
+  }, [stored]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -206,14 +214,19 @@ export function TrackDialog({
 
   // In patch order, like the engine stores it.
   const ordered = zones.filter((z) => dest.includes(z.id)).map((z) => z.id);
-  const destChanged = ordered.join() !== track.zones.join();
-  const toggleZone = (id: string, on: boolean) =>
-    setDest((d) => (on ? [...d.filter((z) => z !== id), id] : d.filter((z) => z !== id)));
+  const orderedGroups = groups.filter((g) => destGroups.includes(g.id)).map((g) => g.id);
+  const destChanged =
+    ordered.join() !== track.zones.join() || orderedGroups.join() !== (track.groups ?? []).join();
+  const picked = ordered.length + orderedGroups.length;
+  const toggle = (set: typeof setDest) => (id: string, on: boolean) =>
+    set((d) => (on ? [...d.filter((z) => z !== id), id] : d.filter((z) => z !== id)));
+  const toggleZone = toggle(setDest);
+  const toggleGroup = toggle(setDestGroups);
   const applyDest = () => {
-    if (!destChanged || ordered.length === 0) return;
+    if (!destChanged || picked === 0) return;
     setApplying(true);
     setMessage(null);
-    setTrackDestination(track.id, ordered)
+    setTrackDestination(track.id, ordered, orderedGroups)
       .catch((e) => setMessage(String(e)))
       .finally(() => setApplying(false));
   };
@@ -270,9 +283,9 @@ export function TrackDialog({
             <div className="pr-trackdlg-zones">
               {zones.map((z) => {
                 const on = dest.includes(z.id);
-                const last = on && dest.length === 1;
+                const last = on && picked === 1;
                 return (
-                  <div key={z.id} className="pr-trackdlg-zone" title={last ? "Un track necesita al menos una zona" : undefined}>
+                  <div key={z.id} className="pr-trackdlg-zone" title={last ? "Un track necesita al menos una zona o un grupo" : undefined}>
                     <Check checked={on} disabled={last || layoutLocked} onChange={(v) => toggleZone(z.id, v)}>
                       <span className="pr-trackdlg-swatch" style={{ background: `rgb(${z.color.join(",")})` }} />
                       {z.name}
@@ -281,16 +294,41 @@ export function TrackDialog({
                 );
               })}
             </div>
+            {groups.length > 0 && (
+              <>
+                <div className="pr-trackdlg-subtitle">Grupos</div>
+                <div className="pr-trackdlg-zones pr-trackdlg-groups">
+                  {groups.map((gr) => {
+                    const on = destGroups.includes(gr.id);
+                    const last = on && picked === 1;
+                    const tip = last
+                      ? "Un track necesita al menos una zona o un grupo"
+                      : gr.members === 0
+                        ? "Grupo vacío: no ilumina nada"
+                        : undefined;
+                    return (
+                      <div key={gr.id} className="pr-trackdlg-zone" title={tip}>
+                        <Check checked={on} disabled={last || layoutLocked} onChange={(v) => toggleGroup(gr.id, v)}>
+                          <span className="pr-trackdlg-swatch" style={{ background: `rgb(${gr.color.join(",")})` }} />
+                          {gr.name}
+                        </Check>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
             <div className="pr-trackdlg-apply">
               <span className="pr-tsettings-hint">
                 {layoutLocked && "Layout bloqueado: el destino no se puede cambiar. "}
-                Las zonas comparten los parámetros del efecto; cada una conserva su VEL. Aplicar recompila el show:
+                Las zonas comparten los parámetros del efecto; cada una conserva su VEL. Un grupo limita el track
+                a sus instalaciones; si su zona también está marcada, gana la zona entera. Aplicar recompila el show:
                 las animaciones arrancan de nuevo y se desarma lo armado.
               </span>
               <button
                 type="button"
                 className="pr-btn"
-                disabled={layoutLocked || !destChanged || ordered.length === 0 || applying}
+                disabled={layoutLocked || !destChanged || picked === 0 || applying}
                 onClick={applyDest}
               >
                 {applying ? "Aplicando…" : "Aplicar destino"}

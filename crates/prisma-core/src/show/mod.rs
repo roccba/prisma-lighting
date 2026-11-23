@@ -19,6 +19,6 @@ pub use error::ShowError;
 pub use model::{
     ArtNetNode, Cell, Destination, InterfaceRef, LaunchMode, Layer, MasterState, NetworkConfig,
     NodeOrigin, ParamSet, SceneLabel, Show, Source, Track, TrackTransition, UniverseRange,
-    ZoneLive, ZoneShow,
+    ZoneLive, ZoneReach, ZoneShow,
 };
 pub use version::{load_show, save_show, CURRENT_SCHEMA_VERSION, FORMAT_ID};

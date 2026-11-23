@@ -828,6 +828,7 @@ input, textarea, [contenteditable="true"] {
 .pr-trackdlg-name { flex: 1 1 auto; min-width: 0; }
 .pr-trackdlg-zones { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }
 .pr-trackdlg-zone { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pr-trackdlg-subtitle { font-size: var(--fs-tiny); color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; }
 .pr-trackdlg-swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; border-radius: 2px; border: 1px solid var(--btn-border-dark); }
 .pr-trackdlg-apply { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; }
 .pr-trackdlg-apply .pr-tsettings-hint { max-width: none; flex: 1 1 auto; }

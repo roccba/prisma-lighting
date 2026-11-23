@@ -643,12 +643,15 @@ pub(crate) struct TrackInfo {
     pub(crate) name: String,
     /// Destination zones, in patch order.
     pub(crate) zones: Vec<Uuid>,
-    /// The destination zones' names, joined for the header.
+    /// Destination groups, in patch order (phase 5).
+    pub(crate) groups: Vec<Uuid>,
+    /// The destination's zone names then group names, joined for the header.
     pub(crate) destination: String,
-    /// The first destination zone's display colour (the pads, the cells).
+    /// The first destination zone's display colour (else the first group's): the pads,
+    /// the cells.
     pub(crate) color: [u8; 3],
-    /// Every destination zone's display colour, parallel to `zones` (the header strip,
-    /// one segment per zone).
+    /// Every destination zone's then group's display colour (the header strip, one
+    /// segment each).
     pub(crate) colors: Vec<[u8; 3]>,
     pub(crate) blend_mode: BlendMode,
     /// `BlendMode::LumaKey`'s threshold and softness (linear luminance, 0..1).
@@ -672,11 +675,23 @@ pub(crate) struct SceneInfo {
     pub(crate) color: Option<[u8; 3]>,
 }
 
-/// The whole grid: tracks in compositing order, one scene per row.
+/// A patch group as the track dialog offers it for a destination.
+#[derive(Serialize)]
+pub(crate) struct GroupInfo {
+    pub(crate) id: Uuid,
+    pub(crate) name: String,
+    pub(crate) color: [u8; 3],
+    /// How many fixtures it has (an empty group reaches nothing).
+    pub(crate) members: usize,
+}
+
+/// The whole grid: tracks in compositing order, one scene per row, and the patch's
+/// groups (destinations a track can take).
 #[derive(Serialize)]
 pub(crate) struct GridInfo {
     pub(crate) tracks: Vec<TrackInfo>,
     pub(crate) scenes: Vec<SceneInfo>,
+    pub(crate) groups: Vec<GroupInfo>,
 }
 
 /// A track's armed clip, as the clip controller last reported it.
@@ -736,30 +751,36 @@ pub(crate) fn grid_info(
         .enumerate()
         .map(|(slot, t)| {
             let zone = |id: &Uuid| show.patch.zones.iter().find(|z| z.id == *id);
+            let group = |id: &Uuid| show.patch.group(*id);
             let live = live(slot);
+            let d = &t.destination;
+            let names = d
+                .zones
+                .iter()
+                .filter_map(|id| zone(id).map(|z| z.name.clone()))
+                .chain(
+                    d.groups
+                        .iter()
+                        .filter_map(|id| group(id).map(|g| g.name.clone())),
+                );
+            let colors: Vec<[u8; 3]> = d
+                .zones
+                .iter()
+                .filter_map(|id| zone(id).map(|z| z.display_color))
+                .chain(
+                    d.groups
+                        .iter()
+                        .filter_map(|id| group(id).map(|g| g.display_color)),
+                )
+                .collect();
             TrackInfo {
                 id: t.id,
                 name: t.name.clone(),
-                zones: t.destination.zones.clone(),
-                destination: t
-                    .destination
-                    .zones
-                    .iter()
-                    .filter_map(|id| zone(id).map(|z| z.name.clone()))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                color: t
-                    .destination
-                    .zones
-                    .first()
-                    .and_then(zone)
-                    .map_or([128, 128, 128], |z| z.display_color),
-                colors: t
-                    .destination
-                    .zones
-                    .iter()
-                    .map(|id| zone(id).map_or([128, 128, 128], |z| z.display_color))
-                    .collect(),
+                zones: d.zones.clone(),
+                groups: d.groups.clone(),
+                destination: names.collect::<Vec<_>>().join(", "),
+                color: colors.first().copied().unwrap_or([128, 128, 128]),
+                colors,
                 blend_mode: t.blend_mode,
                 key_threshold: t.key_threshold,
                 key_softness: t.key_softness,
@@ -785,7 +806,22 @@ pub(crate) fn grid_info(
             }
         })
         .collect();
-    GridInfo { tracks, scenes }
+    let groups = show
+        .patch
+        .groups
+        .iter()
+        .map(|g| GroupInfo {
+            id: g.id,
+            name: g.name.clone(),
+            color: g.display_color,
+            members: g.members.len(),
+        })
+        .collect();
+    GridInfo {
+        tracks,
+        scenes,
+        groups,
+    }
 }
 
 /// Arm (or disarm) a clip for GO — Shift+click, the global "Modo armar", or an
@@ -1050,48 +1086,59 @@ pub(crate) fn move_track(tracks: &mut Vec<Track>, track: Uuid, before: Option<Uu
     tracks.insert(at, moved);
 }
 
-/// "Aplicar destino" in the track dialog: the zones `track` reaches. Recompiles the
-/// running show (LIVE-MODEL-SPEC §4.4); nothing happens when the set is unchanged.
+/// "Aplicar destino" in the track dialog: the zones and groups `track` reaches.
+/// Recompiles the running show (LIVE-MODEL-SPEC §4.4); nothing happens when the
+/// destination is unchanged.
 #[tauri::command]
 pub fn main_set_track_destination(
     app: AppHandle,
     track: Uuid,
     zones: Vec<Uuid>,
+    groups: Vec<Uuid>,
 ) -> Result<(), String> {
-    let zones = {
+    let dest = {
         let state = app.state::<AppState>();
         let show = state.show.locked();
-        let zones = destination_zones(&show.patch, &zones)?;
+        let dest = destination_of(&show.patch, &zones, &groups)?;
         match show.track(track) {
             None => return Err("no such track".into()),
-            Some(t) if t.destination.zones == zones => return Ok(()),
-            Some(_) => zones,
+            Some(t) if t.destination == dest => return Ok(()),
+            Some(_) => dest,
         }
     };
     recompile_running_show(&app, |show| {
         if let Some(t) = show.track_mut(track) {
-            t.destination.zones = zones;
+            t.destination = dest;
         }
     })
 }
 
-/// A requested destination as the show stores it: the patch's zones among `asked`, in
-/// patch order, each once. Unknown ids are dropped; none left is an error (a track must
-/// reach at least one zone).
-pub(crate) fn destination_zones(
+/// A requested destination as the show stores it: the patch's zones among `zones` and
+/// its groups among `groups`, each in patch order, each once. Unknown ids are dropped;
+/// nothing left is an error (a track must reach a zone or a group).
+pub(crate) fn destination_of(
     patch: &prisma_patch::Patch,
-    asked: &[Uuid],
-) -> Result<Vec<Uuid>, String> {
-    let zones: Vec<Uuid> = patch
-        .zones
-        .iter()
-        .map(|z| z.id)
-        .filter(|id| asked.contains(id))
-        .collect();
-    if zones.is_empty() {
-        return Err("a track needs at least one zone".into());
+    zones: &[Uuid],
+    groups: &[Uuid],
+) -> Result<prisma_engine::Destination, String> {
+    let dest = prisma_engine::Destination {
+        zones: patch
+            .zones
+            .iter()
+            .map(|z| z.id)
+            .filter(|id| zones.contains(id))
+            .collect(),
+        groups: patch
+            .groups
+            .iter()
+            .map(|g| g.id)
+            .filter(|id| groups.contains(id))
+            .collect(),
+    };
+    if dest.is_empty() {
+        return Err("Un track necesita al menos una zona o un grupo.".into());
     }
-    Ok(zones)
+    Ok(dest)
 }
 
 /// Delete a track and its clips. Recompiles the running show.

@@ -370,3 +370,45 @@ impl ClipHost for DemoHost {
     }
     fn active_changed(&self, _track: uuid::Uuid, _active: Option<usize>) {}
 }
+
+#[test]
+fn the_groups_are_even_and_odd_tubes_and_the_curtain_edges() {
+    use prisma_core::show::{Destination, ZoneReach};
+    use prisma_engine::demo::DEMO_GROUPS;
+    let show = demo_show();
+    let patch = &show.patch;
+    let names: Vec<_> = patch.groups.iter().map(|g| g.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["Tubos pares", "Tubos impares", "Bordes de cortinas"]
+    );
+    let ids: Vec<_> = patch.groups.iter().map(|g| g.id).collect();
+    assert_eq!(ids, DEMO_GROUPS);
+    let member_names = |i: usize| -> Vec<String> {
+        patch.groups[i]
+            .members
+            .iter()
+            .map(|m| patch.fixture(*m).expect("member exists").name.clone())
+            .collect()
+    };
+    assert_eq!(member_names(0), ["Tubo 2", "Tubo 4", "Tubo 6", "Tubo 8"]);
+    assert_eq!(member_names(1), ["Tubo 1", "Tubo 3", "Tubo 5", "Tubo 7"]);
+    assert_eq!(member_names(2).len(), 6);
+    // Even tubes: one zone through the group; curtain edges: three zones.
+    let reach = |g: usize| {
+        Destination {
+            zones: vec![],
+            groups: vec![DEMO_GROUPS[g]],
+        }
+        .reach(patch)
+    };
+    assert_eq!(reach(0), vec![(0, ZoneReach::Groups(vec![DEMO_GROUPS[0]]))]);
+    assert_eq!(
+        reach(2).iter().map(|(s, _)| *s).collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    // Distinct colours.
+    let colors: std::collections::HashSet<_> =
+        patch.groups.iter().map(|g| g.display_color).collect();
+    assert_eq!(colors.len(), 3);
+}

@@ -395,6 +395,11 @@ pub(crate) fn apply_editor_draft(app: &AppHandle, resume: bool) -> Result<(), St
                 .destination
                 .zones
                 .retain(|z| patch.zones.iter().any(|pz| pz.id == *z));
+            // A deleted group leaves every destination too (LIVE-MODEL-SPEC §8.5).
+            track
+                .destination
+                .groups
+                .retain(|g| patch.group(*g).is_some());
         }
         show.tracks.retain(|t| !t.destination.is_empty());
         // A newly added zone gets its own track, like `Show::new` gives every zone.

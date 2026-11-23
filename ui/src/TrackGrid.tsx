@@ -83,7 +83,7 @@ interface TrackGridProps {
   layoutLocked?: boolean;
 }
 
-const EMPTY: GridInfo = { tracks: [], scenes: [] };
+const EMPTY: GridInfo = { tracks: [], scenes: [], groups: [] };
 
 /** How long a fired scene's button flashes (a confirmation, under half a second). */
 const SCENE_FLASH_MS = 350;
@@ -914,6 +914,7 @@ export function TrackGrid({
           track={dialogTrack}
           slot={dialogSlot}
           zones={zones}
+          groups={g.groups ?? []}
           layoutLocked={layoutLocked}
           onPatch={(change) => patchTrack(dialogTrack.id, change)}
           onClose={() => setDialog(null)}

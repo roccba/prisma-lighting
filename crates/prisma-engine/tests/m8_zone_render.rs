@@ -521,6 +521,7 @@ fn track(
         opacity,
         live: None,
         effects: vec![effect],
+        groups: Vec::new(),
     }
 }
 

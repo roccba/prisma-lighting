@@ -46,8 +46,8 @@ use prisma_core::show::{
 };
 use prisma_core::{Easing, TimeBase};
 use prisma_patch::{
-    BlendMode, ColorOrder, ComponentSet, Fixture, FixtureProfile, GammaCalibration, Patch, Pixel,
-    WhiteProfile, Zone,
+    BlendMode, ColorOrder, ComponentSet, Fixture, FixtureProfile, GammaCalibration, Group, Patch,
+    Pixel, WhiteProfile, Zone,
 };
 use prisma_render::manifest_by_id;
 use uuid::Uuid;
@@ -74,6 +74,13 @@ pub const DEMO_TRACKS: [Uuid; 9] = [
     Uuid::from_u128(0xDE30_0107),
     Uuid::from_u128(0xDE30_0108),
     Uuid::from_u128(0xDE30_0109),
+];
+
+/// The groups' ids, in patch order: Tubos pares, Tubos impares, Bordes de cortinas.
+pub const DEMO_GROUPS: [Uuid; 3] = [
+    Uuid::from_u128(0xDE30_0201),
+    Uuid::from_u128(0xDE30_0202),
+    Uuid::from_u128(0xDE30_0203),
 ];
 
 /// The named scene rows, in order.
@@ -228,6 +235,41 @@ fn zone(slot: usize, name: &str, color: [u8; 3], mapping: [u32; 2]) -> Zone {
     }
 }
 
+/// Even and odd ceiling tubes (one zone each way), and the outer strips of the three
+/// curtains (a group across three zones).
+fn demo_groups() -> Vec<Group> {
+    let tube = |t: u32| Uuid::from_u128(0xDE30_1000 + t as u128);
+    let strip = |k: u128, s: u32| Uuid::from_u128(0xDE30_2000 + k * 0x100 + s as u128);
+    let group = |i: usize, name: &str, color: [u8; 3], members: Vec<Uuid>| Group {
+        id: DEMO_GROUPS[i],
+        name: name.into(),
+        members,
+        display_color: color,
+    };
+    vec![
+        group(
+            0,
+            "Tubos pares",
+            [230, 85, 85],
+            (1..TUBES).step_by(2).map(tube).collect(),
+        ),
+        group(
+            1,
+            "Tubos impares",
+            [240, 160, 60],
+            (0..TUBES).step_by(2).map(tube).collect(),
+        ),
+        group(
+            2,
+            "Bordes de cortinas",
+            [225, 205, 70],
+            (0..3)
+                .flat_map(|k| [strip(k, 0), strip(k, CURTAIN[0] - 1)])
+                .collect(),
+        ),
+    ]
+}
+
 fn demo_patch() -> Patch {
     let mut addr = Addr {
         universe: 1,
@@ -277,7 +319,7 @@ fn demo_patch() -> Patch {
             zone(2, "Cortina Este", [230, 180, 60], CURTAIN),
             zone(3, "Cortina Oeste", [110, 190, 100], CURTAIN),
         ],
-        groups: Vec::new(),
+        groups: demo_groups(),
     };
     patch.fill_zone_members_from_ownership();
     patch.fit_matrix_size();

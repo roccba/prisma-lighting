@@ -128,6 +128,7 @@ fn populated_show() -> Show {
             "Strobe",
             Destination {
                 zones: vec![zone_a, zone_b],
+                groups: Vec::new(),
             },
         );
         track.blend_mode = BlendMode::Max;
@@ -328,7 +329,13 @@ fn a_zone_reached_only_by_a_shared_track_has_no_home_track() {
     let patch = two_zone_patch();
     let (a, b) = (patch.zones[0].id, patch.zones[1].id);
     let mut show = Show::new("shared", patch);
-    show.tracks = vec![Track::new("both", Destination { zones: vec![a, b] })];
+    show.tracks = vec![Track::new(
+        "both",
+        Destination {
+            zones: vec![a, b],
+            groups: Vec::new(),
+        },
+    )];
     assert!(show.home_track(a).is_none() && show.home_track(b).is_none());
     show.validate().expect("a multi-zone track is valid");
 }

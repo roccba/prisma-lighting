@@ -137,10 +137,15 @@ export async function layoutProblems(page: Page, regions: Record<string, string>
       document.querySelectorAll(sel).forEach((region, ri) => {
         if (!visible(region)) return;
         const rb = region.getBoundingClientRect();
+        // A region that scrolls vertically holds rows above / below its box on purpose:
+        // there only the horizontal extent is checked.
+        const oy = getComputedStyle(region).overflowY;
+        const scrolls = (oy === "auto" || oy === "scroll") && region.scrollHeight > region.clientHeight;
         const leaves = Array.from(region.querySelectorAll(LEAVES)).filter((el) => visible(el) && !el.matches(INSIDE_CONTROL));
         for (const el of leaves) {
           const b = el.getBoundingClientRect();
-          if (b.left < rb.left - EPS || b.top < rb.top - EPS || b.right > rb.right + EPS || b.bottom > rb.bottom + EPS) {
+          const outY = !scrolls && (b.top < rb.top - EPS || b.bottom > rb.bottom + EPS);
+          if (b.left < rb.left - EPS || b.right > rb.right + EPS || outY) {
             out.push({ region: `${name}[${ri}]`, what: `${describe(el)} sticks out of the region` });
           }
           // Text cut without an ellipsis.

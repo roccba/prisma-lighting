@@ -93,7 +93,10 @@ function groupEdit(cmd: string, a: Record<string, unknown>): unknown {
     while (gs.some((x) => x.name.toLowerCase() === `grupo ${n}`)) n++;
     const id = `00000000-0000-4000-8000-${String(++groupSeq).padStart(12, "0")}`;
     // As the app: the first palette colour no group uses.
-    const palette = [[230, 85, 85], [240, 160, 60], [225, 205, 70], [140, 200, 80]];
+    const palette = [
+      [230, 85, 85], [240, 160, 60], [225, 205, 70], [140, 200, 80], [60, 180, 110], [60, 190, 190],
+      [70, 140, 225], [120, 105, 220], [175, 95, 210], [225, 95, 170], [165, 120, 80], [160, 165, 175],
+    ];
     const color = palette.find((c) => !gs.some((x) => x.display_color.join() === c.join())) ?? palette[0];
     gs.push({ id, name: `Grupo ${n}`, members: [...new Set(a.members as string[])], display_color: color });
     editorState().can_undo = true;
@@ -138,6 +141,25 @@ mockIPC(
       return null;
     }
     if (cmd.startsWith("editor_") && cmd.includes("_group")) return groupEdit(cmd, a);
+    // A new destination: the app recompiles and the grid re-fetches on `layout-changed`.
+    if (cmd === "main_set_track_destination") {
+      const grid = fx.main_grid as {
+        tracks: { id: string; zones: string[]; groups: string[]; destination: string }[];
+        groups: { id: string; name: string }[];
+      };
+      const zones = fx.main_zones as { id: string; name: string }[];
+      const t = grid.tracks.find((x) => x.id === a.track);
+      if (!t) throw new Error("no such track");
+      t.zones = zones.map((z) => z.id).filter((id) => (a.zones as string[]).includes(id));
+      t.groups = grid.groups.map((g) => g.id).filter((id) => (a.groups as string[]).includes(id));
+      if (t.zones.length + t.groups.length === 0) throw new Error("Un track necesita al menos una zona o un grupo.");
+      t.destination = [
+        ...zones.filter((z) => t.zones.includes(z.id)).map((z) => z.name),
+        ...grid.groups.filter((g) => t.groups.includes(g.id)).map((g) => g.name),
+      ].join(", ");
+      setTimeout(() => emit("layout-changed").catch(() => {}), 0);
+      return null;
+    }
     if (cmd === "main_effect_panel") {
       const cell = a.cell ?? null;
       return structuredClone(

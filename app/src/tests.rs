@@ -285,13 +285,25 @@ fn a_destination_is_the_patchs_zones_in_patch_order() {
         patch.zones.push(z);
     }
     let [a, b, c] = [0, 1, 2].map(|i| patch.zones[i].id);
-    assert_eq!(destination_zones(&patch, &[c, a, a]).unwrap(), [a, c]);
-    assert_eq!(
-        destination_zones(&patch, &[b, Uuid::new_v4()]).unwrap(),
-        [b]
-    );
-    assert!(destination_zones(&patch, &[]).is_err());
-    assert!(destination_zones(&patch, &[Uuid::new_v4()]).is_err());
+    let zones = |asked: &[Uuid]| destination_of(&patch, asked, &[]).map(|d| d.zones);
+    assert_eq!(zones(&[c, a, a]).unwrap(), [a, c]);
+    assert_eq!(zones(&[b, Uuid::new_v4()]).unwrap(), [b]);
+    assert!(zones(&[]).is_err());
+    assert!(zones(&[Uuid::new_v4()]).is_err());
+
+    // Groups: patch order, each once; a group alone is a destination.
+    for name in ["G1", "G2"] {
+        patch.groups.push(Group {
+            id: Uuid::new_v4(),
+            name: name.into(),
+            members: vec![],
+            display_color: [0, 0, 0],
+        });
+    }
+    let [g1, g2] = [0, 1].map(|i| patch.groups[i].id);
+    let d = destination_of(&patch, &[], &[g2, g1, g2, Uuid::new_v4()]).unwrap();
+    assert_eq!((d.zones, d.groups), (vec![], vec![g1, g2]));
+    assert!(destination_of(&patch, &[], &[Uuid::new_v4()]).is_err());
 }
 
 #[test]
