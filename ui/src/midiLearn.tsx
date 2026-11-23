@@ -1,4 +1,14 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import {
+  Children,
+  cloneElement,
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   controlLabel,
@@ -184,46 +194,61 @@ interface LearnTargetProps {
   target: MapTarget;
   /** What the control is, for the tooltip ("Dimmer — Zona 1"). */
   name: string;
-  children: ReactNode;
-  className?: string;
+  /** Exactly one element: the control itself. It must pass `data-*`, `title` and the
+   *  capture-phase pointer / click handlers on to its root DOM element. */
+  children: ReactElement;
+  /** Too small for the mapped control's label (S / M buttons, a strobe slider): the
+   *  solid frame says "mapped", the tooltip names the control. */
+  compact?: boolean;
 }
 
-/** Wraps a learnable control. Outside learn mode it renders only its children. */
-export function LearnTarget({ target, name, children, className }: LearnTargetProps) {
+/** Stop an event before the control sees it: in learn mode a click arms, never plays. */
+const swallow = (e: React.SyntheticEvent) => {
+  e.stopPropagation();
+  e.preventDefault();
+};
+
+/**
+ * Makes a control learnable. It adds nothing to the layout: no wrapper, no layer on top.
+ * In learn mode the control itself carries `data-learn` and draws its own frame inside
+ * its own box (an inset outline, theme.css), with the mapped control's label as its
+ * `::after`; its pointer and click events are taken in the capture phase, so a click arms
+ * the target instead of operating the control. Outside learn mode the child renders
+ * untouched.
+ */
+export function LearnTarget({ target, name, children, compact }: LearnTargetProps) {
   const { active, armed, justLearned, mappings, arm, openConfig } = useMidiLearn();
+  const child = Children.only(children);
+  if (!active) return child;
+
   const mapping = mappings.find((m) => sameTarget(m.target, target));
   const isArmed = armed !== null && sameTarget(armed, target);
   const isFlash = justLearned !== null && sameTarget(justLearned, target);
-
+  const state = [mapping && "mapped", isArmed && "armed", isFlash && "learned"].filter(Boolean).join(" ");
   const title = isArmed
     ? `${name}: mové un control del hardware…`
     : mapping
       ? `${name}: ${controlLabel(mapping.control)} — clic para reasignar, clic derecho para configurar`
       : `${name}: clic y mové un control del hardware`;
 
-  return (
-    <div className={`pr-learn-host${className ? ` ${className}` : ""}`}>
-      {children}
-      {active && (
-        <div
-          className={`pr-learn-overlay${mapping ? " is-mapped" : ""}${isArmed ? " is-armed" : ""}${isFlash ? " is-learned" : ""}`}
-          title={title}
-          onPointerDown={(e) => {
-            e.stopPropagation();
-            e.preventDefault();
-            if (e.button === 0) arm(target);
-          }}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (mapping) openConfig(target, name, e.clientX, e.clientY);
-          }}
-        >
-          {mapping && !isArmed && <span className="pr-learn-badge">{controlLabel(mapping.control)}</span>}
-        </div>
-      )}
-    </div>
-  );
+  return cloneElement(child, {
+    "data-learn": name,
+    "data-learn-state": state || undefined,
+    "data-learn-badge": mapping && !isArmed && !compact ? controlLabel(mapping.control) : undefined,
+    title,
+    onPointerDownCapture: (e: React.PointerEvent) => {
+      swallow(e);
+      if (e.button === 0) arm(target);
+    },
+    onPointerUpCapture: swallow,
+    onMouseDownCapture: swallow,
+    onClickCapture: swallow,
+    onDoubleClickCapture: swallow,
+    onContextMenuCapture: (e: React.MouseEvent) => {
+      swallow(e);
+      if (mapping) openConfig(target, name, e.clientX, e.clientY);
+    },
+  } as Record<string, unknown>);
 }
 
 // --- The right-click configuration menu --------------------------------------------------

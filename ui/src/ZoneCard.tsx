@@ -204,7 +204,7 @@ export function ZoneCard({ zone, slot, selected, onSelect, registerPreview }: Zo
         <LearnTarget
           target={{ zone_slot: { slot, sub: "solo" } }}
           name={`Solo — ${zone.name}`}
-          className="pr-learn-compact"
+          compact
         >
           <button
             className={`pr-btn pr-zonecard-sm${solo ? " is-active" : ""}`}
@@ -217,7 +217,7 @@ export function ZoneCard({ zone, slot, selected, onSelect, registerPreview }: Zo
         <LearnTarget
           target={{ zone_slot: { slot, sub: "blackout" } }}
           name={`Mute — ${zone.name}`}
-          className="pr-learn-compact"
+          compact
         >
           <button
             className={`pr-btn pr-zonecard-sm${mute ? " is-active" : ""}`}
@@ -230,7 +230,7 @@ export function ZoneCard({ zone, slot, selected, onSelect, registerPreview }: Zo
         <LearnTarget
           target={{ zone_slot: { slot, sub: "strobe_on" } }}
           name={`Strobo — ${zone.name}`}
-          className="pr-learn-compact"
+          compact
         >
           <button
             className={`pr-strobe-trigger pr-strobe-trigger-sm${strobeOn ? " is-on" : ""}${strobeLatched ? " is-latched" : ""}`}
@@ -251,11 +251,11 @@ export function ZoneCard({ zone, slot, selected, onSelect, registerPreview }: Zo
         <LearnTarget
           target={{ zone_slot: { slot, sub: "strobe_rate" } }}
           name={`Velocidad strobo — ${zone.name}`}
-          className="pr-learn-compact pr-zonecard-strobe"
+          compact
         >
           <input
             type="range"
-            className="pr-strobe-rate"
+            className="pr-strobe-rate pr-zonecard-strobe"
             min={0}
             max={1}
             step={0.01}

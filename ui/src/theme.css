@@ -523,8 +523,24 @@ input, textarea, [contenteditable="true"] {
 /* --- Window shell + fixed layout --- */
 .pr-mainwin { height: 100vh; display: flex; flex-direction: column; background: var(--bg-app); color: var(--text); font-family: var(--font-ui); font-size: var(--fs-base); overflow: hidden; }
 .pr-mainwin-body { flex: 1 1 auto; display: flex; flex-direction: column; gap: 6px; padding: 6px; min-height: 0; overflow: hidden; }
-/* A size container: the grid column sizes itself from the row's HEIGHT (below). */
-.pr-mainwin-mid { flex: 1 1 auto; display: flex; gap: 6px; min-height: 0; container-type: size; }
+/* The main area is ONE grid (LIVE-MODEL-SPEC §10.1): track grid | preview on top, the panel
+   handle, then panel | master. Three columns — the grid's, the preview's width minus the
+   master's, the master's — so the master is always the bottom-right cell, at the density's
+   height (--workrow-h), wherever the panel is. Hiding the panel only lets the track grid
+   grow down the left column; nothing else moves. */
+.pr-mainwin-main {
+  --pv: min(40vh, 400px);
+  flex: 1 1 auto; min-height: 0; display: grid; gap: 6px;
+  grid-template-columns: minmax(0, 1fr) calc(var(--pv) - 156px) 150px;
+  grid-template-rows: minmax(0, 1fr) 8px var(--workrow-h);
+  grid-template-areas: "grid preview preview" "bar bar bar" "panel panel master";
+}
+.pr-mainwin-main.is-panel-hidden { grid-template-areas: "grid preview preview" "grid bar bar" "grid . master"; }
+.pr-mainwin-main > .pr-region-grid { grid-area: grid; }
+.pr-mainwin-main > .pr-preview-slot { grid-area: preview; min-height: 0; container-type: size; display: flex; justify-content: flex-end; }
+.pr-mainwin-main > .pr-panelbar { grid-area: bar; }
+.pr-mainwin-main > .pr-workrow-panel { grid-area: panel; }
+.pr-mainwin-main > .pr-workrow-master { grid-area: master; }
 
 /* A region is a bordered surface with a title strip — the dock unit for the future
    dashboard (§7). Raised: light-ish grey face over the app black, 1px dark edge. */
@@ -539,22 +555,12 @@ input, textarea, [contenteditable="true"] {
 /* Also bounded by the row's own height (`100cqh` of `.pr-mainwin-mid`): in a normal
    (non-maximized) window the row is shorter than 40vh and the square would spill over the
    work row below. */
-.pr-region-preview { flex: 0 0 auto; width: min(40vh, 400px, 100cqh); height: min(40vh, 400px, 100cqh); }
-/* Bottom work row: FIXED height, not resizable (console-style). The effect-parameters
-   panel (a swappable slot — groups will share it later) sits left at a fixed width where
-   every parameter fits without scrolling; the master strip sits right at a fixed width. */
-.pr-workrow { flex: 0 0 auto; display: flex; gap: 6px; min-height: 0; height: var(--workrow-h); }
+.pr-region-preview { flex: 0 0 auto; width: min(100cqw, 100cqh); height: min(100cqw, 100cqh); }
 /* The parameter panel's show / hide handle, where the splitter used to be: a thin bar
    with one small button. The panel's height is fixed by the density. */
-.pr-panelbar { flex: 0 0 auto; display: flex; justify-content: center; height: 14px; margin: -3px 0; }
-/* With the panel hidden the master column sits beside the preview at the SAME size it has
-   in the work row (the density's panel height), bottom-aligned — never stretched. */
-.pr-mainwin-mid > .pr-workrow-master { align-self: flex-end; height: var(--workrow-h); }
+.pr-panelbar { display: flex; justify-content: center; align-items: center; height: 8px; overflow: visible; z-index: 2; }
 .pr-panelbar-btn { height: 14px; min-width: 64px; padding: 0 10px; font-size: var(--fs-tiny); line-height: 1; color: var(--text-dim); }
-/* The params panel FILLS the row (minus the fixed master), so faders/controls use the
-   width instead of leaving a gap. Its content is sized so the densest effect still fits. */
-.pr-workrow-panel { flex: 1 1 auto; min-width: 0; }
-.pr-workrow-master { flex: 0 0 150px; }
+.pr-workrow-panel, .pr-workrow-master { min-width: 0; min-height: 0; }
 /* Fixed 26px height so layouts can compute from it. */
 .pr-region-title { box-sizing: border-box; height: 26px; display: flex; align-items: center; white-space: pre; font-size: var(--fs-small); color: var(--text-label); padding: 0 8px; border-bottom: 1px solid var(--divider); text-transform: uppercase; letter-spacing: .04em; flex: 0 0 auto; }
 
@@ -638,8 +644,10 @@ input, textarea, [contenteditable="true"] {
    MASTER label, blackout + strobe and the strobe rate underneath (Bauti: nothing to the
    right of the fader). Works now that the work row is tall. */
 .pr-master { flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 8px; }
-.pr-master-fader { flex: 1 1 auto; min-height: 0; align-self: stretch; display: flex; align-items: center; justify-content: center; }
-.pr-master-fader .pr-fader { height: 100%; width: 48px; }
+/* The master fader is the density's size: it never stretches into free room nor gives up
+   room to the buttons (LIVE-MODEL-SPEC §10.1). */
+.pr-master-fader { flex: 0 0 auto; position: relative; display: flex; align-items: center; justify-content: center; }
+.pr-master-fader .pr-fader { height: var(--master-fader, 72px); width: 48px; }
 .pr-master-value { flex: 0 0 auto; font-size: var(--fs-value); color: var(--accent-text); font-variant-numeric: tabular-nums; font-weight: 600; }
 .pr-master-label { flex: 0 0 auto; margin-top: -4px; font-size: var(--fs-tiny); color: var(--text-label); letter-spacing: .05em; }
 .pr-master-actions { flex: 0 0 auto; display: flex; gap: 6px; margin-top: 4px; }
@@ -778,13 +786,7 @@ input, textarea, [contenteditable="true"] {
 .pr-tfoot-fader .pr-fader { --pr-knob-h: 18px; width: 24px; height: var(--tfoot-fader, 72px); }
 .pr-tfoot-fader .pr-fader .pr-knob { width: 22px; height: 18px; padding: 3px; }
 .pr-tfoot-btns { display: flex; gap: 3px; }
-.pr-tfoot-btns > .pr-zonecard-sm:last-child,
-.pr-tfoot-btns > .pr-learn-host:last-child .pr-zonecard-sm { width: 30px; }
-/* Learn wrappers in the footer keep the controls' own sizing. */
-.pr-tfoot > .pr-learn-host:has(.pr-tfoot-stop),
-.pr-tfoot-all > .pr-learn-host { align-self: stretch; }
-.pr-learn-host > .pr-tfoot-stop,
-.pr-learn-host > .pr-tfoot-stopall { flex: 1 1 auto; }
+.pr-tfoot-btns > .pr-zonecard-sm:last-child { width: 30px; }
 /* The track settings popover: a small floating form on the menu surface. */
 .pr-tsettings { position: fixed; z-index: 120; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; min-width: 260px;
   background: var(--menu-bg); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); box-shadow: 0 8px 18px rgba(0,0,0,.5); }
@@ -891,15 +893,16 @@ input, textarea, [contenteditable="true"] {
 /* Compact fader for parameter rows: every part fits INSIDE its 40px box (knob 5–35,
    slot 17–23, ticks 26–36) — the default 44px geometry squeezed into 30px let the knob
    and ticks hang 10px below it. */
-.pr-field-control .pr-hslider { height: 40px; }
-.pr-field-control .pr-hslider .pr-knob { top: 5px; }
-.pr-field-control .pr-hslider .slot, .pr-field-control .pr-hslider .fill { top: 17px; }
-.pr-field-control .pr-hslider .ticks { top: 26px; }
+.pr-field-control .pr-hslider { height: var(--pslider-h, 40px); }
+.pr-field-control .pr-hslider .pr-knob { top: 5px; height: var(--pslider-knob, 30px); }
+.pr-field-control .pr-hslider .slot, .pr-field-control .pr-hslider .fill { top: var(--pslider-slot, 17px); }
+.pr-field-control .pr-hslider .ticks i.major { height: var(--pslider-major, 10px); }
+.pr-field-control .pr-hslider .ticks { top: var(--pslider-ticks, 26px); }
 .pr-field-block { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
 .pr-field-block .pr-field-label { grid-area: auto; }
 .pr-field-block .pr-field-control { grid-area: auto; }
 /* The consistent editable value box (grid `value` column). */
-input.pr-field-value { grid-area: value; width: 100%; height: 26px; background: var(--bg-input); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); color: var(--accent-text); font: inherit; font-size: var(--fs-value); text-align: center; font-variant-numeric: tabular-nums; -moz-appearance: textfield; appearance: textfield; }
+input.pr-field-value { grid-area: value; width: 100%; height: var(--pfield-h, 26px); box-sizing: border-box; background: var(--bg-input); border: 1px solid var(--btn-border-dark); border-radius: var(--r-sm); color: var(--accent-text); font: inherit; font-size: var(--fs-value); text-align: center; font-variant-numeric: tabular-nums; -moz-appearance: textfield; appearance: textfield; }
 input.pr-field-value::-webkit-outer-spin-button, input.pr-field-value::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 input.pr-field-value:focus { outline: 1px solid var(--accent); outline-offset: -1px; }
 
@@ -1018,39 +1021,33 @@ body.is-picking, body.is-picking * { cursor: crosshair !important; user-select: 
 .pr-ctable-count { color: var(--text-label); font-size: var(--fs-small); margin: 0 6px; }
 .pr-ctable-spacer { flex: 1 1 auto; }
 
-/* --- MIDI Learn (M9-SPEC §7) ---------------------------------------------------------
-   Learn mode overlays every learnable control. Mapped = thin orange outline + its control
-   label; ARMED = orange tint that pulses until the hardware is touched; a short green-free
-   flash (brighter orange) confirms the bind. */
-.pr-learn-host { position: relative; display: flex; }
-.pr-learn-overlay {
-  position: absolute; inset: -2px; z-index: 5; cursor: pointer;
-  border: 1px dashed var(--btn-border); border-radius: var(--r-sm);
-  background: rgba(0,0,0,.18);
-  display: flex; align-items: flex-end; justify-content: center;
-}
-.pr-learn-overlay:hover { border-color: var(--learn); background: var(--learn-soft); }
-.pr-learn-overlay.is-mapped { border: 1px solid var(--learn); background: rgba(232,145,45,.08); }
-.pr-learn-overlay.is-armed {
-  border: 1px solid var(--learn); background: var(--learn-soft);
-  animation: pr-learn-pulse 1s ease-in-out infinite;
-}
-.pr-learn-overlay.is-learned { background: rgba(232,145,45,.45); animation: none; }
+/* --- MIDI Learn (M9-SPEC §7; LIVE-MODEL-SPEC §10.1) ------------------------------------
+   In learn mode every learnable control carries `data-learn` and draws its OWN frame,
+   inside its own box (an inset outline): no wrapper, no layer on top, so the frame is
+   exactly the control and follows it through scroll and density. Unmapped = dashed grey,
+   mapped = solid orange + the control's label (`data-learn-badge`, as `::after`),
+   armed = thick orange pulsing until the hardware is touched, learned = a short flash.
+   `!important`: learn mode is drawn over whatever outline the control has (selection). */
+[data-learn] { cursor: pointer !important; outline: 1px dashed var(--btn-border) !important; outline-offset: -1px !important; }
+[data-learn]:hover { outline: 1px solid var(--learn) !important; }
+[data-learn][data-learn-state~="mapped"] { outline: 1px solid var(--learn) !important; }
+[data-learn][data-learn-state~="armed"] { outline: 2px solid var(--learn) !important; outline-offset: -2px !important; animation: pr-learn-pulse 1s ease-in-out infinite; }
+[data-learn][data-learn-state~="learned"] { outline: 2px solid var(--learn) !important; outline-offset: -2px !important; animation: none; }
 @keyframes pr-learn-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(232,145,45,.0); background: rgba(232,145,45,.12); }
-  50%      { box-shadow: 0 0 10px 1px rgba(232,145,45,.55); background: rgba(232,145,45,.34); }
+  0%, 100% { outline-color: rgba(232,145,45,.45); }
+  50%      { outline-color: rgba(232,145,45,1); }
 }
-.pr-learn-badge {
-  max-width: 100%; margin: 2px; padding: 0 3px; border-radius: 2px;
-  background: var(--learn); color: #111; font-family: var(--font-mono); font-size: var(--fs-tiny);
+/* On a cell or a scene button the label sits top-right, beside the clip number, so it
+   never covers the name. */
+.pr-cell[data-learn-badge]::after,
+.pr-scene-btn[data-learn-badge]::after { left: auto; right: 2px; bottom: auto; top: 1px; transform: none; max-width: 60%; }
+[data-learn-badge] { position: relative; }
+[data-learn-badge]::after {
+  content: attr(data-learn-badge); position: absolute; left: 50%; bottom: 2px; transform: translateX(-50%);
+  max-width: calc(100% - 4px); padding: 0 3px; border-radius: 2px; z-index: 1;
+  background: var(--learn); color: #111; font-family: var(--font-mono); font-size: var(--fs-tiny); line-height: 1.3;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none;
 }
-/* Targets too small for a label (S / M buttons): the solid border says "mapped", the
-   tooltip names the control. */
-.pr-learn-compact .pr-learn-badge { display: none; }
-/* A learnable grid cell: the wrapper is the grid item, the cell fills it. */
-.pr-learn-cell > .pr-cell,
-.pr-learn-cell > .pr-scene-btn { flex: 1 1 auto; }
 
 /* MIDI Learn right-click menu (M9 Slice 3): button style, LED colour + motion, unmap. */
 .pr-midimenu {
@@ -1229,3 +1226,22 @@ body.is-scrubbing, body.is-scrubbing * { cursor: ns-resize !important; user-sele
 .pr-dirmenu-caret { font-size: 10px; margin-left: 16px; }
 .pr-dirmenu-sub { position: absolute; left: 100%; min-width: 240px; padding: 4px 0; background: var(--bg-panel-2); border: 1px solid var(--btn-border); box-shadow: 0 8px 24px rgba(0,0,0,.55); }
 .pr-dirmenu-sub .pr-dirmenu-item { justify-content: flex-start; }
+
+/* --- Compact density (LIVE-MODEL-SPEC §10.1) ------------------------------------------
+   A cell shows only its name, on one line ("…" + the full name in its tooltip); the track
+   header shows name and destination (blend · transition stays in the ⋯ popover); the
+   track footer and the master show their fader's number only while the fader moves,
+   floating over the fader so nothing shifts. */
+.pr-mainwin[data-density="compact"] .pr-cell { justify-content: flex-end; padding-top: 12px; }
+.pr-mainwin[data-density="compact"] .pr-cell-effect { display: none; }
+.pr-mainwin[data-density="compact"] .pr-cell-title { display: block; -webkit-line-clamp: unset; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 0 auto; }
+.pr-mainwin[data-density="compact"] .pr-thead-sub + .pr-thead-sub { display: none; }
+.pr-mainwin[data-density="compact"] .pr-tfoot-fader { position: relative; }
+.pr-mainwin[data-density="compact"] .pr-tfoot-fader .pr-zonecard-faderval,
+.pr-mainwin[data-density="compact"] .pr-master-value {
+  display: none; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 2;
+  padding: 0 4px; border-radius: var(--r-sm); background: var(--bg-input); border: 1px solid var(--accent);
+}
+.pr-mainwin[data-density="compact"] .pr-tfoot-fader.is-moving .pr-zonecard-faderval,
+.pr-mainwin[data-density="compact"] .pr-master.is-moving .pr-master-value { display: block; }
+.pr-mainwin[data-density="compact"] .pr-master-label { display: none; }

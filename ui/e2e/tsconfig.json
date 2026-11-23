@@ -1,0 +1,5 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": [".", "../src/density.ts", "../src/vite-env.d.ts"]
+}

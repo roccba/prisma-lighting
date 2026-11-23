@@ -583,6 +583,7 @@ function MainWindowBody() {
     <PreviewStreamProvider>
       <div
         className="pr-mainwin"
+        data-density={density}
         style={{ ...densityVars(density), ...(revealed ? {} : { visibility: "hidden" }) } as React.CSSProperties}
       >
         <MenuBar
@@ -618,7 +619,10 @@ function MainWindowBody() {
             <ZoneRow zones={zones} selected={selected} onSelect={setSelected} />
           </section>
 
-          <div className="pr-mainwin-mid">
+          {/* One CSS grid (theme.css): grid | preview on top, the panel handle, then
+              panel | master. The master is always the bottom-right cell at the density's
+              size; hiding the panel only lets the track grid grow down the left column. */}
+          <div className={`pr-mainwin-main${panelHidden ? " is-panel-hidden" : ""}`}>
             <section className="pr-region pr-region-grid">
               <TrackGrid
                 zones={zones}
@@ -632,51 +636,41 @@ function MainWindowBody() {
                 density={density}
               />
             </section>
-            <section className="pr-region pr-region-preview">
-              {selectedZone ? (
-                <LargePreview zoneId={selectedZone.id} />
-              ) : (
-                <div className="pr-placeholder-body">Seleccioná una zona</div>
-              )}
-            </section>
-            {/* With the panel hidden the master column moves up here, so the master and
-                blackout never disappear with it. */}
-            {panelHidden && (
-              <section className="pr-region pr-workrow-master">
-                <GlobalBar />
+            <div className="pr-preview-slot">
+              <section className="pr-region pr-region-preview">
+                {selectedZone ? (
+                  <LargePreview zoneId={selectedZone.id} />
+                ) : (
+                  <div className="pr-placeholder-body">Seleccioná una zona</div>
+                )}
+              </section>
+            </div>
+
+            {/* The parameter panel's show / hide handle. */}
+            <div className="pr-panelbar">
+              <button
+                type="button"
+                className="pr-btn pr-panelbar-btn"
+                onClick={togglePanel}
+                title={panelHidden ? "Mostrar el panel de parámetros (Tab)" : "Ocultar el panel de parámetros (Tab)"}
+                aria-expanded={!panelHidden}
+              >
+                {panelHidden ? "▴ Panel" : "▾ Panel"}
+              </button>
+            </div>
+            {!panelHidden && (
+              <section className="pr-region pr-workrow-panel">
+                {selectedTrack ? (
+                  <EffectParams trackId={selectedTrack} cell={selectedCell} rev={gridRev} onGridChange={bumpGrid} />
+                ) : (
+                  <div className="pr-placeholder-body">Seleccioná una celda</div>
+                )}
               </section>
             )}
-          </div>
-
-          {/* The parameter panel's show / hide handle. */}
-          <div className="pr-panelbar">
-            <button
-              type="button"
-              className="pr-btn pr-panelbar-btn"
-              onClick={togglePanel}
-              title={panelHidden ? "Mostrar el panel de parámetros (Tab)" : "Ocultar el panel de parámetros (Tab)"}
-              aria-expanded={!panelHidden}
-            >
-              {panelHidden ? "▴ Panel" : "▾ Panel"}
-            </button>
-          </div>
-          {/* Bottom work row — FIXED height set by the density: the effect parameters on the
-              left (a swappable slot: groups will share it later) and the master on the right. */}
-          {!panelHidden && (
-          <div className="pr-workrow">
-            <section className="pr-region pr-workrow-panel">
-              {selectedTrack ? (
-                <EffectParams trackId={selectedTrack} cell={selectedCell} rev={gridRev} onGridChange={bumpGrid} />
-              ) : (
-                <div className="pr-placeholder-body">Seleccioná una celda</div>
-              )}
-            </section>
-
             <section className="pr-region pr-workrow-master">
               <GlobalBar />
             </section>
           </div>
-          )}
         </div>
 
         {deviceMgrOpen && <DeviceManager onClose={() => setDeviceMgrOpen(false)} zones={zones} />}
@@ -754,13 +748,13 @@ function TransportBar({
         Modo armar
       </button>
       {(anyArmed || learnActive) && (
-        <LearnTarget target={{ path: "/arm/clear" }} name="Desarmar" className="pr-learn-compact">
+        <LearnTarget target={{ path: "/arm/clear" }} name="Desarmar" compact>
           <button type="button" className="pr-btn" onClick={() => armClear().catch(() => {})} title="Desarmar todo (Esc)">
             Desarmar
           </button>
         </LearnTarget>
       )}
-      <LearnTarget target={{ path: "/arm/go" }} name="GO" className="pr-learn-compact">
+      <LearnTarget target={{ path: "/arm/go" }} name="GO" compact>
         <button type="button" className="pr-btn pr-go-btn" onClick={() => armGo().catch(() => {})} title="Lanzar todo lo armado (Espacio)">
           GO
         </button>

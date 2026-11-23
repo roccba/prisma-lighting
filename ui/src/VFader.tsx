@@ -6,13 +6,12 @@ import { useRef, useState } from "react";
 // so a bipolar velocity fader reads its zero at the middle and its sign by which way
 // the fill runs. The value is always 0..1 here; the caller maps it to a real range.
 
-interface VFaderProps {
+interface VFaderProps extends Omit<React.HTMLAttributes<HTMLDivElement>, "onChange"> {
   value: number; // 0..1
   onChange: (v: number) => void;
   /** Fill from the centre instead of the bottom (for bipolar controls like velocity). */
   bipolar?: boolean;
   onGrabbedChange?: (grabbed: boolean) => void;
-  "aria-label"?: string;
 }
 
 const TICKS = 11;
@@ -74,7 +73,8 @@ export function VFader({ value, onChange, bipolar, onGrabbedChange, ...rest }: V
 
   return (
     <div
-      className={`pr-fader${bipolar ? " is-bipolar" : ""}`}
+      {...rest}
+      className={`pr-fader${bipolar ? " is-bipolar" : ""}${rest.className ? ` ${rest.className}` : ""}`}
       ref={railRef}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -85,7 +85,6 @@ export function VFader({ value, onChange, bipolar, onGrabbedChange, ...rest }: V
       aria-valuemin={0}
       aria-valuemax={1}
       aria-valuenow={v}
-      aria-label={rest["aria-label"]}
     >
       <div className="slot" />
       {bipolar && <div className="pr-fader-center" />}

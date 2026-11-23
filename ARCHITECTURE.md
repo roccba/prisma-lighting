@@ -329,3 +329,4 @@ holds the keyboard shortcuts and which devices had their defaults seeded; a v4 p
 | Autosave | `app/src/autosave.rs` |
 | UI | `ui/src/` (`MainWindow`, `TrackGrid`, `TrackDialog`, `ZoneRow`, `EffectParams`, `Editor`) |
 | Design system | `docs/DESIGN.md`, `ui/src/theme.css` |
+| UI tests: Playwright harness (real UI, mocked IPC, demo-show fixture from `ui_fixture_is_current` in `app/`) | `ui/e2e/`, `npm run test:e2e` |

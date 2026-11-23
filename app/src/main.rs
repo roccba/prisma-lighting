@@ -26,7 +26,8 @@ use prisma_engine::{
     ClipEffect, ClipHost, ControlMode, ControllerMappings, DiscoveredNode, Engine, EngineConfig,
     EngineHandle, HostInterface, InterfaceResolution, Layer, LedStyle, MapTarget, MidiMapping,
     MidiNotice, MidiRuntime, NodeMonitor, NodeOrigin, NodeStatus, ParamSet, ScanError, Show,
-    ShowNetwork, Source, Takeover, Track, TrackBehaviour, ZoneLiveReadout, ZoneShow,
+    ShowNetwork, Source, Takeover, Track, TrackBehaviour, TrackLiveReadout, ZoneLiveReadout,
+    ZoneShow,
 };
 use prisma_engine::{FocusKind, KeyBinding, KeyCombo};
 use prisma_engine::{LaunchMode, TrackTransition};
@@ -1370,43 +1371,48 @@ fn zone_slot(state: &AppState, id: Uuid) -> Option<usize> {
 #[tauri::command]
 fn main_zones(state: State<AppState>) -> Vec<ZoneInfo> {
     // Identity comes from the show's embedded patch (the single source of truth, so a
-    // hot patch edit is reflected here); the live controls come from the engine. Collect
-    // identity first, then drop the show lock before taking the engine lock.
-    let metas: Vec<(Uuid, String, [u8; 3], bool)> = {
-        let show = state.show.lock().unwrap();
-        show.patch
-            .zones
-            .iter()
-            .map(|z| {
-                let dual = show.patch.fixtures.iter().any(|f| {
-                    f.zone == z.id && f.profile.components == prisma_patch::ComponentSet::Rgbww
-                });
-                (z.id, z.name.clone(), z.display_color, dual)
-            })
-            .collect()
-    };
+    // hot patch edit is reflected here); the live controls come from the engine. Clone
+    // the show first, then drop its lock before taking the engine lock.
+    let show = state.show.lock().unwrap().clone();
     let guard = state.engine.lock().unwrap();
-    metas
-        .into_iter()
+    zone_infos(&show, |slot| guard.as_ref().map(|e| e.zone_live(slot)))
+}
+
+/// The zone row for `show`, each zone's live controls from `live` (`None` = the show's
+/// stored values). Pure: the UI test fixture is built from it.
+fn zone_infos(show: &Show, live: impl Fn(usize) -> Option<ZoneLiveReadout>) -> Vec<ZoneInfo> {
+    show.patch
+        .zones
+        .iter()
         .enumerate()
-        .map(|(slot, (id, name, color, has_dual_white))| {
-            let live = guard
-                .as_ref()
-                .map(|e| e.zone_live(slot))
-                .unwrap_or(ZoneLiveReadout {
-                    dimmer: 0.0,
-                    speed: 1.0,
-                    solo: false,
-                    blackout: false,
-                    strobe_on: false,
-                    strobe_rate: 0.4,
-                    white_auto: true,
-                    white_kelvin: 4000.0,
-                });
+        .map(|(slot, z)| {
+            let has_dual_white = show.patch.fixtures.iter().any(|f| {
+                f.zone == z.id && f.profile.components == prisma_patch::ComponentSet::Rgbww
+            });
+            let stored = show.zone(z.id).map(|zs| ZoneLiveReadout {
+                dimmer: zs.live.dimmer,
+                speed: zs.live.speed_multiplier,
+                solo: zs.live.solo,
+                blackout: zs.live.blackout,
+                strobe_on: false,
+                strobe_rate: 0.4,
+                white_auto: zs.live.white_auto,
+                white_kelvin: zs.live.white_kelvin,
+            });
+            let live = live(slot).or(stored).unwrap_or(ZoneLiveReadout {
+                dimmer: 0.0,
+                speed: 1.0,
+                solo: false,
+                blackout: false,
+                strobe_on: false,
+                strobe_rate: 0.4,
+                white_auto: true,
+                white_kelvin: 4000.0,
+            });
             ZoneInfo {
-                id,
-                name,
-                color,
+                id: z.id,
+                name: z.name.clone(),
+                color: z.display_color,
                 dimmer: live.dimmer,
                 speed: live.speed,
                 solo: live.solo,
@@ -2229,12 +2235,7 @@ struct MasterInfo {
 fn main_master(state: State<AppState>) -> MasterInfo {
     let guard = state.engine.lock().unwrap();
     let Some(engine) = guard.as_ref() else {
-        return MasterInfo {
-            dimmer: 1.0,
-            blackout: false,
-            strobe_on: false,
-            strobe_rate: 0.4,
-        };
+        return master_info(&state.show.lock().unwrap());
     };
     let m = engine.live().master();
     MasterInfo {
@@ -2242,6 +2243,17 @@ fn main_master(state: State<AppState>) -> MasterInfo {
         blackout: m.blackout.read_real().unwrap_or(0.0) > 0.5,
         strobe_on: m.strobe.on.read_bool().unwrap_or(false),
         strobe_rate: m.strobe.rate.read_norm().unwrap_or(0.4),
+    }
+}
+
+/// The master section as `show` stores it (no engine). Pure: the UI test fixture is built
+/// from it.
+fn master_info(show: &Show) -> MasterInfo {
+    MasterInfo {
+        dimmer: show.master.dimmer,
+        blackout: false,
+        strobe_on: false,
+        strobe_rate: 0.4,
     }
 }
 
@@ -2618,7 +2630,18 @@ fn main_effect_panel(
     draft: Option<String>,
 ) -> EffectPanelInfo {
     let show = state.show.lock().unwrap();
-    let armed_clip = armed_of(&state, track);
+    effect_panel_info(&show, track, cell, draft, armed_of(&state, track))
+}
+
+/// [`main_effect_panel`] for `show`, with `track`'s armed clip given. Pure: the UI test
+/// fixture is built from it.
+fn effect_panel_info(
+    show: &Show,
+    track: Uuid,
+    cell: Option<usize>,
+    draft: Option<String>,
+    armed_clip: Option<usize>,
+) -> EffectPanelInfo {
     let empty = |cell_index: Option<usize>, active: bool| EffectPanelInfo {
         track_id: track,
         armed: false,
@@ -2880,13 +2903,28 @@ fn with_track_engine(state: &AppState, track: Uuid, f: impl FnOnce(&EngineHandle
 fn main_grid(state: State<AppState>) -> GridInfo {
     let show = state.show.lock().unwrap();
     let engine = state.engine.lock().unwrap();
+    grid_info(
+        &show,
+        |slot| engine.as_ref().and_then(|e| e.track_live(slot)),
+        |track| armed_of(&state, track),
+    )
+}
+
+/// The grid for `show`: each track's live controls from `live` (`None` = the show's
+/// stored values) and its armed clip from `armed`. Pure: the UI test fixture is built
+/// from it.
+fn grid_info(
+    show: &Show,
+    live: impl Fn(usize) -> Option<TrackLiveReadout>,
+    armed: impl Fn(Uuid) -> Option<usize>,
+) -> GridInfo {
     let tracks: Vec<TrackInfo> = show
         .tracks
         .iter()
         .enumerate()
         .map(|(slot, t)| {
             let zone = |id: &Uuid| show.patch.zones.iter().find(|z| z.id == *id);
-            let live = engine.as_ref().and_then(|e| e.track_live(slot));
+            let live = live(slot);
             TrackInfo {
                 id: t.id,
                 name: t.name.clone(),
@@ -2919,8 +2957,8 @@ fn main_grid(state: State<AppState>) -> GridInfo {
                 transition: t.transition,
                 launch: t.launch,
                 active: t.active,
-                armed: armed_of(&state, t.id),
-                clips: grid_dto(t, armed_of(&state, t.id)),
+                armed: armed(t.id),
+                clips: grid_dto(t, armed(t.id)),
             }
         })
         .collect();
@@ -3688,6 +3726,91 @@ mod tests {
         assert!(
             track.clips.iter().all(|c| c.layers.is_empty()),
             "no pre-assigned cell"
+        );
+    }
+
+    /// The demo show prepared the way `run_show` prepares a show it opens.
+    fn prepared_demo() -> Show {
+        let mut show = prisma_engine::demo::demo_show();
+        show.patch.fill_zone_members_from_ownership();
+        show.patch.fit_matrix_size();
+        pad_grids(&mut show);
+        prepare_show_network(&mut show, &NetworkConfig::default());
+        show
+    }
+
+    /// What the UI reads from the app at start and while it runs, for the demo show: the
+    /// Playwright harness answers the mocked IPC from it (LIVE-MODEL-SPEC §10.1). MIDI is
+    /// an APC40 mkII connected with its default mappings, so learn badges and the bank
+    /// window show.
+    fn ui_fixture() -> serde_json::Value {
+        let show = prepared_demo();
+        let apc = DeviceProfile::apc40_mk2();
+        let port = "APC40 mkII:APC40 mkII MIDI 1 28:0".to_string();
+        let midi = MidiStatus {
+            ports: vec![port.clone()],
+            selected: None,
+            connected: Some(port.clone()),
+            output: Some(port),
+            device: apc.display_name.clone(),
+            error: None,
+            learning: None,
+            mappings: apc.default_mappings.clone(),
+            palette: apc
+                .palette()
+                .map(|p| p.iter().map(|c| format!("#{c:06x}")).collect())
+                .unwrap_or_default(),
+            bank: prisma_engine::Bank::default(),
+            device_defaults: apc.default_mappings.len(),
+            grid_window: apc.surface.bank.as_ref().map(|_| apc.window()),
+        };
+        // The panel for every clip with an effect and for "the running clip" (`null`); an
+        // empty clip's panel is `empty_panel` with its track and index filled in.
+        let mut panels = serde_json::Map::new();
+        for t in &show.tracks {
+            let assigned = (0..t.clips.len()).filter(|&i| !t.clips[i].layers.is_empty());
+            for cell in assigned.map(Some).chain([None]) {
+                let key = match cell {
+                    Some(i) => format!("{}:{i}", t.id),
+                    None => format!("{}:null", t.id),
+                };
+                let panel = effect_panel_info(&show, t.id, cell, None, None);
+                panels.insert(key, serde_json::to_value(panel).unwrap());
+            }
+        }
+        serde_json::json!({
+            "main_zones": zone_infos(&show, |_| None),
+            "main_grid": grid_info(&show, |_| None, |_| None),
+            "main_master": master_info(&show),
+            "main_clock": ClockInfo { bpm: 120.0 },
+            "main_effect_catalogue": main_effect_catalogue(),
+            "main_effect_panel": panels,
+            "empty_panel": effect_panel_info(&show, Uuid::nil(), None, None, None),
+            "main_selection": SelectionInfo { track: None, clip: None },
+            "main_last_saved": null,
+            "main_recovery_info": null,
+            "editor_preview_port": 0,
+            "control_keys": prisma_engine::keys::default_bindings(),
+            "midi_status": midi,
+        })
+    }
+
+    /// `ui/e2e/fixtures/demo.json` is what [`ui_fixture`] produces. Regenerate with
+    /// `UPDATE_UI_FIXTURE=1 cargo test ui_fixture` after changing the demo show or a DTO.
+    #[test]
+    fn ui_fixture_is_current() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ui/e2e/fixtures/demo.json");
+        let fresh = serde_json::to_string_pretty(&ui_fixture()).unwrap() + "\n";
+        if std::env::var_os("UPDATE_UI_FIXTURE").is_some() {
+            std::fs::write(&path, &fresh).unwrap();
+            return;
+        }
+        let committed = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            committed == fresh,
+            "ui/e2e/fixtures/demo.json is stale: run `UPDATE_UI_FIXTURE=1 cargo test \
+             ui_fixture` in app/"
         );
     }
 

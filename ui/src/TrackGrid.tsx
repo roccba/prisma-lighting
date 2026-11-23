@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
 import {
@@ -133,6 +133,8 @@ export function TrackGrid({
   const [addMenu, setAddMenu] = useState<{ x: number; y: number } | null>(null);
   const [settings, setSettings] = useState<{ track: string; anchor: DOMRect } | null>(null);
   const [dialog, setDialog] = useState<string | null>(null);
+  // The track whose opacity fader is being moved: compact density shows its value only then.
+  const [movingFader, setMovingFader] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ track: string; index: number } | null>(null);
   const [renamingTrack, setRenamingTrack] = useState<string | null>(null);
   const [color, setColor] = useState<ColorState | null>(null);
@@ -583,11 +585,9 @@ export function TrackGrid({
                 </div>
               );
               return pad === null ? (
-                <div key={t.id} className="pr-learn-host pr-learn-cell">
-                  {body}
-                </div>
+                <Fragment key={t.id}>{body}</Fragment>
               ) : (
-                <LearnTarget key={t.id} target={pad} name={`${t.name} · celda ${row + 1}`} className="pr-learn-cell">
+                <LearnTarget key={t.id} target={pad} name={`${t.name} · celda ${row + 1}`}>
                   {body}
                 </LearnTarget>
               );
@@ -601,7 +601,7 @@ export function TrackGrid({
         {/* Footer: stop · opacity · M / S / sel */}
         {g.tracks.map((t, ti) => (
           <div key={t.id} className="pr-tfoot" onPointerDown={(e) => e.stopPropagation()}>
-            <Learnable target={trackTarget(ti, "stop")} name={`Stop — ${t.name}`} className="pr-learn-compact">
+            <Learnable target={trackTarget(ti, "stop")} name={`Stop — ${t.name}`} compact>
               <button
                 type="button"
                 className="pr-btn pr-tfoot-stop"
@@ -611,9 +611,14 @@ export function TrackGrid({
                 ■ Stop
               </button>
             </Learnable>
-            <Learnable target={trackTarget(ti, "opacity")} name={`Opacidad — ${t.name}`}>
-            <div className="pr-tfoot-fader">
-              <VFader value={t.opacity} onChange={(v) => changeOpacity(t, v)} aria-label={`Opacidad de ${t.name}`} />
+            <Learnable target={trackTarget(ti, "opacity")} name={`Opacidad — ${t.name}`} compact>
+            <div className={`pr-tfoot-fader${movingFader === t.id ? " is-moving" : ""}`}>
+              <VFader
+                value={t.opacity}
+                onChange={(v) => changeOpacity(t, v)}
+                onGrabbedChange={(on) => setMovingFader(on ? t.id : null)}
+                aria-label={`Opacidad de ${t.name}`}
+              />
               <span
                 className="pr-zonecard-faderval"
                 onPointerDown={scrubHandler(() => ({
@@ -630,7 +635,7 @@ export function TrackGrid({
             </div>
             </Learnable>
             <div className="pr-tfoot-btns">
-              <Learnable target={trackTarget(ti, "mute")} name={`Mute — ${t.name}`} className="pr-learn-compact">
+              <Learnable target={trackTarget(ti, "mute")} name={`Mute — ${t.name}`} compact>
                 <button
                   type="button"
                   className={`pr-btn pr-zonecard-sm${t.mute ? " is-active" : ""}`}
@@ -643,7 +648,7 @@ export function TrackGrid({
                   M
                 </button>
               </Learnable>
-              <Learnable target={trackTarget(ti, "solo")} name={`Solo — ${t.name}`} className="pr-learn-compact">
+              <Learnable target={trackTarget(ti, "solo")} name={`Solo — ${t.name}`} compact>
                 <button
                   type="button"
                   className={`pr-btn pr-zonecard-sm${t.solo ? " is-active" : ""}`}
@@ -656,7 +661,7 @@ export function TrackGrid({
                   S
                 </button>
               </Learnable>
-              <Learnable target={trackTarget(ti, "select")} name={`Seleccionar — ${t.name}`} className="pr-learn-compact">
+              <Learnable target={trackTarget(ti, "select")} name={`Seleccionar — ${t.name}`} compact>
                 <button
                   type="button"
                   className={`pr-btn pr-zonecard-sm${selectedTrack === t.id ? " is-active" : ""}`}
@@ -691,7 +696,7 @@ export function TrackGrid({
             <div className="pr-tgrid-body">
               {Array.from({ length: rows }, (_, row) => (
             <div key={row} className="pr-tgrid-scene">
-            <Learnable target={sceneTarget(row)} name={`Escena ${row + 1}`} className="pr-learn-cell">
+            <Learnable target={sceneTarget(row)} name={`Escena ${row + 1}`}>
               <button
                 type="button"
                 className="pr-btn pr-scene-btn"
@@ -710,7 +715,7 @@ export function TrackGrid({
             </div>
             <div className="pr-tgrid-foot">
         <div className="pr-tfoot pr-tfoot-all">
-          <LearnTarget target={{ path: "/tracks/stop" }} name="Stop todo" className="pr-learn-compact">
+          <LearnTarget target={{ path: "/tracks/stop" }} name="Stop todo" compact>
             <button
               type="button"
               className="pr-btn pr-tfoot-stopall"
@@ -817,17 +822,17 @@ export function TrackGrid({
 function Learnable({
   target,
   name,
-  className,
+  compact,
   children,
 }: {
   target: MapTarget | null;
   name: string;
-  className?: string;
-  children: React.ReactNode;
+  compact?: boolean;
+  children: React.ReactElement;
 }) {
-  if (!target) return <>{children}</>;
+  if (!target) return children;
   return (
-    <LearnTarget target={target} name={name} className={className}>
+    <LearnTarget target={target} name={name} compact={compact}>
       {children}
     </LearnTarget>
   );

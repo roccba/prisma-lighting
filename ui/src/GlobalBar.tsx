@@ -61,6 +61,8 @@ export function GlobalBar() {
     setMasterStrobeRate(strobeHz(v)).catch(() => {});
   };
 
+  // In compact density the value shows only while the fader moves (theme.css).
+  const [moving, setMoving] = useState(false);
   const changeDimmer = (v: number) => {
     setDimmer(v);
     setMasterDimmer(v).catch(() => {});
@@ -72,10 +74,12 @@ export function GlobalBar() {
   };
 
   return (
-    <div className="pr-master">
-      <LearnTarget target={{ path: "/master/dimmer" }} name="Master dimmer" className="pr-master-fader">
-        <VFader value={dimmer} onChange={changeDimmer} aria-label="Master dimmer" />
-      </LearnTarget>
+    <div className={`pr-master${moving ? " is-moving" : ""}`}>
+      <div className="pr-master-fader">
+        <LearnTarget target={{ path: "/master/dimmer" }} name="Master dimmer">
+          <VFader value={dimmer} onChange={changeDimmer} onGrabbedChange={setMoving} aria-label="Master dimmer" />
+        </LearnTarget>
+      </div>
       <span
         className="pr-value pr-master-value"
         onPointerDown={scrubHandler(() => ({ get: () => dimmer, set: changeDimmer, min: 0, max: 1, perPixel: 1 / 255, step: 1 / 255 }))}
@@ -84,7 +88,7 @@ export function GlobalBar() {
       </span>
       <span className="pr-master-label">MASTER</span>
       <div className="pr-master-actions">
-        <LearnTarget target={{ path: "/master/blackout" }} name="Blackout master" className="pr-learn-compact">
+        <LearnTarget target={{ path: "/master/blackout" }} name="Blackout master" compact>
           <button
             className={`pr-btn${blackout ? " is-active" : ""}`}
             onClick={toggleBlackout}
@@ -93,7 +97,7 @@ export function GlobalBar() {
             BLACKOUT
           </button>
         </LearnTarget>
-        <LearnTarget target={{ path: "/master/strobe/on" }} name="Strobo global" className="pr-learn-compact">
+        <LearnTarget target={{ path: "/master/strobe/on" }} name="Strobo global" compact>
           <button
             className={`pr-strobe-trigger${strobeOn ? " is-on" : ""}${strobeLatched ? " is-latched" : ""}`}
             onPointerDown={() => engage(true, strobeLatched)}
@@ -111,11 +115,11 @@ export function GlobalBar() {
       <LearnTarget
         target={{ path: "/master/strobe/rate" }}
         name="Velocidad strobo global"
-        className="pr-learn-compact pr-master-strobe-wrap"
+        compact
       >
         <input
           type="range"
-          className="pr-strobe-rate pr-master-strobe-rate"
+          className="pr-strobe-rate pr-master-strobe-rate pr-master-strobe-wrap"
           min={0}
           max={1}
           step={0.01}

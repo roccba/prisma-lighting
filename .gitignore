@@ -52,3 +52,7 @@ Thumbs.db
 
 # AI assistant instructions — kept local, not published.
 /CLAUDE.md
+
+# Playwright output (the harness, fixture and reference screenshots under ui/e2e are tracked)
+/ui/test-results/
+/ui/playwright-report/
