@@ -12,6 +12,7 @@
 //! previous autosaves rotate into `autosave.1.prisma` / `autosave.2.prisma`, keeping the
 //! last three recovered sessions.
 
+use crate::*;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -122,6 +123,36 @@ pub fn mark_clean(baseline: &mut Baseline, last: &mut Option<String>, snapshot: 
 /// Whether `path` names an existing file (for the "open the last saved" offer).
 pub fn exists(path: &Path) -> bool {
     path.is_file()
+}
+
+// --- The app's autosave thread ---
+
+/// One autosave step: snapshot, write or clear the autosave, and mark the window title
+/// when there are unsaved changes. Run by the autosave thread and once on exit.
+pub(crate) fn autosave_tick(app: &AppHandle) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    let Ok(snap) = show_snapshot(&state) else {
+        return;
+    };
+    let (step, dirty) = {
+        let mut g = state.autosave_state.lock().unwrap();
+        let (baseline, last) = &mut *g;
+        autosave::step(baseline, last, snap.clone())
+    };
+    match step {
+        autosave::Step::Idle => {}
+        autosave::Step::Write => {
+            if let Err(e) = state.autosave.write(&snap) {
+                eprintln!("prisma: autosave failed: {e}");
+            }
+        }
+        autosave::Step::Clear => state.autosave.clear(),
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.set_title(if dirty { "Prisma •" } else { "Prisma" });
+    }
 }
 
 #[cfg(test)]

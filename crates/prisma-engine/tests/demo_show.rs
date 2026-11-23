@@ -15,7 +15,7 @@ use prisma_core::show::LaunchMode;
 use prisma_core::show::{load_show, save_show, Show, Source};
 use prisma_core::TimeBase;
 use prisma_engine::demo::{demo_show, DEMO_SCENES, DEMO_TRACKS, DEMO_ZONES, STROBE_ROW};
-use prisma_engine::{Engine, EngineConfig};
+use prisma_engine::{ClipEffect, ClipHost, Engine, EngineConfig};
 use prisma_output::sink;
 use prisma_patch::{BlendMode, ComponentSet};
 use prisma_render::{manifest_by_id, AdapterPreference};
@@ -300,7 +300,8 @@ fn the_engine_lights_every_zone() {
             "each zone on its own universes"
         );
     }
-    let engine = Engine::start_show(show, config).expect("engine starts");
+    let engine = Engine::start_show(show.clone(), config).expect("engine starts");
+    engine.set_clip_host(std::sync::Arc::new(DemoHost(show.clone())));
 
     let lit = |zone: usize| {
         let snap = dev_sink.snapshot();
@@ -320,6 +321,18 @@ fn the_engine_lights_every_zone() {
         std::thread::sleep(Duration::from_millis(20));
     }
 
+    // Opening the show arms nothing: every clip is Vacía, Cargada or En vivo.
+    std::thread::sleep(Duration::from_millis(300));
+    for t in &show.tracks {
+        for clip in 0..t.clips.len() {
+            let state = engine
+                .tree()
+                .resolve(&format!("/track/{}/clip/{clip}/state", t.id))
+                .and_then(|h| h.read_real());
+            assert_ne!(state, Some(3.0), "{} clip {clip} armed at open", t.name);
+        }
+    }
+
     // The scenes are tree paths, as from the grid or the keyboard.
     assert!(
         engine.activate_path(&format!("/scene/{STROBE_ROW}/launch")),
@@ -328,4 +341,32 @@ fn the_engine_lights_every_zone() {
     let report = engine.shutdown();
     assert_eq!(report.gpu_strong_refs_at_release, 1, "released the GPU");
     let _ = dev_sink.stop_and_collect();
+}
+
+/// The show's owner as the clip controller sees it (read-only: the clips' effects).
+struct DemoHost(Show);
+
+impl ClipHost for DemoHost {
+    fn clip_effect(&self, track: uuid::Uuid, clip: usize) -> Option<ClipEffect> {
+        let layer = self
+            .0
+            .track(track)?
+            .clips
+            .get(clip)?
+            .layers
+            .first()?
+            .clone();
+        let Source::Shader {
+            effect_id,
+            params,
+            palette,
+        } = layer.source;
+        Some(ClipEffect {
+            effect_id,
+            params,
+            palette,
+            fade_time: Duration::ZERO,
+        })
+    }
+    fn active_changed(&self, _track: uuid::Uuid, _active: Option<usize>) {}
 }

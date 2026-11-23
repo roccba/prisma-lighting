@@ -333,7 +333,8 @@ holds the keyboard shortcuts and which devices had their defaults seeded; a v4 p
 | Selection, knobs follow selection | `crates/prisma-engine/src/clips.rs` |
 | Patch editor backend | `crates/prisma-editor/src/{draft,op}.rs` |
 | Demo show (built in code; `--demo` opens it at launch) | `crates/prisma-engine/src/demo.rs` |
-| IPC commands | `app/src/main.rs` |
+| App boot, command registration | `app/src/main.rs` |
+| IPC commands, by part of the app | `app/src/{show,patch,network,midi,control,zones,grid}.rs`, shared state in `app/src/state.rs` |
 | Autosave | `app/src/autosave.rs` |
 | UI | `ui/src/` (`MainWindow`, `TrackGrid`, `TrackDialog`, `ZoneRow`, `EffectParams`, `Editor`) |
 | Design system | `docs/DESIGN.md`, `ui/src/theme.css` |
