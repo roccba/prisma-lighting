@@ -180,10 +180,17 @@ flowchart LR
 | MIDI feedback | `prisma-midi::feedback` | paints LEDs from tree state. |
 | autosave | `app` | snapshots the Show every 2 s; writes or removes `autosave.prisma`. |
 
-Structural changes (patch edits, adding/removing/reordering tracks, destination changes) do not go
-through the tree. They rebuild the engine with `recompile_show`, which keeps the GPU device. The app
-first folds the live values (faders, opacities, white temperature) back into the Show and restores
-the BPM afterwards; the clock itself starts again.
+Structural changes (patch edits, adding/removing tracks, destination changes) do not go through the
+tree. They rebuild the engine with `recompile_show`, which keeps the GPU device. The app first folds
+the live values (faders, opacities, white temperature) back into the Show and restores the BPM
+afterwards; the clock itself starts again.
+
+**Reordering tracks is live** (`EngineHandle::reorder_tracks`). Tracks keep the index they were
+assembled with — the compositor, the clip controller's decks and every tree route use it — and the
+engine holds a table from grid position to that index. A reorder changes the table, re-sorts each
+zone's instances at the frame boundary (in place, nothing rebuilt), keeps the selection on the same
+track and rebinds MIDI in the new order. Everything positional (the UI's slot, `/select/track`, the
+arrows, the controller's bank window) goes through the table.
 
 ## 4. A frame
 
@@ -254,7 +261,8 @@ A mouse click takes the same path from `Tree` on: the Tauri command writes the s
 priority. Keyboard, touch view and future OSC are the same: another writer into the tree.
 
 A grid pad is mapped as "clip `i` of track slot `n`" **of the controller's bank window**: slot 0 is
-the first track the window shows, row 0 its first row. Bank buttons (from the device profile, never
+the first track the window shows, row 0 its first row. Mappings are **positional**: after a track
+is dragged to another place, a pad controls whatever track is now at its position on screen. Bank buttons (from the device profile, never
 learned) move the window and every target is re-resolved; the window lives in the MIDI runtime, not
 in the show. Scenes are banked the same way. Pad LEDs show the clip state in the colour of the
 track's first destination zone: dark Vacía, dim Cargada, full En vivo, pulsing Armada.

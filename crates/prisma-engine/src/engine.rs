@@ -49,7 +49,7 @@ use prisma_render::render_loop::{
 use prisma_render::sample::{SamplePlan, Sampler};
 use prisma_render::{Gpu, GpuError};
 
-use crate::clips::{register_clips, ClipController, ClipHost, GridParams};
+use crate::clips::{register_clips, ClipController, ClipHost, GridParams, TrackClips};
 use crate::config::EngineConfig;
 use crate::content::IdleContent;
 use crate::zone_content::{
@@ -153,8 +153,13 @@ pub struct EngineHandle {
     /// outlives any one tree — a recompile unbinds it from the old tree and binds it
     /// to the new one, so open hardware ports never notice.
     midi: MidiRuntime,
-    /// Every grid parameter (tracks by slot in `Show::tracks` order, scenes, GO).
-    /// Empty under `IdleContent`.
+    /// What the MIDI runtime was bound with at assembly (tracks in assembly order).
+    midi_slots: SlotIds,
+    /// Grid position → the engine's own track index (assembly order). Identity until a
+    /// reorder; shared with the clip controller, which keeps the selection positional.
+    track_order: Arc<Mutex<Vec<usize>>>,
+    /// Every grid parameter (tracks in assembly order — the engine's own index — scenes,
+    /// GO). Empty under `IdleContent`.
     grid: GridParams,
     /// The show's running clip per track at assembly — where the clip controller starts.
     clip_active: Vec<Option<usize>>,
@@ -578,20 +583,21 @@ impl Engine {
         //     `Patch::zones` order `LiveParams` uses) and tracks in show order, once every
         //     parameter exists. The runtime keeps its bank window across the rebind. ---
         midi.set_zone_colours(patch.zones.iter().map(|z| z.display_color).collect());
-        midi.bind(
-            Arc::clone(&tree),
-            SlotIds {
-                zones: patch.zones.iter().map(|z| z.id).collect(),
-                tracks: midi_tracks,
-                track_zones: midi_track_zones,
-                rows: midi_rows,
-                ..SlotIds::default()
-            },
-        );
+        let midi_slots = SlotIds {
+            zones: patch.zones.iter().map(|z| z.id).collect(),
+            tracks: midi_tracks,
+            track_zones: midi_track_zones,
+            rows: midi_rows,
+            ..SlotIds::default()
+        };
+        midi.bind(Arc::clone(&tree), midi_slots.clone());
+        let track_order = Arc::new(Mutex::new((0..grid.tracks.len()).collect()));
 
         let handle = EngineHandle {
             tree,
             midi,
+            midi_slots,
+            track_order,
             grid,
             clip_active,
             clip_host: Mutex::new(None),
@@ -814,6 +820,66 @@ impl EngineHandle {
         self.grid.tracks.iter().position(|c| c.track == track)
     }
 
+    /// The engine's own index of the track at grid position `slot` (the position the
+    /// UI, the keyboard and the controller's bank window use). Tracks keep the index
+    /// they were assembled with; a reorder only changes this table (LIVE-MODEL-SPEC
+    /// §10.2).
+    fn track_index(&self, slot: usize) -> Option<usize> {
+        self.track_order.lock().unwrap().get(slot).copied()
+    }
+
+    /// The tree parameters of the track at grid position `slot`.
+    fn track(&self, slot: usize) -> Option<&TrackClips> {
+        self.track_index(slot).and_then(|i| self.grid.tracks.get(i))
+    }
+
+    /// Put the tracks in a new order **without a recompile** (a header dragged on the
+    /// grid): `order` is every track's id in its new grid order. Each zone folds in the
+    /// new order from the next frame; nothing is rebuilt, so animations, armed clips and
+    /// running fades carry on. The selection stays on the same track, and the MIDI bank
+    /// window follows the order on screen (mappings are positional). `false` if `order`
+    /// is not exactly this show's tracks, or no show runs (the caller recompiles).
+    pub fn reorder_tracks(&self, order: &[Uuid]) -> bool {
+        let Some(sender) = self.zone_commands.as_ref() else {
+            return false;
+        };
+        let ids: Vec<Uuid> = self.grid.tracks.iter().map(|t| t.track).collect();
+        let mut new_order = Vec::with_capacity(order.len());
+        for id in order {
+            match ids.iter().position(|t| t == id) {
+                Some(i) if !new_order.contains(&i) => new_order.push(i),
+                _ => return false,
+            }
+        }
+        if new_order.len() != ids.len() {
+            return false;
+        }
+        // The selected track, by identity, before its position changes.
+        let (selected, clip) = self.selection();
+        let selected = selected.and_then(|pos| self.track_index(pos));
+        let mut rank = vec![0; new_order.len()];
+        for (pos, &i) in new_order.iter().enumerate() {
+            rank[i] = pos;
+        }
+        *self.track_order.lock().unwrap() = new_order.clone();
+        sender.reorder(rank);
+        if let Some(i) = selected {
+            let pos = new_order.iter().position(|&t| t == i);
+            self.select(pos, clip);
+        }
+        let mut slots = self.midi_slots.clone();
+        slots.tracks = new_order
+            .iter()
+            .map(|&i| self.midi_slots.tracks[i])
+            .collect();
+        slots.track_zones = new_order
+            .iter()
+            .map(|&i| self.midi_slots.track_zones[i])
+            .collect();
+        self.midi.bind(Arc::clone(&self.tree), slots);
+        true
+    }
+
     /// Run an effect on a track in every zone it reaches. Builds the
     /// `EffectInstance`s **here**, on the caller's thread (a pipeline compile, done
     /// off the render thread by design), then enqueues the swap through the
@@ -830,15 +896,16 @@ impl EngineHandle {
         params: &ParamSet,
         palette: Option<&[[f32; 3]]>,
     ) -> bool {
-        let (Some(sender), Some(clips)) = (self.zone_commands.as_ref(), self.grid.tracks.get(slot))
+        let (Some(sender), Some(index)) = (self.zone_commands.as_ref(), self.track_index(slot))
         else {
             return false;
         };
+        let clips = &self.grid.tracks[index];
         crate::clips::fire_track_effect(
             &self.gpu,
             &self.tree,
             sender,
-            slot,
+            index,
             clips,
             effect_id,
             params,
@@ -851,9 +918,9 @@ impl EngineHandle {
     /// live). Lands at the next frame boundary; a no-op if no show is running or the
     /// effect has no palette.
     pub fn set_track_palette(&self, slot: usize, colors: Vec<[f32; 3]>) -> bool {
-        match self.zone_commands.as_ref() {
-            Some(sender) => sender.set_track_palette(slot, colors),
-            None => false,
+        match (self.zone_commands.as_ref(), self.track_index(slot)) {
+            (Some(sender), Some(index)) => sender.set_track_palette(index, colors),
+            _ => false,
         }
     }
 
@@ -872,6 +939,7 @@ impl EngineHandle {
                 self.grid.clone(),
                 self.clip_active.clone(),
                 host,
+                Arc::clone(&self.track_order),
             ));
         }
     }
@@ -879,7 +947,7 @@ impl EngineHandle {
     /// Latch a track's clip (a UI click): the same tree target a pad in latch mode
     /// fires, so every transport plays clips one way. `false` if no such clip.
     pub fn fire_clip(&self, slot: usize, clip: usize) -> bool {
-        match self.grid.tracks.get(slot).and_then(|t| t.launch.get(clip)) {
+        match self.track(slot).and_then(|t| t.launch.get(clip)) {
             Some(h) => self.tree.fire(h, ui_control_source()) == WriteOutcome::Accepted,
             None => false,
         }
@@ -889,7 +957,7 @@ impl EngineHandle {
     /// clip's content was just replaced, so the new effect plays even if that clip was
     /// already the running one. `false` if no such clip.
     pub fn trigger_clip(&self, slot: usize, clip: usize) -> bool {
-        match self.grid.tracks.get(slot).and_then(|t| t.trigger.get(clip)) {
+        match self.track(slot).and_then(|t| t.trigger.get(clip)) {
             Some(h) => self.tree.fire(h, ui_control_source()) == WriteOutcome::Accepted,
             None => false,
         }
@@ -898,7 +966,7 @@ impl EngineHandle {
     /// Ask the clip controller to re-read which of a track's clips hold an effect
     /// (after they were edited), so pad LEDs follow.
     pub fn refresh_clips(&self, slot: usize) {
-        if let Some(t) = self.grid.tracks.get(slot) {
+        if let Some(t) = self.track(slot) {
             self.tree.fire(&t.refresh, ui_control_source());
         }
     }
@@ -911,12 +979,12 @@ impl EngineHandle {
     /// Arm (or disarm) a track's clip for GO — the same target Shift+click and an
     /// Arm-mode launch reach. `false` if no such clip.
     pub fn arm_clip(&self, slot: usize, clip: usize) -> bool {
-        self.fire(self.grid.tracks.get(slot).and_then(|t| t.arm.get(clip)))
+        self.fire(self.track(slot).and_then(|t| t.arm.get(clip)))
     }
 
     /// Stop a track, fading out with its transition (a stop during the fade cuts).
     pub fn stop_track(&self, slot: usize) -> bool {
-        self.fire(self.grid.tracks.get(slot).map(|t| &t.stop))
+        self.fire(self.track(slot).map(|t| &t.stop))
     }
 
     /// Disarm every armed clip (`/arm/clear`).
@@ -1002,7 +1070,7 @@ impl EngineHandle {
 
     /// Set a track's opacity (`0..=1`), read by the render loop next frame.
     pub fn set_track_opacity(&self, slot: usize, value: f32) {
-        if let Some(t) = self.grid.tracks.get(slot) {
+        if let Some(t) = self.track(slot) {
             self.tree
                 .write_real(&t.opacity, value.clamp(0.0, 1.0), ui_control_source());
         }
@@ -1016,10 +1084,10 @@ impl EngineHandle {
         mode: prisma_patch::BlendMode,
         key: [f32; 2],
     ) -> bool {
-        match self.zone_commands.as_ref() {
-            Some(sender) if slot < self.grid.tracks.len() => {
+        match (self.zone_commands.as_ref(), self.track_index(slot)) {
+            (Some(sender), Some(index)) => {
                 sender.send(crate::zone_content::ZoneCommand::SetBlend {
-                    track: slot,
+                    track: index,
                     mode,
                     key,
                 })
@@ -1030,7 +1098,7 @@ impl EngineHandle {
 
     /// Mute or unmute a track.
     pub fn set_track_mute(&self, slot: usize, on: bool) {
-        if let Some(t) = self.grid.tracks.get(slot) {
+        if let Some(t) = self.track(slot) {
             self.tree
                 .write_real(&t.mute, if on { 1.0 } else { 0.0 }, ui_control_source());
         }
@@ -1038,7 +1106,7 @@ impl EngineHandle {
 
     /// Solo or unsolo a track.
     pub fn set_track_solo(&self, slot: usize, on: bool) {
-        if let Some(t) = self.grid.tracks.get(slot) {
+        if let Some(t) = self.track(slot) {
             self.tree
                 .write_real(&t.solo, if on { 1.0 } else { 0.0 }, ui_control_source());
         }
@@ -1047,7 +1115,7 @@ impl EngineHandle {
     /// A track's live opacity / mute / solo, wait-free (for the UI and for folding
     /// back into the show before a recompile).
     pub fn track_live(&self, slot: usize) -> Option<TrackLiveReadout> {
-        let t = self.grid.tracks.get(slot)?;
+        let t = self.track(slot)?;
         Some(TrackLiveReadout {
             opacity: t.opacity.read_real().unwrap_or(1.0),
             mute: t.mute.read_bool().unwrap_or(false),
@@ -1090,9 +1158,9 @@ impl EngineHandle {
     /// Stop a track (firing an empty clip). Its zones render nothing from it from the
     /// next frame. Returns `false` if no show is running.
     pub fn clear_track_effect(&self, slot: usize) -> bool {
-        match self.zone_commands.as_ref() {
-            Some(sender) => sender.clear_track(slot),
-            None => false,
+        match (self.zone_commands.as_ref(), self.track_index(slot)) {
+            (Some(sender), Some(index)) => sender.clear_track(index),
+            _ => false,
         }
     }
 

@@ -162,6 +162,7 @@ export function TrackDialog({
   track,
   slot,
   zones,
+  layoutLocked = false,
   onPatch,
   onClose,
 }: {
@@ -169,6 +170,8 @@ export function TrackDialog({
   /** The track's position in the grid (its MIDI targets are relative to the bank window). */
   slot: number;
   zones: ZoneInfo[];
+  /** Vista → Bloquear layout: the destination cannot change. */
+  layoutLocked?: boolean;
   /** Mirror a live change into the grid at once (the engine confirms on the next fetch). */
   onPatch: (change: Partial<TrackInfo>) => void;
   onClose: () => void;
@@ -270,7 +273,7 @@ export function TrackDialog({
                 const last = on && dest.length === 1;
                 return (
                   <div key={z.id} className="pr-trackdlg-zone" title={last ? "Un track necesita al menos una zona" : undefined}>
-                    <Check checked={on} disabled={last} onChange={(v) => toggleZone(z.id, v)}>
+                    <Check checked={on} disabled={last || layoutLocked} onChange={(v) => toggleZone(z.id, v)}>
                       <span className="pr-trackdlg-swatch" style={{ background: `rgb(${z.color.join(",")})` }} />
                       {z.name}
                     </Check>
@@ -280,13 +283,14 @@ export function TrackDialog({
             </div>
             <div className="pr-trackdlg-apply">
               <span className="pr-tsettings-hint">
+                {layoutLocked && "Layout bloqueado: el destino no se puede cambiar. "}
                 Las zonas comparten los parámetros del efecto; cada una conserva su VEL. Aplicar recompila el show:
                 las animaciones arrancan de nuevo y se desarma lo armado.
               </span>
               <button
                 type="button"
                 className="pr-btn"
-                disabled={!destChanged || ordered.length === 0 || applying}
+                disabled={layoutLocked || !destChanged || ordered.length === 0 || applying}
                 onClick={applyDest}
               >
                 {applying ? "Aplicando…" : "Aplicar destino"}

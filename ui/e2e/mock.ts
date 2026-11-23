@@ -19,19 +19,67 @@ type Fixture = Record<string, unknown> & {
 const fx = fixture as unknown as Fixture;
 
 window.__calls = [];
+
+// --- Writes the UI tests read back. Kept to what the app does with them: a stored
+// parameter changes the cell's panel values and, for a Color cell, its effect colour (the
+// app computes it from the current r / g / b, linear); a label colour is stored as is.
+interface GridCell {
+  index: number;
+  effect_id: string | null;
+  color: number[] | null;
+  effect_color: number[] | null;
+}
+interface GridTrack {
+  id: string;
+  active: number | null;
+  clips: GridCell[];
+}
+interface PanelParam {
+  name: string;
+  value_norm: number;
+}
+function gridTrack(track: string): GridTrack | undefined {
+  return (fx.main_grid as { tracks: GridTrack[] }).tracks.find((t) => t.id === track);
+}
+function setParamLike(track: string, cell: number | null, name: string, value: number) {
+  const t = gridTrack(track);
+  const index = cell ?? t?.active ?? null;
+  if (!t || index === null) return null;
+  for (const key of [`${track}:${index}`, ...(t.active === index ? [`${track}:null`] : [])]) {
+    const panel = fx.main_effect_panel[key] as { params: PanelParam[] } | undefined;
+    panel?.params.forEach((p) => {
+      if (p.name === name) p.value_norm = value;
+    });
+  }
+  const c = t.clips[index];
+  const channel = ["r", "g", "b"].indexOf(name);
+  if (c && c.effect_id === "solid" && channel >= 0) {
+    c.effect_color = [...(c.effect_color ?? [0, 0, 0])];
+    c.effect_color[channel] = value;
+  }
+  return null;
+}
+function setCellColorLike(track: string, index: number, color: number[]) {
+  const c = gridTrack(track)?.clips[index];
+  if (c) c.color = color;
+  return gridTrack(track)?.clips ?? [];
+}
 mockWindows("main");
 mockIPC(
   (cmd, args) => {
     window.__calls.push({ cmd, args });
     const a = (args ?? {}) as Record<string, unknown>;
     if (cmd === "plugin:window|is_maximized") return true;
+    if (cmd === "main_set_param") return setParamLike(a.track as string, a.cell as number | null, a.name as string, a.value as number);
+    if (cmd === "main_set_cell_color") return setCellColorLike(a.track as string, a.index as number, a.color as number[]);
     if (cmd === "main_effect_panel") {
       const cell = a.cell ?? null;
-      return (
-        fx.main_effect_panel[`${a.track}:${cell}`] ?? { ...fx.empty_panel, track_id: a.track, cell_index: cell }
+      return structuredClone(
+        fx.main_effect_panel[`${a.track}:${cell}`] ?? { ...fx.empty_panel, track_id: a.track, cell_index: cell },
       );
     }
-    if (cmd in fx) return fx[cmd];
+    // A fresh copy, like the app's JSON: the UI must see a new object after a write.
+    if (cmd in fx) return structuredClone(fx[cmd]);
     return null;
   },
   { shouldMockEvents: true },

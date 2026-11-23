@@ -9,6 +9,7 @@ import {
   grid as fetchGrid,
   launchScene,
   moveTrack,
+  PARAM_STORED,
   removeTrack,
   renameCell,
   renameTrack,
@@ -76,6 +77,9 @@ interface TrackGridProps {
   onArmedChange?: (anyArmed: boolean) => void;
   /** Sizes of cells, header and footer (Compacta / Normal / Grande). */
   density: Density;
+  /** Vista → Bloquear layout: no dragging, adding or deleting tracks, no destination
+   *  changes (LIVE-MODEL-SPEC §10.2). */
+  layoutLocked?: boolean;
 }
 
 const EMPTY: GridInfo = { tracks: [], scenes: [] };
@@ -126,6 +130,7 @@ export function TrackGrid({
   onChanged,
   onArmedChange,
   density,
+  layoutLocked = false,
 }: TrackGridProps) {
   const [g, setG] = useState<GridInfo>(EMPTY);
   const [menu, setMenu] = useState<CellMenuState | null>(null);
@@ -158,6 +163,26 @@ export function TrackGrid({
   }, []);
 
   useEffect(() => refresh(), [refresh, rev]);
+
+  // A cell's colour on the grid: its hand-picked label colour, else its effect's main
+  // colour, else the zone's (washed). The effect's colour is never stored as a label: the
+  // app computes it from the current values, so every stored parameter edit re-reads the
+  // grid — at most every 100 ms, so a dragged colour is followed live.
+  useEffect(() => {
+    let timer: number | undefined;
+    const onStored = () => {
+      if (timer !== undefined) return;
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        refresh();
+      }, 100);
+    };
+    window.addEventListener(PARAM_STORED, onStored);
+    return () => {
+      window.removeEventListener(PARAM_STORED, onStored);
+      window.clearTimeout(timer);
+    };
+  }, [refresh]);
 
   // What plays changes asynchronously: a click, a pad, a flash releasing, GO all go through
   // the engine's clip controller, which reports back per track. A recompile (add/remove a
@@ -268,7 +293,13 @@ export function TrackGrid({
     if (!el || !cell) return;
     setColor({ track: trackId, index, cell: el.getBoundingClientRect(), original: cell.color, value: cell.color ?? NO_COLOR });
   };
+  // The colour being picked, current even inside a callback created before the last
+  // pick: the selector can report a colour and close in the same gesture, and the close
+  // must save that colour, not the one its render saw.
+  const colorRef = useRef<ColorState | null>(null);
+  colorRef.current = color;
   const onColorChange = (rgb: Rgb) => {
+    if (colorRef.current) colorRef.current = { ...colorRef.current, value: rgb };
     setColor((c) => (c ? { ...c, value: rgb } : c));
     setG((cur) => ({
       ...cur,
@@ -278,7 +309,7 @@ export function TrackGrid({
     }));
   };
   const onColorClose = () => {
-    const c = color;
+    const c = colorRef.current;
     setColor(null);
     if (!c) return;
     const changed = !c.original || c.original.some((v, i) => v !== c.value[i]);
@@ -296,17 +327,25 @@ export function TrackGrid({
 
   // --- Reordering: drag a header anywhere among the tracks ----------------------------
   // Pointer-driven (not HTML drag-and-drop, which the desktop webviews handle unevenly).
-  // A press starts a candidate; past a few pixels it becomes a drag, the drop target is
-  // the header under the pointer, and release moves the track. The order is global: it
-  // is the compositing order in every zone two tracks share (later = on top).
+  // A press on a header starts a candidate; past a few pixels it becomes a drag: a
+  // semi-transparent copy of the header follows the pointer, the track's column dims and
+  // a line marks where it will land (the gap before the header under the pointer, or
+  // after the last one). Release moves the track (live, no recompile). The order is
+  // global: it is the compositing order in every zone two tracks share (later = on top).
   const headEls = useRef(new Map<string, HTMLDivElement>());
   const [drag, setDrag] = useState<{
     track: string;
     moved: boolean;
     target: { before: string | null; after: string | null } | null;
+    /** Where the header copy is drawn (viewport px) and its size. */
+    ghost: { x: number; y: number; w: number; h: number };
   } | null>(null);
   const startDrag = (t: TrackInfo, e: React.PointerEvent) => {
+    if (layoutLocked) return;
     const x0 = e.clientX;
+    const head = headEls.current.get(t.id)?.getBoundingClientRect();
+    // The copy keeps the grip point under the pointer.
+    const grip = head ? { x: x0 - head.left, y: e.clientY - head.top, w: head.width, h: head.height } : null;
     const sameZone = g.tracks;
     let state: { moved: boolean; target: { before: string | null; after: string | null } | null } = {
       moved: false,
@@ -325,7 +364,13 @@ export function TrackGrid({
         moved: true,
         target: before ? { before: before.id, after: null } : { before: null, after: others[others.length - 1]?.id ?? null },
       };
-      setDrag({ track: t.id, ...state });
+      setDrag({
+        track: t.id,
+        ...state,
+        ghost: grip
+          ? { x: ev.clientX - grip.x, y: ev.clientY - grip.y, w: grip.w, h: grip.h }
+          : { x: ev.clientX, y: ev.clientY, w: 0, h: 0 },
+      });
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
@@ -410,6 +455,16 @@ export function TrackGrid({
           gridRow: `${bank.row + 2} / span ${Math.max(1, Math.min(gridWindow[1], rows - bank.row))}`,
         }
       : null;
+  // The dragged track (its column dims) and the grid column whose edge the drop line sits
+  // on: the left edge of the header it lands before, else the right edge of the last one.
+  const dragSource = drag?.moved ? drag.track : null;
+  const dropLine = (() => {
+    if (!drag?.moved || !drag.target) return null;
+    const { before, after } = drag.target;
+    const at = g.tracks.findIndex((o) => o.id === (before ?? after));
+    if (at < 0) return null;
+    return { column: at + 1, side: before ? ("before" as const) : ("after" as const) };
+  })();
   const menuCell = menu ? cellOf(menu.track, menu.index) : undefined;
   const headTrack = headMenu ? track(headMenu.track) : undefined;
   const settingsTrack = settings ? track(settings.track) : undefined;
@@ -422,6 +477,13 @@ export function TrackGrid({
       <div className="pr-tgrid-scroll" ref={scrollRef} onScroll={syncScenes}>
       <div className="pr-tgrid" style={{ gridTemplateColumns: columns, gridTemplateRows: gridRows }}>
       {ring && <div className="pr-tgrid-ring" style={ring} title="Ventana del controlador (banco)" />}
+      {dropLine && (
+        <div
+          className={`pr-tgrid-dropline is-${dropLine.side}`}
+          style={{ gridColumn: `${dropLine.column}`, gridRow: "1 / -1" }}
+          aria-hidden
+        />
+      )}
       <div className="pr-tgrid-head">
         {/* Header row */}
         {g.tracks.map((t) => (
@@ -431,10 +493,9 @@ export function TrackGrid({
               if (el) headEls.current.set(t.id, el);
               else headEls.current.delete(t.id);
             }}
+            data-track={t.id}
             className={`pr-thead${selectedTrack === t.id ? " is-selected" : ""}${
-              drag?.track === t.id && drag.moved ? " is-dragging" : ""
-            }${drag?.moved && drag.target?.before === t.id ? " is-drop-before" : ""}${
-              drag?.moved && drag.target && drag.target.before === null && drag.target.after === t.id ? " is-drop-after" : ""
+              dragSource === t.id ? " is-drag-source" : ""
             }`}
             onPointerDown={(e) => {
               if (e.button !== 0 || renamingTrack === t.id) return;
@@ -492,7 +553,8 @@ export function TrackGrid({
         <button
           type="button"
           className="pr-btn pr-tgrid-addbtn"
-          title="Agregar un track a una zona"
+          disabled={layoutLocked}
+          title={layoutLocked ? "Layout bloqueado (Vista → Bloquear layout)" : "Agregar un track a una zona"}
           aria-label="Agregar track"
           onClick={(e) => {
             const r = e.currentTarget.getBoundingClientRect();
@@ -523,7 +585,8 @@ export function TrackGrid({
                     if (el) cellEls.current.set(key(t.id, row), el);
                     else cellEls.current.delete(key(t.id, row));
                   }}
-                  className={`pr-cell ${assigned ? "is-assigned" : "is-empty"}${cell.active ? " is-active" : ""}${
+                  data-track={t.id}
+                  className={`pr-cell${dragSource === t.id ? " is-drag-source" : ""} ${assigned ? "is-assigned" : "is-empty"}${cell.active ? " is-active" : ""}${
                     cell.armed ? " is-armed" : ""
                   }${assigned && shown ? ` has-color${isLightCell(shown, cell.active) ? " is-light" : ""}` : ""}${
                     assigned && !shown ? " has-zone-color" : ""
@@ -600,7 +663,12 @@ export function TrackGrid({
       <div className="pr-tgrid-foot">
         {/* Footer: stop · opacity · M / S / sel */}
         {g.tracks.map((t, ti) => (
-          <div key={t.id} className="pr-tfoot" onPointerDown={(e) => e.stopPropagation()}>
+          <div
+            key={t.id}
+            data-track={t.id}
+            className={`pr-tfoot${dragSource === t.id ? " is-drag-source" : ""}`}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
             <Learnable target={trackTarget(ti, "stop")} name={`Stop — ${t.name}`} compact>
               <button
                 type="button"
@@ -759,7 +827,7 @@ export function TrackGrid({
             { label: "Ajustes…", onSelect: () => setDialog(headTrack.id) },
             { label: "Renombrar", onSelect: () => setRenamingTrack(headTrack.id) },
             "sep",
-            { label: "Eliminar track", onSelect: () => void doRemoveTrack(headTrack) },
+            { label: "Eliminar track", disabled: layoutLocked, onSelect: () => void doRemoveTrack(headTrack) },
           ]}
         />
       )}
@@ -808,11 +876,32 @@ export function TrackGrid({
           track={dialogTrack}
           slot={dialogSlot}
           zones={zones}
+          layoutLocked={layoutLocked}
           onPatch={(change) => patchTrack(dialogTrack.id, change)}
           onClose={() => setDialog(null)}
         />
       )}
       {color && <CellColorPopover cell={color.cell} value={color.value} onChange={onColorChange} onClose={onColorClose} />}
+      {drag?.moved &&
+        (() => {
+          const t = track(drag.track);
+          if (!t) return null;
+          return (
+            <div
+              className="pr-thead pr-thead-ghost"
+              style={{ left: drag.ghost.x, top: drag.ghost.y, width: drag.ghost.w, height: drag.ghost.h }}
+              aria-hidden
+            >
+              <span className="pr-thead-strip">
+                {(t.colors.length > 0 ? t.colors : [t.color]).map((c, i) => (
+                  <span key={i} style={{ background: `rgb(${c.join(",")})` }} />
+                ))}
+              </span>
+              <span className="pr-thead-name">{t.name}</span>
+              <span className="pr-thead-sub">→ {t.destination}</span>
+            </div>
+          );
+        })()}
     </div>
   );
 }

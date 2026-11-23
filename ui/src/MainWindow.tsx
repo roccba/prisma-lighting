@@ -32,6 +32,7 @@ import { LargePreview } from "./LargePreview";
 import { PreviewStreamProvider } from "./previewStream";
 import { TrackGrid } from "./TrackGrid";
 import { DENSITY_LABEL, densityVars, loadDensity, saveDensity, type Density } from "./density";
+import { Lock } from "./icons";
 import { scrubHandler } from "./scrub";
 import { ZoneRow } from "./ZoneRow";
 import { LearnTarget, MidiLearnProvider, useMidiLearn } from "./midiLearn";
@@ -51,6 +52,8 @@ const PRISMA_FILTERS = [{ name: "Prisma show", extensions: ["prisma"] }];
 
 /** Where "parameter panel hidden" is remembered (per machine). */
 const PANEL_HIDDEN_KEY = "prisma-panel-hidden";
+/** Where the layout lock is remembered (per machine). */
+const LAYOUT_LOCK_KEY = "prisma-layout-locked";
 
 export default function MainWindow() {
   return (
@@ -163,6 +166,22 @@ function MainWindowBody() {
     }
   }, [panelHidden]);
   const togglePanel = useCallback(() => setPanelHidden((h) => !h), []);
+  // Vista → Bloquear layout (LIVE-MODEL-SPEC §10.2): no dragging, adding or deleting
+  // tracks and no destination changes while it is on. Per machine, like the density.
+  const [layoutLocked, setLayoutLocked] = useState(() => {
+    try {
+      return localStorage.getItem(LAYOUT_LOCK_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(LAYOUT_LOCK_KEY, layoutLocked ? "1" : "0");
+    } catch {
+      /* storage may be unavailable */
+    }
+  }, [layoutLocked]);
   const togglePanelRef = useRef(togglePanel);
   togglePanelRef.current = togglePanel;
   // The global "Modo armar" (LIVE-MODEL-SPEC §7): while on, every play gesture arms.
@@ -195,7 +214,10 @@ function MainWindowBody() {
       if (e.defaultPrevented || e.repeat || isModifierOnly(e) || blocked()) return null;
       const combo = comboOf(e);
       if (isReserved(combo) || !isBound(keysRef.current, combo)) return null;
-      const focus = focusKind(document.activeElement);
+      // Where the key was pressed — not `document.activeElement`: a field that blurs
+      // itself on Enter (the R / G / B boxes) has already handed the focus to the body by
+      // the time the window sees the key, and Enter would launch the selected clip.
+      const focus = focusKind(e.target instanceof Element ? e.target : document.activeElement);
       return focus === "other" ? { combo, focus } : null;
     };
     const onDown = (e: KeyboardEvent) => {
@@ -532,6 +554,7 @@ function MainWindowBody() {
           })),
         },
         { kind: "action", label: "Panel de parámetros", shortcut: "Tab", checked: !panelHidden, onSelect: togglePanel },
+        { kind: "action", label: "Bloquear layout", checked: layoutLocked, onSelect: () => setLayoutLocked((l) => !l) },
         { kind: "divider" },
         { kind: "action", label: "Pantalla completa", shortcut: "F11", onSelect: toggleFullscreen },
       ],
@@ -598,6 +621,17 @@ function MainWindowBody() {
               >
                 {status?.text ?? ""}
               </span>
+              {layoutLocked && (
+                <button
+                  className="pr-lock-ind"
+                  type="button"
+                  onClick={() => setLayoutLocked(false)}
+                  title="Layout bloqueado: no se pueden mover, agregar ni borrar tracks, ni cambiar destinos. Clic para desbloquear (Vista → Bloquear layout)."
+                >
+                  <Lock size={13} />
+                  Layout bloqueado
+                </button>
+              )}
               {learn.active && (
                 <button
                   className="pr-learn-ind"
@@ -634,6 +668,7 @@ function MainWindowBody() {
                 onChanged={bumpGrid}
                 onArmedChange={setAnyArmed}
                 density={density}
+                layoutLocked={layoutLocked}
               />
             </section>
             <div className="pr-preview-slot">

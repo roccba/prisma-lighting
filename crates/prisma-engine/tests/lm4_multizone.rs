@@ -249,3 +249,66 @@ fn a_crossfade_keeps_the_outgoing_clips_params() {
     let end = at(&mut c, t0 + 2 * SEC);
     assert!(all(&end, 0.8), "lands on clip B: {end:?}");
 }
+
+/// LIVE-MODEL-SPEC §10.2: a reorder changes only the fold order, at the frame boundary.
+/// Nothing is rebuilt, so an animated clip keeps its phase: after the reorder the frame is
+/// exactly what a compositor that never reordered shows.
+#[test]
+fn a_reorder_changes_the_fold_without_restarting_anything() {
+    let gpu = software_gpu();
+    let patch = rig(1, 16);
+    let index = patch.compile().unwrap();
+    let tree = ParameterTree::with_defaults();
+    let one_zone = |effects: Vec<Option<EffectInstance>>, blend: BlendMode| TrackContent {
+        zones: vec![0],
+        blend_mode: blend,
+        key: prisma_render::blend::DEFAULT_KEY,
+        opacity: 1.0,
+        live: None,
+        effects,
+    };
+    // Track 0: an animated wave. Track 1: opaque grey, Normal, on top of it.
+    let build = |n: u128| {
+        let wave = instances(gpu, &tree, Uuid::from_u128(n), 1, "wave", &ParamSet::new());
+        let grey = instances(
+            gpu,
+            &tree,
+            Uuid::from_u128(n + 1),
+            1,
+            "solid",
+            &grey_params(0.5),
+        );
+        vec![
+            one_zone(wave, BlendMode::Normal),
+            one_zone(grey, BlendMode::Normal),
+        ]
+    };
+    let mut moved = ZoneCompositor::new(gpu, &patch, &index, build(0x90));
+    let zones = lit(1);
+    let at =
+        |c: &mut ZoneCompositor, ns| frame(gpu, &patch, &index, c, &zones, &clock_at(ns, 120.0));
+
+    let t0 = at(&mut moved, SEC);
+    assert!(all(&t0, 0.5), "the grey track is on top: {t0:?}");
+
+    // The wave goes on top. Its animation has been running for 1 s and must not restart.
+    assert!(moved.command_sender().reorder(vec![1, 0]));
+    let after = at(&mut moved, 2 * SEC);
+    assert!(!all(&after, 0.5), "the wave is on top now: {after:?}");
+
+    // A compositor built with the wave on top from the start, same clock history: the
+    // same picture, so the moved wave did not restart.
+    let reference = build(0xA0);
+    let mut built_on_top =
+        ZoneCompositor::new(gpu, &patch, &index, reference.into_iter().rev().collect());
+    at(&mut built_on_top, SEC);
+    assert_eq!(
+        at(&mut built_on_top, 2 * SEC),
+        after,
+        "same phase: nothing restarted"
+    );
+
+    // And back: the grey track on top again.
+    assert!(moved.command_sender().reorder(vec![0, 1]));
+    assert!(all(&at(&mut moved, 3 * SEC), 0.5));
+}

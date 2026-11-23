@@ -349,6 +349,10 @@ pub enum ZoneCommand {
         /// `[threshold, softness]` for `BlendMode::LumaKey`.
         key: [f32; 2],
     },
+    /// Change the order tracks fold in (a header dragged on the grid, LIVE-MODEL-SPEC
+    /// §10.2): `rank[track]` is the track's new position. Only each zone's fold order
+    /// changes — no instance is rebuilt, so phases, fades and textures carry on.
+    Reorder { rank: Vec<usize> },
     /// Several commands applied at the SAME frame boundary, in order — what makes a
     /// scene launch or GO land on every track in one frame.
     Batch(Vec<ZoneCommand>),
@@ -401,6 +405,12 @@ impl ZoneCommandSender {
     /// Queue a phase rewind for `track` (applied after any swap queued before it).
     pub fn restart_track(&self, track: usize) -> bool {
         self.send(ZoneCommand::Restart { track })
+    }
+
+    /// Fold the tracks in a new order (`rank[track]` = new position), at the next frame
+    /// boundary, without rebuilding anything.
+    pub fn reorder(&self, rank: Vec<usize>) -> bool {
+        self.send(ZoneCommand::Reorder { rank })
     }
 
     /// Queue a new colour table for `track`'s running effect (applied after any swap
@@ -986,9 +996,30 @@ impl ZoneCompositor {
                     inst.key = key;
                 }
             }
+            ZoneCommand::Reorder { rank } => self.reorder(&rank),
             ZoneCommand::Batch(cmds) => {
                 for c in cmds {
                     self.apply(c, gpu, clock);
+                }
+            }
+        }
+    }
+
+    /// Fold every zone's instances in the order `rank` gives their tracks (`rank[track]`
+    /// = new position; a track missing from `rank` keeps its place after the ranked ones)
+    /// and point each track at its instances' new indices. In place: an unstable sort of
+    /// each zone's instances (one per track, so the keys are distinct) and no allocation.
+    fn reorder(&mut self, rank: &[usize]) {
+        let key = |track: usize| rank.get(track).copied().unwrap_or(rank.len() + track);
+        for (zone, slot) in self.slots.iter_mut().enumerate() {
+            slot.instances.sort_unstable_by_key(|inst| key(inst.track));
+            for (index, inst) in slot.instances.iter().enumerate() {
+                if let Some(at) = self
+                    .tracks
+                    .get_mut(inst.track)
+                    .and_then(|t| t.at.iter_mut().find(|a| a.zone == zone))
+                {
+                    at.index = index;
                 }
             }
         }

@@ -700,9 +700,15 @@ export interface ParamWritten {
 }
 
 /** Set one parameter of a zone's active effect (normalized 0..1). Drives it live. */
+/** After the app stored a parameter (the grid re-reads: a cell shows its effect's main
+ *  colour, computed from the current values). */
+export const PARAM_STORED = "prisma-param-stored";
+
 export const setParam = (track: string, name: string, value: number, cell: number | null = null) => {
   window.dispatchEvent(new CustomEvent<ParamWritten>(PARAM_WRITTEN, { detail: { track, name, value } }));
-  return invoke<void>("main_set_param", { track, name, value, cell });
+  return invoke<void>("main_set_param", { track, name, value, cell }).then(() => {
+    window.dispatchEvent(new CustomEvent<ParamWritten>(PARAM_STORED, { detail: { track, name, value } }));
+  });
 };
 
 // --- MIDI (M9 Slice 1): input device + MIDI Learn ---

@@ -56,7 +56,7 @@
 //! for changes, and never calls the host with one held.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -452,6 +452,7 @@ impl ClipController {
         grid: GridParams,
         active: Vec<Option<usize>>,
         host: Arc<dyn ClipHost>,
+        order: Arc<Mutex<Vec<usize>>>,
     ) -> ClipController {
         let mut routes: HashMap<ParamId, (ParamHandle, Action)> = HashMap::new();
         let mut route = |h: &ParamHandle, a: Action| {
@@ -525,6 +526,7 @@ impl ClipController {
             remembered: vec![None; grid.tracks.len()],
             tracks: grid.tracks,
             selection: grid.selection,
+            order,
             selected: (None, None),
             mirrored: vec![None; SELECT_PARAMS],
             host,
@@ -609,7 +611,11 @@ struct Controller {
     decks: Vec<ZoneDeck>,
     host: Arc<dyn ClipHost>,
     selection: Option<SelectionParams>,
-    /// The selection as last read: (track slot, clip; `None` = the running clip).
+    /// Grid position → track index (the engine's table, LIVE-MODEL-SPEC §10.2). Tracks
+    /// are indexed by assembly order everywhere here; only the selection is positional
+    /// (`/select/track` is what the screen and the arrows see), so it goes through this.
+    order: Arc<Mutex<Vec<usize>>>,
+    /// The selection as last read: (track index, clip; `None` = the running clip).
     selected: (Option<usize>, Option<usize>),
     /// The last clip selected on each track, which a track-select returns to.
     remembered: Vec<Option<usize>>,
@@ -837,14 +843,26 @@ impl Controller {
         Some((track, clip))
     }
 
+    /// The track index at grid position `pos`.
+    fn index_at(&self, pos: usize) -> Option<usize> {
+        self.order.lock().unwrap().get(pos).copied()
+    }
+
+    /// The grid position of track index `track`.
+    fn position_of(&self, track: usize) -> Option<usize> {
+        self.order.lock().unwrap().iter().position(|&t| t == track)
+    }
+
     /// Write the selection (track first, so an observer between the two writes sees the
-    /// new track with the old clip, never the old track with the new clip).
+    /// new track with the old clip, never the old track with the new clip). `track` is a
+    /// track index; the tree holds its grid position.
     fn write_selection(&self, track: Option<usize>, clip: Option<usize>) {
         let Some(sel) = &self.selection else {
             return;
         };
+        let pos = track.and_then(|t| self.position_of(t));
         self.tree
-            .write_real(&sel.track, index_value(track), selection_source());
+            .write_real(&sel.track, index_value(pos), selection_source());
         self.tree
             .write_real(&sel.clip, index_value(clip), selection_source());
     }
@@ -861,7 +879,9 @@ impl Controller {
         let Some(sel) = &self.selection else {
             return;
         };
-        let track = read_index(&sel.track).filter(|&t| t < self.tracks.len());
+        let track = read_index(&sel.track)
+            .and_then(|pos| self.index_at(pos))
+            .filter(|&t| t < self.tracks.len());
         let clip = track.and(read_index(&sel.clip));
         if let (Some(t), Some(c)) = (track, clip) {
             self.remembered[t] = Some(c);
@@ -877,15 +897,19 @@ impl Controller {
         if self.tracks.is_empty() {
             return;
         }
+        // Left / right move across the grid's positions, not the tracks' indices.
         let (track, _) = self.selected;
-        let track = track.unwrap_or(0);
+        let pos = track.and_then(|t| self.position_of(t)).unwrap_or(0);
         let row = self.selected_clip().map(|(_, c)| c).unwrap_or(0);
         let clips = |t: usize| self.tracks[t].launch.len();
-        let (t, c) = match dir {
-            Move::Up => (track, row.saturating_sub(1)),
-            Move::Down => (track, row + 1),
-            Move::Left => (track.saturating_sub(1), row),
-            Move::Right => ((track + 1).min(self.tracks.len() - 1), row),
+        let (pos, c) = match dir {
+            Move::Up => (pos, row.saturating_sub(1)),
+            Move::Down => (pos, row + 1),
+            Move::Left => (pos.saturating_sub(1), row),
+            Move::Right => ((pos + 1).min(self.tracks.len() - 1), row),
+        };
+        let Some(t) = self.index_at(pos) else {
+            return;
         };
         let c = c.min(clips(t).saturating_sub(1));
         self.write_selection(Some(t), (clips(t) > 0).then_some(c));

@@ -3170,11 +3170,33 @@ fn next_track_name(show: &Show) -> String {
 
 /// Reorder: move `track` to sit just before `before` (or last when `None`). The order is
 /// global: it is the compositing order in every zone two tracks share (later = on top),
-/// and means nothing where they share none (LIVE-MODEL-SPEC §8.4). Recompiles the
-/// running show.
+/// and means nothing where they share none (LIVE-MODEL-SPEC §8.4). Live, no recompile
+/// (§10.2): the engine only changes the fold order, so animations, armed clips and
+/// running fades carry on. Falls back to a recompile if the engine cannot.
 #[tauri::command]
 fn main_move_track(app: AppHandle, track: Uuid, before: Option<Uuid>) -> Result<(), String> {
-    recompile_running_show(&app, |show| move_track(&mut show.tracks, track, before))
+    let state = app.state::<AppState>();
+    let order: Vec<Uuid> = {
+        let mut show = state.show.lock().unwrap();
+        let old: Vec<Uuid> = show.tracks.iter().map(|t| t.id).collect();
+        move_track(&mut show.tracks, track, before);
+        let order: Vec<Uuid> = show.tracks.iter().map(|t| t.id).collect();
+        if order == old {
+            return Ok(());
+        }
+        order
+    };
+    let live = state
+        .engine
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|e| e.reorder_tracks(&order));
+    if !live {
+        return recompile_running_show(&app, |_| {});
+    }
+    let _ = app.emit("cells-changed", ());
+    Ok(())
 }
 
 /// Move `track` just before `before` (or to the end when `None`). An unknown id, or

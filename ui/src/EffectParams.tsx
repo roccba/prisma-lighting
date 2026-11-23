@@ -441,9 +441,8 @@ function EffectHead({
   );
 }
 
-/** Height of one scalar row (the slider) and the vertical gap between rows, in px —
- *  must match `.pr-field-control .pr-hslider` and `.pr-params-scalars` in theme.css. */
-const ROW_H = 40;
+/** The vertical gap between scalar rows, in px — must match `.pr-params-scalars` in
+ *  theme.css. A row's height is the density's slider height (`--pslider-h`). */
 const ROW_GAP = 12;
 
 /** The effect an empty cell's draft starts with: Color (its defaults are black). */
@@ -539,7 +538,8 @@ export function EffectParams({ trackId, cell, rev, onGridChange }: EffectParamsP
       // A detached element (the panel just remounted for another cell) measures 0 high:
       // ignore it, or the sliders would collapse to one row and spill into columns.
       if (el.clientHeight === 0) return;
-      setRows(Math.max(1, Math.floor((el.clientHeight + ROW_GAP) / (ROW_H + ROW_GAP))));
+      const rowH = parseFloat(getComputedStyle(el).getPropertyValue("--pslider-h")) || 40;
+      setRows(Math.max(1, Math.floor((el.clientHeight + ROW_GAP) / (rowH + ROW_GAP))));
     });
     ro.observe(el);
     return () => ro.disconnect();

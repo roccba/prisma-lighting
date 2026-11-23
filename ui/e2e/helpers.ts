@@ -13,6 +13,7 @@ export interface OpenOptions {
   density: Density;
   viewport?: { width: number; height: number };
   panelHidden?: boolean;
+  layoutLocked?: boolean;
 }
 
 /** Open the demo show in the harness. Density and panel state are the per-machine
@@ -21,13 +22,14 @@ export async function openDemo(page: Page, o: OpenOptions) {
   await page.setViewportSize(o.viewport ?? VIEWPORTS[0]);
   // Seeds the settings once per page; `relayout` changes them later (a reload keeps them).
   await page.addInitScript(
-    ([density, hidden]) => {
+    ([density, hidden, locked]) => {
       if (sessionStorage.getItem("prisma-test-seeded")) return;
       sessionStorage.setItem("prisma-test-seeded", "1");
       localStorage.setItem("prisma-grid-density", density);
       localStorage.setItem("prisma-panel-hidden", hidden ? "1" : "0");
+      localStorage.setItem("prisma-layout-locked", locked ? "1" : "0");
     },
-    [o.density, o.panelHidden ?? false] as const,
+    [o.density, o.panelHidden ?? false, o.layoutLocked ?? false] as const,
   );
   await page.goto("/e2e/harness.html");
   await expect(page.locator(".pr-cell").first()).toBeVisible();
@@ -49,6 +51,23 @@ export async function relayout(page: Page, o: { density: Density; panelHidden?: 
   await page.reload();
   await expect(page.locator(".pr-cell").first()).toBeVisible();
   await page.waitForTimeout(300);
+}
+
+/** The IPC commands the UI sent since the last `clearCalls`, by name. */
+export async function calls(page: Page, cmd: string) {
+  return page.evaluate((cmd) => window.__calls.filter((c) => c.cmd === cmd).map((c) => c.args), cmd);
+}
+
+export async function clearCalls(page: Page) {
+  await page.evaluate(() => (window.__calls.length = 0));
+}
+
+/** Press at `from`, move by `dx` in a few steps, release. */
+export async function drag(page: Page, from: { x: number; y: number }, dx: number) {
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(from.x + dx, from.y, { steps: 8 });
+  await page.mouse.up();
 }
 
 /** MIDI learn on (Ctrl+M, as the operator does). */
