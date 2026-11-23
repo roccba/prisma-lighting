@@ -213,6 +213,11 @@ Notes:
 
 - One track in `Normal` at full opacity skips the fold and renders straight into the zone texture.
   The two paths are tested to give the same frame.
+- A track that reaches several zones has one effect instance per zone, at that zone's
+  `mapping_size`, all reading one set of parameter handles (`EffectParams`): one write moves
+  every zone. Each instance keeps its own animation phase (the zone's VEL). An instance whose
+  handles were replaced by a newer clip keeps the last values it read, so a crossfade's
+  outgoing side keeps its look.
 - Zone dimmer, colour filter and master apply at the output stage, except on overlapped cells, where
   they must be applied before zones are combined.
 - Everything GPU-sized is allocated at compile time. Nothing is allocated per frame.
@@ -283,7 +288,7 @@ takeover after idle.
 | `/track/{id}/clip/{i}/state` | written by the engine: 0 empty, 1 loaded, 2 live, 3 armed |
 | `/track/{id}/clips/refresh` | trigger |
 | `/track/{id}/opacity`, `mute`, `solo`, `stop`, `select` | level / toggle / trigger |
-| `/track/{id}/layer/0/param/{name}` | effect parameters of the running clip |
+| `/track/{id}/layer/0/param/{name}` | effect parameters of the running clip, one set shared by every zone the track reaches |
 | `/scene/{i}/launch`, `/scene/{i}/arm` | trigger |
 | `/arm/go`, `/arm/clear`, `/tracks/stop` | trigger |
 | `/select/track`, `/select/clip` | level: the selection (`-1` = none / the running clip); not saved |
@@ -319,7 +324,8 @@ holds the keyboard shortcuts and which devices had their defaults seeded; a v4 p
 | Controller mappings, keyboard shortcuts | `crates/prisma-core/src/{mappings,keys}.rs` |
 | Selection, knobs follow selection | `crates/prisma-engine/src/clips.rs` |
 | Patch editor backend | `crates/prisma-editor/src/{draft,op}.rs` |
+| Demo show (built in code; `--demo` opens it at launch) | `crates/prisma-engine/src/demo.rs` |
 | IPC commands | `app/src/main.rs` |
 | Autosave | `app/src/autosave.rs` |
-| UI | `ui/src/` (`MainWindow`, `TrackGrid`, `ZoneRow`, `EffectParams`, `Editor`) |
+| UI | `ui/src/` (`MainWindow`, `TrackGrid`, `TrackDialog`, `ZoneRow`, `EffectParams`, `Editor`) |
 | Design system | `docs/DESIGN.md`, `ui/src/theme.css` |

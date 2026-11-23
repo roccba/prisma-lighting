@@ -263,12 +263,60 @@ const PALETTE_F32: usize = 4 + PALETTE_MAX * 4;
 /// `Uniforms` struct prefix in every shader.
 const GLOBALS_F32: usize = 4;
 
-/// An effect bound into one Parameter Tree: its parameters are registered, their
-/// handles resolved once, and its GPU pipeline + uniform buffer built. Reused
-/// every frame; `render` allocates nothing on the GPU side.
+/// An effect's parameters registered **once** in a Parameter Tree: one handle per
+/// manifest param, in manifest order, at `{prefix}/param/{name}`.
+///
+/// Cheap to clone (an `Arc`). Every [`EffectInstance`] built from the same
+/// `EffectParams` reads the same slots, so one write moves all of them in the same
+/// frame. This is how a track that reaches several zones keeps **one** set of
+/// parameters across its per-zone instances (LIVE-MODEL-SPEC §8.4): registering the
+/// same paths once per instance would not work, because `register` replaces a path
+/// and the earlier instances' handles would die.
+#[derive(Clone)]
+pub struct EffectParams {
+    handles: std::sync::Arc<[ParamHandle]>,
+}
+
+impl EffectParams {
+    /// Register `manifest`'s params under `path_prefix` and resolve their handles.
+    /// Replaces whatever was registered at those paths before (its handles go dead).
+    pub fn register(tree: &ParameterTree, path_prefix: &str, manifest: &EffectManifest) -> Self {
+        let handles: Vec<ParamHandle> = manifest
+            .params
+            .iter()
+            .map(|spec| {
+                let path = format!("{path_prefix}/param/{}", spec.name);
+                tree.register(&path, spec.descriptor.clone())
+            })
+            .collect();
+        EffectParams {
+            handles: handles.into(),
+        }
+    }
+
+    /// How many params (= the manifest's).
+    pub fn len(&self) -> usize {
+        self.handles.len()
+    }
+
+    /// Whether the effect has no params.
+    pub fn is_empty(&self) -> bool {
+        self.handles.is_empty()
+    }
+}
+
+/// An effect bound into one Parameter Tree: its parameters' handles (shared, see
+/// [`EffectParams`]), its GPU pipeline and its uniform buffer. Reused every frame;
+/// `render` allocates nothing.
 pub struct EffectInstance {
     /// Parallel to the manifest's params: resolved once, read wait-free per frame.
-    handles: Vec<ParamHandle>,
+    params: EffectParams,
+    /// The last real value read from each handle (parallel to `params`), seeded with
+    /// the descriptor defaults. A handle goes dead when its path is registered again —
+    /// a new clip on the same track — and from then on the instance keeps rendering
+    /// with these values, so an outgoing clip finishes its crossfade with its own
+    /// parameters instead of zeros.
+    last: Vec<f32>,
     /// The effect's pipeline + bind-group layout, shared via the [`crate::cache`] across
     /// zones running the same effect and across recompiles.
     pipeline: std::sync::Arc<crate::cache::CachedRender>,
@@ -284,23 +332,38 @@ pub struct EffectInstance {
 }
 
 impl EffectInstance {
-    /// Register the effect's parameters under `path_prefix` in `tree`, build its
-    /// pipeline, and resolve its handles. Registered paths are
-    /// `{path_prefix}/param/{name}`.
+    /// Register the effect's parameters under `path_prefix` in `tree` and build one
+    /// instance on them. Registered paths are `{path_prefix}/param/{name}`. For several
+    /// instances sharing one set of params, register once with
+    /// [`EffectParams::register`] and build each with [`with_params`](Self::with_params).
     pub fn new(
         gpu: &crate::Gpu,
         tree: &ParameterTree,
         path_prefix: &str,
         manifest: &EffectManifest,
     ) -> EffectInstance {
-        let device = &gpu.device;
+        let params = EffectParams::register(tree, path_prefix, manifest);
+        EffectInstance::with_params(gpu, &params, manifest)
+    }
 
-        // 1. Register params → resolve handles once (never per frame, §4.5).
-        let mut handles = Vec::with_capacity(manifest.params.len());
-        for spec in &manifest.params {
-            let path = format!("{path_prefix}/param/{}", spec.name);
-            handles.push(tree.register(&path, spec.descriptor.clone()));
-        }
+    /// Build an instance on params already registered for `manifest` (shared with any
+    /// other instance built on the same `params`).
+    pub fn with_params(
+        gpu: &crate::Gpu,
+        params: &EffectParams,
+        manifest: &EffectManifest,
+    ) -> EffectInstance {
+        assert_eq!(
+            params.len(),
+            manifest.params.len(),
+            "EffectParams registered for another manifest"
+        );
+        let device = &gpu.device;
+        let last: Vec<f32> = manifest
+            .params
+            .iter()
+            .map(|spec| spec.descriptor.to_real(spec.descriptor.default_norm))
+            .collect();
 
         // 2. Uniform buffer sized to globals + params, padded to a 16-byte
         //    multiple (the std140 rule for a uniform struct's total size).
@@ -404,7 +467,8 @@ impl EffectInstance {
         });
 
         let inst = EffectInstance {
-            handles,
+            params: params.clone(),
+            last,
             pipeline,
             uniform_buf,
             palette_buf,
@@ -463,10 +527,13 @@ impl EffectInstance {
         // scratch[1] is _pad0.
         self.scratch[2] = width as f32;
         self.scratch[3] = height as f32;
-        for (i, h) in self.handles.iter().enumerate() {
-            // A dead handle (param unregistered) reads its default of 0.0 — the
-            // effect degrades to black rather than panicking.
-            self.scratch[GLOBALS_F32 + i] = h.read_real().unwrap_or(0.0);
+        for (i, h) in self.params.handles.iter().enumerate() {
+            // A dead handle (its path registered again by a newer clip) keeps the last
+            // value it read: the outgoing side of a crossfade keeps its look.
+            if let Some(v) = h.read_real() {
+                self.last[i] = v;
+            }
+            self.scratch[GLOBALS_F32 + i] = self.last[i];
         }
         gpu.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&self.scratch));

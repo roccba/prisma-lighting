@@ -1137,35 +1137,7 @@ fn main_save_show(state: State<AppState>, path: String) -> Result<(), String> {
 /// `layout-changed`.
 #[tauri::command]
 fn main_new_show(app: AppHandle) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let show = empty_show();
-    let target = virtual_sink();
-    let (config, port) = preview_config(AdapterPreference::Software, target);
-    let mut guard = state.engine.lock().unwrap();
-    let engine = guard.take().ok_or("engine is not running")?;
-    match engine.recompile_show(show.clone(), config) {
-        Ok(new) => {
-            new.set_frozen(false);
-            *guard = Some(new);
-            if let Some(port) = port {
-                *state.preview_port.lock().unwrap() = port;
-            }
-            drop(guard);
-            *state.draft.lock().unwrap() = PatchDraft::new(show.patch.clone());
-            *state.show.lock().unwrap() = show;
-            watch_show_nodes(&state);
-            if let Some(engine) = state.engine.lock().unwrap().as_ref() {
-                refresh_all_cells(engine);
-            }
-            write_last_show(&state.last_show_file, None);
-            if let Ok(snap) = show_snapshot(&state) {
-                mark_saved(&state, snap);
-            }
-            let _ = app.emit("layout-changed", ());
-            Ok(())
-        }
-        Err(e) => Err(e.to_string()),
-    }
+    run_show(&app, empty_show(), None)
 }
 
 /// Open a `.prisma` show and run it: load the Show, recompile the engine onto its embedded
@@ -1173,12 +1145,26 @@ fn main_new_show(app: AppHandle) -> Result<(), String> {
 /// is validated (compile) BEFORE the engine is torn down, so a bad file is rejected with the
 /// running show intact rather than leaving the app with no engine. The main window re-fetches
 /// on the `layout-changed` event.
-
 #[tauri::command]
 fn main_open_show(app: AppHandle, path: String) -> Result<(), String> {
-    let state = app.state::<AppState>();
     let json = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let mut show = load_show(&json).map_err(|e| e.to_string())?;
+    let show = load_show(&json).map_err(|e| e.to_string())?;
+    run_show(&app, show, Some(Path::new(&path)))
+}
+
+/// "Archivo → Abrir show de demo": the built-in demo show (`prisma_engine::demo`), unsaved
+/// like a new one — saving it asks for a file, and the last-show memory is cleared.
+#[tauri::command]
+fn main_open_demo_show(app: AppHandle) -> Result<(), String> {
+    run_show(&app, prisma_engine::demo::demo_show(), None)
+}
+
+/// Run `show` in place of the current one: derive and validate its patch, recompile the
+/// engine onto it (keeping the GPU), adopt it as the live + editable state, remember `path`
+/// as the last show (`None` forgets it) and mark it saved. A show that fails to validate or
+/// compile leaves the running one intact.
+fn run_show(app: &AppHandle, mut show: Show, path: Option<&Path>) -> Result<(), String> {
+    let state = app.state::<AppState>();
     // Derive the render-critical data and validate before touching the running engine.
     show.patch.fill_zone_members_from_ownership();
     show.patch.fit_matrix_size();
@@ -1198,16 +1184,15 @@ fn main_open_show(app: AppHandle, path: String) -> Result<(), String> {
                 *state.preview_port.lock().unwrap() = port;
             }
             drop(guard);
-            // Adopt the loaded show + its patch as the editable state (so the editor, if
-            // opened next, shows this rig), then tell the main window to re-fetch.
+            // Adopt the show + its patch as the editable state (so the editor, if opened
+            // next, shows this rig), then tell the main window to re-fetch.
             *state.draft.lock().unwrap() = PatchDraft::new(show.patch.clone());
             *state.show.lock().unwrap() = show;
             watch_show_nodes(&state);
             if let Some(engine) = state.engine.lock().unwrap().as_ref() {
                 refresh_all_cells(engine);
             }
-            // Remember it so the next launch reopens this show.
-            write_last_show(&state.last_show_file, Some(Path::new(&path)));
+            write_last_show(&state.last_show_file, path);
             if let Ok(snap) = show_snapshot(&state) {
                 mark_saved(&state, snap);
             }
@@ -2824,12 +2809,15 @@ fn main_set_param(
 struct TrackInfo {
     id: Uuid,
     name: String,
-    /// Destination zones (phase 2: exactly the one it was created for).
+    /// Destination zones, in patch order.
     zones: Vec<Uuid>,
     /// The destination zones' names, joined for the header.
     destination: String,
-    /// The first destination zone's display colour (the header strip, the pads).
+    /// The first destination zone's display colour (the pads, the cells).
     color: [u8; 3],
+    /// Every destination zone's display colour, parallel to `zones` (the header strip,
+    /// one segment per zone).
+    colors: Vec<[u8; 3]>,
     blend_mode: BlendMode,
     /// `BlendMode::LumaKey`'s threshold and softness (linear luminance, 0..1).
     key_threshold: f32,
@@ -2916,6 +2904,12 @@ fn main_grid(state: State<AppState>) -> GridInfo {
                     .first()
                     .and_then(zone)
                     .map_or([128, 128, 128], |z| z.display_color),
+                colors: t
+                    .destination
+                    .zones
+                    .iter()
+                    .map(|id| zone(id).map_or([128, 128, 128], |z| z.display_color))
+                    .collect(),
                 blend_mode: t.blend_mode,
                 key_threshold: t.key_threshold,
                 key_softness: t.key_softness,
@@ -3136,24 +3130,23 @@ fn next_track_name(show: &Show) -> String {
         .expect("an unused number exists")
 }
 
-/// Reorder: move `track` to sit just before `before` (or last when `None`). Only among the
-/// tracks of the same zone — order is compositing order inside a zone (later = on top);
-/// across zones it means nothing. Recompiles the running show.
+/// Reorder: move `track` to sit just before `before` (or last when `None`). The order is
+/// global: it is the compositing order in every zone two tracks share (later = on top),
+/// and means nothing where they share none (LIVE-MODEL-SPEC §8.4). Recompiles the
+/// running show.
 #[tauri::command]
 fn main_move_track(app: AppHandle, track: Uuid, before: Option<Uuid>) -> Result<(), String> {
     recompile_running_show(&app, |show| move_track(&mut show.tracks, track, before))
 }
 
-/// Move `track` just before `before` (or after the last track of its zone when `None`),
-/// only when both reach the same zones; anything else leaves the order unchanged.
+/// Move `track` just before `before` (or to the end when `None`). An unknown id, or
+/// `before == track`, leaves the order unchanged.
 fn move_track(tracks: &mut Vec<Track>, track: Uuid, before: Option<Uuid>) {
     let Some(from) = tracks.iter().position(|t| t.id == track) else {
         return;
     };
-    let zones = tracks[from].destination.zones.clone();
-    let same = |t: &Track| t.destination.zones == zones;
     if let Some(b) = before {
-        if b == track || !tracks.iter().any(|t| t.id == b && same(t)) {
+        if b == track || !tracks.iter().any(|t| t.id == b) {
             return;
         }
     }
@@ -3163,12 +3156,46 @@ fn move_track(tracks: &mut Vec<Track>, track: Uuid, before: Option<Uuid>) {
             .iter()
             .position(|t| t.id == b)
             .expect("checked above"),
-        None => tracks
-            .iter()
-            .rposition(same)
-            .map_or(tracks.len(), |i| i + 1),
+        None => tracks.len(),
     };
     tracks.insert(at, moved);
+}
+
+/// "Aplicar destino" in the track dialog: the zones `track` reaches. Recompiles the
+/// running show (LIVE-MODEL-SPEC §4.4); nothing happens when the set is unchanged.
+#[tauri::command]
+fn main_set_track_destination(app: AppHandle, track: Uuid, zones: Vec<Uuid>) -> Result<(), String> {
+    let zones = {
+        let state = app.state::<AppState>();
+        let show = state.show.lock().unwrap();
+        let zones = destination_zones(&show.patch, &zones)?;
+        match show.track(track) {
+            None => return Err("no such track".into()),
+            Some(t) if t.destination.zones == zones => return Ok(()),
+            Some(_) => zones,
+        }
+    };
+    recompile_running_show(&app, |show| {
+        if let Some(t) = show.track_mut(track) {
+            t.destination.zones = zones;
+        }
+    })
+}
+
+/// A requested destination as the show stores it: the patch's zones among `asked`, in
+/// patch order, each once. Unknown ids are dropped; none left is an error (a track must
+/// reach at least one zone).
+fn destination_zones(patch: &prisma_patch::Patch, asked: &[Uuid]) -> Result<Vec<Uuid>, String> {
+    let zones: Vec<Uuid> = patch
+        .zones
+        .iter()
+        .map(|z| z.id)
+        .filter(|id| asked.contains(id))
+        .collect();
+    if zones.is_empty() {
+        return Err("a track needs at least one zone".into());
+    }
+    Ok(zones)
 }
 
 /// Delete a track and its clips. Recompiles the running show.
@@ -3273,6 +3300,7 @@ fn main() {
             main_save_show,
             main_new_show,
             main_open_show,
+            main_open_demo_show,
             main_effect_catalogue,
             main_assign_cell,
             main_assign_cell_silent,
@@ -3281,6 +3309,7 @@ fn main() {
             main_set_track_blend,
             main_stop_all,
             main_move_track,
+            main_set_track_destination,
             main_arm_clear,
             main_set_zone_white,
             main_grid,
@@ -3361,9 +3390,20 @@ fn main() {
             };
             // An autosave on disk means the last session ended with unsaved changes:
             // recover it (and keep a backup); otherwise reopen the last saved show.
+            // `--demo` opens the demo show instead (manual tests, the UI end-to-end
+            // tests): no recovery, the last-show memory untouched, and an unsaved session
+            // still backed up first, since the demo's own autosave replaces it.
+            let demo = std::env::args().any(|a| a == "--demo");
             let autosave = autosave::Autosave::new(&config_dir);
             let last_saved = read_last_show(&last_show_file);
-            let recovered_show = autosave.read().and_then(prepare);
+            if demo && autosave.read().is_some() {
+                autosave.rotate_backups();
+            }
+            let recovered_show = if demo {
+                None
+            } else {
+                autosave.read().and_then(prepare)
+            };
             let recovered = recovered_show.is_some().then(|| {
                 autosave.rotate_backups();
                 RecoveryInfo {
@@ -3373,7 +3413,12 @@ fn main() {
                         .map(|p| p.to_string_lossy().into_owned()),
                 }
             });
+            let demo_show = demo
+                .then(|| save_show(&prisma_engine::demo::demo_show()).ok())
+                .flatten()
+                .and_then(prepare);
             let mut show = recovered_show
+                .or(demo_show)
                 .or_else(|| {
                     last_saved
                         .as_ref()
@@ -3647,6 +3692,23 @@ mod tests {
     }
 
     #[test]
+    fn the_demo_show_stays_on_the_virtual_sink_and_keeps_its_clips() {
+        // What `run_show` does to it, with an enabled legacy target on the machine.
+        let mut show = prisma_engine::demo::demo_show();
+        let authored: Vec<usize> = show.tracks.iter().map(|t| t.clips.len()).collect();
+        show.patch.fill_zone_members_from_ownership();
+        show.patch.fit_matrix_size();
+        show.patch.compile().expect("compiles");
+        pad_grids(&mut show);
+        prepare_show_network(&mut show, &legacy(true, "2.255.255.255"));
+        assert!(!show.network.artnet_enabled && show.network.nodes.is_empty());
+        for (t, n) in show.tracks.iter().zip(authored) {
+            assert_eq!(t.clips.len(), GRID_CELLS.max(n), "{} padded", t.name);
+            assert!(!t.clips[0].layers.is_empty(), "{} plays at open", t.name);
+        }
+    }
+
+    #[test]
     fn pad_grids_fills_short_tracks_and_keeps_authored_clips() {
         // Idempotent: it fills a track with no clips and pads a short one, keeping its
         // authored clips at their index (so a loaded show's real content survives). It
@@ -3702,7 +3764,7 @@ mod tests {
     }
 
     #[test]
-    fn tracks_reorder_only_within_their_zone() {
+    fn tracks_reorder_globally() {
         let za = Uuid::new_v4();
         let zb = Uuid::new_v4();
         let t = |name: &str, z: Uuid| Track::new(name, prisma_engine::Destination::zone(z));
@@ -3714,14 +3776,32 @@ mod tests {
         move_track(&mut tracks, ids[2], None);
         assert_eq!(
             names(&tracks),
-            ["a1", "a2", "a3", "b1"],
-            "last of its zone, not of the show"
+            ["a1", "a2", "b1", "a3"],
+            "None = last of the show"
         );
-        move_track(&mut tracks, ids[0], Some(ids[3]));
+        move_track(&mut tracks, ids[3], Some(ids[0]));
+        assert_eq!(names(&tracks), ["b1", "a1", "a2", "a3"], "across zones");
+        move_track(&mut tracks, ids[0], Some(ids[0]));
+        move_track(&mut tracks, ids[0], Some(Uuid::new_v4()));
+        assert_eq!(names(&tracks), ["b1", "a1", "a2", "a3"], "no-ops");
+    }
+
+    #[test]
+    fn a_destination_is_the_patchs_zones_in_patch_order() {
+        let mut patch = empty_patch();
+        for name in ["B", "C"] {
+            let mut z = patch.zones[0].clone();
+            z.id = Uuid::new_v4();
+            z.name = name.into();
+            patch.zones.push(z);
+        }
+        let [a, b, c] = [0, 1, 2].map(|i| patch.zones[i].id);
+        assert_eq!(destination_zones(&patch, &[c, a, a]).unwrap(), [a, c]);
         assert_eq!(
-            names(&tracks),
-            ["a1", "a2", "a3", "b1"],
-            "another zone: unchanged"
+            destination_zones(&patch, &[b, Uuid::new_v4()]).unwrap(),
+            [b]
         );
+        assert!(destination_zones(&patch, &[]).is_err());
+        assert!(destination_zones(&patch, &[Uuid::new_v4()]).is_err());
     }
 }

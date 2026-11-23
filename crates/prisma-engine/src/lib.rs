@@ -34,6 +34,7 @@
 pub mod clips;
 pub mod config;
 pub mod content;
+pub mod demo;
 pub mod engine;
 pub mod zone_content;
 

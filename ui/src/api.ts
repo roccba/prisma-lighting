@@ -418,6 +418,9 @@ export const openShow = (path: string) => invoke<void>("main_open_show", { path 
 /** Start a clean show over the current patch (keeps zones/fixtures, clears all effects). */
 export const newShow = () => invoke<void>("main_new_show");
 
+/** "Archivo → Abrir show de demo": the built-in demo show, unsaved like a new one. */
+export const openDemoShow = () => invoke<void>("main_open_demo_show");
+
 /** Set once at boot when the session was recovered from an autosave. */
 export interface RecoveryInfo {
   /** The last saved show to fall back to, if any. */
@@ -481,8 +484,10 @@ export interface TrackInfo {
   zones: string[];
   /** The destination zones' names, joined. */
   destination: string;
-  /** The first destination zone's display colour (sRGB 0–255). */
+  /** The first destination zone's display colour (sRGB 0–255): pads and cells. */
   color: [number, number, number];
+  /** Every destination zone's display colour, parallel to `zones`: the header strip. */
+  colors: [number, number, number][];
   blend_mode: BlendMode;
   /** LumaKey: where the source starts to show, and how far above it it is full (0..1). */
   key_threshold: number;
@@ -602,6 +607,11 @@ export const moveTrack = (track: string, before: string | null) =>
   invoke<void>("main_move_track", { track, before });
 
 export const renameTrack = (track: string, name: string) => invoke<void>("main_rename_track", { track, name });
+
+/** "Aplicar destino": the zones a track reaches (at least one). Recompiles the running
+ *  show; the window re-fetches on `layout-changed`. */
+export const setTrackDestination = (track: string, zones: string[]) =>
+  invoke<void>("main_set_track_destination", { track, zones });
 
 /** "+ Track" on a zone (recompiles; the window re-fetches on `layout-changed`). */
 /** Resolves to the new track's id. */

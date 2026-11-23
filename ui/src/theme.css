@@ -793,6 +793,23 @@ input, textarea, [contenteditable="true"] {
 .pr-tsettings-label { width: 74px; flex: 0 0 auto; font-size: var(--fs-small); color: var(--text-label); }
 .pr-tsettings-unit { font-size: var(--fs-small); color: var(--text-dim); }
 .pr-tsettings-hint { font-size: var(--fs-tiny); color: var(--text-dim); max-width: 240px; }
+.pr-tsettings-more { align-self: flex-start; }
+/* The track header's colour strip: one segment per destination zone. */
+.pr-thead-strip { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; display: flex; pointer-events: none; }
+.pr-thead-strip > span { flex: 1 1 0; }
+/* The track settings dialog (phase 4). */
+.pr-trackdlg { width: 400px; max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); display: flex; flex-direction: column; }
+.pr-trackdlg-body { flex: 1 1 auto; min-height: 0; overflow: auto; gap: 14px; }
+.pr-trackdlg-section { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--divider); }
+.pr-trackdlg-title { font-size: var(--fs-small); color: var(--text-label); text-transform: uppercase; letter-spacing: .04em; }
+.pr-trackdlg-name { flex: 1 1 auto; min-width: 0; }
+.pr-trackdlg-zones { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }
+.pr-trackdlg-zone { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pr-trackdlg-swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; border-radius: 2px; border: 1px solid var(--btn-border-dark); }
+.pr-trackdlg-apply { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; }
+.pr-trackdlg-apply .pr-tsettings-hint { max-width: none; flex: 1 1 auto; }
+.pr-trackdlg-apply .pr-btn { flex: 0 0 auto; }
+.pr-trackdlg-ctl { flex: 1 1 auto; min-width: 0; font-size: var(--fs-small); color: var(--text-dim); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The global bar (menu bar, right): tempo, arm mode, GO. */
 .pr-gbar { display: flex; align-items: center; gap: 6px; }
 .pr-gbar-label { font-size: var(--fs-tiny); color: var(--text-label); letter-spacing: .06em; }

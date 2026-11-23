@@ -11,6 +11,7 @@ import {
   mainSelect,
   mainZones,
   newShow,
+  openDemoShow,
   openEditor,
   openShow,
   mainLastSaved,
@@ -478,6 +479,13 @@ function MainWindowBody() {
         { kind: "action", label: "Nueva configuración", shortcut: "Ctrl+N", onSelect: doNewShow },
         { kind: "action", label: "Abrir configuración…", shortcut: "Ctrl+O", onSelect: doOpenShow },
         { kind: "action", label: "Guardar configuración…", shortcut: "Ctrl+S", onSelect: doSaveShow },
+        {
+          kind: "action",
+          label: "Abrir show de demo",
+          onSelect: () => {
+            openDemoShow().catch((e) => setError(String(e)));
+          },
+        },
         {
           kind: "action",
           label: "Abrir el último guardado",

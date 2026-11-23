@@ -23,7 +23,6 @@ import {
   triggerCell,
   type BlendMode,
   type CellInfo,
-  type Easing,
   type GridInfo,
   type LaunchMode,
   type MapTarget,
@@ -35,10 +34,8 @@ import {
 } from "./api";
 import { CellColorPopover, CellMenu, isLightCell, NO_COLOR, RenameInput, type MenuItem } from "./cellParts";
 import { type Rgb } from "./ColorPicker";
-import { Check } from "./Check";
-import { Dropdown } from "./Dropdown";
 import { LearnTarget, useMidiLearn } from "./midiLearn";
-import { NumberField } from "./NumberField";
+import { BlendFields, blendLabel, TrackDialog, TransitionFields } from "./TrackDialog";
 import { scrubHandler } from "./scrub";
 import { linearToSrgb255 } from "./srgb";
 import { VFader } from "./VFader";
@@ -53,9 +50,11 @@ import { DENSITIES, GRID_GAP, type Density } from "./density";
 //  · Shift+click arms it for GO.
 // Every control is learnable for MIDI: cells and scenes relative to the controller's bank
 // window (the pad under the operator's finger), the footer per track slot.
-// Under each track: stop, opacity fader, M / S / sel. Over each: its header (zone colour
-// line, name, destination, blend · transition) — click to select, ⋯ for its settings,
-// right-click to rename or delete. "+" adds a track to a zone.
+// Under each track: stop, opacity fader, M / S / sel. Over each: its header (a colour
+// strip with one segment per destination zone, name, destination, blend · transition) —
+// click to select, drag to reorder (anywhere: the order is global), ⋯ for quick blend and
+// transition, double-click or "Ajustes…" for the whole track dialog, right-click to
+// rename or delete. "+" adds a track to a zone; more zones are added in the dialog.
 
 interface TrackGridProps {
   zones: ZoneInfo[];
@@ -80,31 +79,6 @@ interface TrackGridProps {
 }
 
 const EMPTY: GridInfo = { tracks: [], scenes: [] };
-
-const EASINGS: { value: Easing; label: string }[] = [
-  { value: "linear", label: "Lineal" },
-  { value: "ease_in", label: "Entrada suave" },
-  { value: "ease_out", label: "Salida suave" },
-  { value: "ease_in_out", label: "Suave (S)" },
-];
-
-/** The blend modes the popover offers, in console order. */
-const BLENDS: { value: BlendMode; label: string }[] = [
-  { value: "Normal", label: "Normal" },
-  { value: "Add", label: "Add" },
-  { value: "Subtract", label: "Subtract" },
-  { value: "Multiply", label: "Multiply" },
-  { value: "Screen", label: "Screen" },
-  { value: "Max", label: "Max" },
-  { value: "Min", label: "Min" },
-  { value: "Mask", label: "Mask" },
-  { value: "LumaKey", label: "Luma key" },
-];
-
-/** A blend mode's label (the header and the popover use the same words). */
-function blendLabel(mode: BlendMode): string {
-  return BLENDS.find((b) => b.value === mode)?.label ?? mode;
-}
 
 /** A cell's state, in the words the whole UI uses (LIVE-MODEL-SPEC §7). */
 function cellState(cell: CellInfo): string {
@@ -158,6 +132,7 @@ export function TrackGrid({
   const [headMenu, setHeadMenu] = useState<{ track: string; x: number; y: number } | null>(null);
   const [addMenu, setAddMenu] = useState<{ x: number; y: number } | null>(null);
   const [settings, setSettings] = useState<{ track: string; anchor: DOMRect } | null>(null);
+  const [dialog, setDialog] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ track: string; index: number } | null>(null);
   const [renamingTrack, setRenamingTrack] = useState<string | null>(null);
   const [color, setColor] = useState<ColorState | null>(null);
@@ -317,11 +292,11 @@ export function TrackGrid({
   const patchTrack = (id: string, change: Partial<TrackInfo>) =>
     setG((cur) => ({ ...cur, tracks: cur.tracks.map((t) => (t.id === id ? { ...t, ...change } : t)) }));
 
-  // --- Reordering: drag a header among the tracks of its zone ------------------------
+  // --- Reordering: drag a header anywhere among the tracks ----------------------------
   // Pointer-driven (not HTML drag-and-drop, which the desktop webviews handle unevenly).
   // A press starts a candidate; past a few pixels it becomes a drag, the drop target is
-  // the header under the pointer (same zone only), and release moves the track. Later =
-  // on top inside the zone.
+  // the header under the pointer, and release moves the track. The order is global: it
+  // is the compositing order in every zone two tracks share (later = on top).
   const headEls = useRef(new Map<string, HTMLDivElement>());
   const [drag, setDrag] = useState<{
     track: string;
@@ -330,7 +305,7 @@ export function TrackGrid({
   } | null>(null);
   const startDrag = (t: TrackInfo, e: React.PointerEvent) => {
     const x0 = e.clientX;
-    const sameZone = g.tracks.filter((o) => o.zones.join() === t.zones.join());
+    const sameZone = g.tracks;
     let state: { moved: boolean; target: { before: string | null; after: string | null } | null } = {
       moved: false,
       target: null,
@@ -436,6 +411,8 @@ export function TrackGrid({
   const menuCell = menu ? cellOf(menu.track, menu.index) : undefined;
   const headTrack = headMenu ? track(headMenu.track) : undefined;
   const settingsTrack = settings ? track(settings.track) : undefined;
+  const dialogSlot = dialog ? g.tracks.findIndex((t) => t.id === dialog) : -1;
+  const dialogTrack = dialogSlot >= 0 ? g.tracks[dialogSlot] : undefined;
 
   return (
     <div className="pr-tgrid-wrap" ref={wrapRef}>
@@ -457,18 +434,25 @@ export function TrackGrid({
             }${drag?.moved && drag.target?.before === t.id ? " is-drop-before" : ""}${
               drag?.moved && drag.target && drag.target.before === null && drag.target.after === t.id ? " is-drop-after" : ""
             }`}
-            style={{ borderBottomColor: `rgb(${t.color.join(",")})` }}
             onPointerDown={(e) => {
               if (e.button !== 0 || renamingTrack === t.id) return;
               select(t.id, selectedCells[t.id] ?? null);
               startDrag(t, e);
             }}
+            onDoubleClick={() => {
+              if (renamingTrack !== t.id) setDialog(t.id);
+            }}
             onContextMenu={(e) => {
               e.preventDefault();
               setHeadMenu({ track: t.id, x: e.clientX, y: e.clientY });
             }}
-            title={`${t.name} → ${t.destination}`}
+            title={`${t.name} → ${t.destination} (doble clic: ajustes del track)`}
           >
+            <span className="pr-thead-strip" aria-hidden>
+              {(t.colors.length > 0 ? t.colors : [t.color]).map((c, i) => (
+                <span key={i} style={{ background: `rgb(${c.join(",")})` }} />
+              ))}
+            </span>
             {renamingTrack === t.id ? (
               <RenameInput
                 initial={t.name}
@@ -491,7 +475,7 @@ export function TrackGrid({
             <button
               type="button"
               className="pr-thead-more"
-              title="Transición y lanzamiento"
+              title="Mezcla y transición"
               aria-label={`Ajustes de ${t.name}`}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
@@ -767,6 +751,7 @@ export function TrackGrid({
           y={headMenu.y}
           onClose={() => setHeadMenu(null)}
           items={[
+            { label: "Ajustes…", onSelect: () => setDialog(headTrack.id) },
             { label: "Renombrar", onSelect: () => setRenamingTrack(headTrack.id) },
             "sep",
             { label: "Eliminar track", onSelect: () => void doRemoveTrack(headTrack) },
@@ -798,6 +783,10 @@ export function TrackGrid({
           track={settingsTrack}
           anchor={settings.anchor}
           onClose={() => setSettings(null)}
+          onOpenDialog={() => {
+            setSettings(null);
+            setDialog(settingsTrack.id);
+          }}
           onChange={(transition, launch) => {
             patchTrack(settingsTrack.id, { transition, launch });
             setTrackBehaviour(settingsTrack.id, transition, launch).catch(() => {});
@@ -806,6 +795,16 @@ export function TrackGrid({
             patchTrack(settingsTrack.id, { blend_mode: mode, key_threshold: threshold, key_softness: softness });
             setTrackBlend(settingsTrack.id, mode, threshold, softness).catch(() => {});
           }}
+        />
+      )}
+      {dialogTrack && (
+        <TrackDialog
+          key={dialogTrack.id}
+          track={dialogTrack}
+          slot={dialogSlot}
+          zones={zones}
+          onPatch={(change) => patchTrack(dialogTrack.id, change)}
+          onClose={() => setDialog(null)}
         />
       )}
       {color && <CellColorPopover cell={color.cell} value={color.value} onChange={onColorChange} onClose={onColorClose} />}
@@ -839,24 +838,25 @@ function Row({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-// --- The track settings popover (phase 2: transition + launch mode) -------------------
+// --- The ⋯ popover: quick access to blend and transition ------------------------------
 
 function TrackSettings({
   track,
   anchor,
   onChange,
   onBlend,
+  onOpenDialog,
   onClose,
 }: {
   track: TrackInfo;
   anchor: DOMRect;
   onChange: (t: TrackTransition, launch: LaunchMode) => void;
   onBlend: (mode: BlendMode, threshold: number, softness: number) => void;
+  onOpenDialog: () => void;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: anchor.left, top: anchor.bottom + 4 });
-  const t = track.transition;
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -885,91 +885,14 @@ function TrackSettings({
   }, [onClose]);
 
   return (
-    <div ref={ref} className="pr-popover pr-tsettings" style={pos} role="dialog" aria-label={`Ajustes de ${track.name}`}>
+    <div ref={ref} className="pr-popover pr-tsettings" style={pos} role="dialog" aria-label={`Mezcla y transición de ${track.name}`}>
       <div className="pr-tsettings-title">{track.name}</div>
-      <div className="pr-tsettings-row">
-        <span className="pr-tsettings-label">Mezcla</span>
-        <Dropdown
-          value={track.blend_mode}
-          options={BLENDS}
-          onChange={(v) => onBlend(v as BlendMode, track.key_threshold, track.key_softness)}
-          minWidth={140}
-          aria-label="Modo de mezcla"
-        />
-      </div>
-      {track.blend_mode === "LumaKey" && (
-        <>
-          <div className="pr-tsettings-row">
-            <span className="pr-tsettings-label">Umbral</span>
-            <NumberField
-              value={Math.round(track.key_threshold * 100)}
-              min={0}
-              max={100}
-              step={1}
-              width={60}
-              onChange={(v) => onBlend("LumaKey", v / 100, track.key_softness)}
-              aria-label="Umbral del key"
-            />
-            <span className="pr-tsettings-unit">%</span>
-          </div>
-          <div className="pr-tsettings-row">
-            <span className="pr-tsettings-label">Suavidad</span>
-            <NumberField
-              value={Math.round(track.key_softness * 100)}
-              min={0}
-              max={100}
-              step={1}
-              width={60}
-              onChange={(v) => onBlend("LumaKey", track.key_threshold, v / 100)}
-              aria-label="Suavidad del key"
-            />
-            <span className="pr-tsettings-unit">%</span>
-          </div>
-        </>
-      )}
-      <div className="pr-tsettings-row">
-        <span className="pr-tsettings-label">Transición</span>
-        <NumberField
-          value={t.time}
-          min={0}
-          max={600}
-          step={t.base === "beats" ? 1 : 0.1}
-          width={60}
-          onChange={(time) => onChange({ ...t, time }, track.launch)}
-          aria-label="Tiempo de transición"
-        />
-        <span className="pr-tsettings-unit">{t.base === "beats" ? "beats" : "s"}</span>
-      </div>
-      <div className="pr-tsettings-row">
-        <span className="pr-tsettings-label">Curva</span>
-        <Dropdown
-          value={t.easing}
-          options={EASINGS}
-          onChange={(v) => onChange({ ...t, easing: v as Easing }, track.launch)}
-          minWidth={140}
-          aria-label="Curva de la transición"
-        />
-      </div>
-      <div className="pr-tsettings-row">
-        <span className="pr-tsettings-label" />
-        <Check checked={t.base === "beats"} onChange={(on) => onChange({ ...t, base: on ? "beats" : "seconds" }, track.launch)}>
-          En beats
-        </Check>
-      </div>
-      <div className="pr-tsettings-row">
-        <span className="pr-tsettings-label">Al tocar</span>
-        <Dropdown
-          value={track.launch}
-          options={[
-            { value: "direct", label: "Lanzar directo" },
-            { value: "arm", label: "Armar (espera GO)" },
-          ]}
-          onChange={(v) => onChange(t, v as LaunchMode)}
-          minWidth={140}
-          aria-label="Modo de lanzamiento"
-        />
-      </div>
+      <BlendFields track={track} onBlend={onBlend} />
+      <TransitionFields transition={track.transition} onChange={(t) => onChange(t, track.launch)} />
       <div className="pr-tsettings-hint">0 = corte. Una celda con fade propio lo usa en lugar de este.</div>
+      <button type="button" className="pr-btn pr-tsettings-more" onClick={onOpenDialog}>
+        Ajustes del track…
+      </button>
     </div>
   );
 }

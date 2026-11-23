@@ -58,7 +58,7 @@ use prisma_core::zone::ZoneStates;
 use prisma_core::{ClockSnapshot, Easing, OverlapSnapshot, ParamHandle, TimeBase, Transition};
 use prisma_patch::{BlendMode, Patch, PatchIndex};
 use prisma_render::blend::Compositor;
-use prisma_render::effect::EffectInstance;
+use prisma_render::effect::{EffectInstance, EffectParams};
 use prisma_render::live_params::LiveParams;
 use prisma_render::overlap::zone_cell_coverage;
 use prisma_render::place::{footprint_from_coverage, Footprint, ZonePlacer};
@@ -77,9 +77,8 @@ fn show_load_source() -> SourceId {
 /// `{prefix}/param/{name}`.
 ///
 /// One prefix per **track**, not per (track, zone): a track reaching several zones
-/// (phase 4) must share one set of params across its instances, which needs
-/// `EffectInstance` to take pre-resolved handles — `register` replaces a path, so a
-/// second instance would orphan the first's (LIVE-MODEL-SPEC §9).
+/// shares one set of params across its per-zone instances ([`EffectParams`],
+/// LIVE-MODEL-SPEC §8.4), so the panel, a knob or MIDI move every zone at once.
 pub fn track_param_prefix(track: Uuid) -> String {
     format!("/track/{track}/layer/0")
 }
@@ -138,8 +137,10 @@ impl TrackContent {
 
 /// Build one track's effect instances — one per destination zone — on the caller's
 /// thread (a pipeline compile, never on the render thread): register the params
-/// under [`track_param_prefix`], write the stored values over the manifest defaults,
-/// upload the colour table. `None` if the effect is not in the catalogue.
+/// **once** under [`track_param_prefix`] and build every zone's instance on them (one
+/// write moves them all; each zone keeps its own animation phase, so its VEL still
+/// applies), write the stored values over the manifest defaults, upload the colour
+/// table. `None` if the effect is not in the catalogue.
 #[allow(clippy::too_many_arguments)] // each is a distinct piece of the build
 pub fn build_track_instances(
     gpu: &Gpu,
@@ -153,16 +154,17 @@ pub fn build_track_instances(
 ) -> Option<Vec<Option<EffectInstance>>> {
     let manifest = manifest_by_id(effect_id)?;
     let prefix = track_param_prefix(track);
+    let shared = EffectParams::register(tree, &prefix, &manifest);
     let effects: Vec<Option<EffectInstance>> = (0..zones)
         .map(|_| {
-            let inst = EffectInstance::new(gpu, tree, &prefix, &manifest);
+            let inst = EffectInstance::with_params(gpu, &shared, &manifest);
             if let Some(colors) = palette {
                 inst.set_palette(gpu, colors);
             }
             Some(inst)
         })
         .collect();
-    // After every instance registered, so the values land on the live handles.
+    // After registering, so the values land on the live handles.
     for (name, value) in params.iter() {
         tree.write_path(&format!("{prefix}/param/{name}"), value, src);
     }

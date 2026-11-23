@@ -29,6 +29,8 @@ half = { version = "2", features = ["bytemuck"] }
 bytemuck = "1"
 # Fixture ids key the Highlight resolution map (§7 / S9).
 uuid = { version = "1" }
+# The demo show places its pixels (`demo`).
+glam = "0.29"
 
 [dev-dependencies]
 # The headless boot+shutdown test drives a real virtual sink and decodes preview
