@@ -734,6 +734,7 @@ impl Instance {
     fn render(
         &mut self,
         gpu: &Gpu,
+        enc: &mut wgpu::CommandEncoder,
         compositor: &Compositor,
         clock: &ClockSnapshot,
         (w, h): (u32, u32),
@@ -751,20 +752,27 @@ impl Instance {
         let t = &self.targets;
         let Some(outer) = self.fade else {
             let effect = self.effect.as_mut()?;
-            effect.render(gpu, &phase_clock(clock, self.phase_ns), &view(&t.tex), w, h);
+            effect.render_in(
+                gpu,
+                enc,
+                &phase_clock(clock, self.phase_ns),
+                &view(&t.tex),
+                w,
+                h,
+            );
             return Some(&t.tex);
         };
         let below: &wgpu::Texture = match &mut self.below {
             Below::Silence => {
-                clear_transparent(gpu, &t.tex_out);
+                clear_transparent_in(enc, &t.tex_out);
                 &t.tex_out
             }
-            Below::One(src) => render_src(gpu, clock, Some(src), &t.tex_out, t, (w, h)),
+            Below::One(src) => render_src(gpu, enc, clock, Some(src), &t.tex_out, t, (w, h)),
             Below::Mix { out, inn, fade } => {
-                let a = render_src(gpu, clock, out.as_mut(), &t.tex_out, t, (w, h));
-                let b = render_src(gpu, clock, inn.as_mut(), &t.tex_in, t, (w, h));
+                let a = render_src(gpu, enc, clock, out.as_mut(), &t.tex_out, t, (w, h));
+                let b = render_src(gpu, enc, clock, inn.as_mut(), &t.tex_in, t, (w, h));
                 let p = fade.eased(clock);
-                compositor.crossfade(gpu, a, b, &view(&t.tex_below), p);
+                compositor.crossfade_in(gpu, enc, a, b, &view(&t.tex_below), p);
                 self.below_rendered = true;
                 &t.tex_below
             }
@@ -772,13 +780,20 @@ impl Instance {
         match self.effect.as_mut() {
             Some(effect) => {
                 let c = phase_clock(clock, self.phase_ns);
-                effect.render(gpu, &c, &view(&t.tex), w, h);
+                effect.render_in(gpu, enc, &c, &view(&t.tex), w, h);
             }
-            None => clear_transparent(gpu, &t.tex),
+            None => clear_transparent_in(enc, &t.tex),
         }
         // A crossfade, not alpha-over: transparent areas of the incoming clip still
         // fade the outgoing one out.
-        compositor.crossfade(gpu, below, &t.tex, &view(&t.tex_mix), outer.eased(clock));
+        compositor.crossfade_in(
+            gpu,
+            enc,
+            below,
+            &t.tex,
+            &view(&t.tex_mix),
+            outer.eased(clock),
+        );
         Some(&t.tex_mix)
     }
 }
@@ -787,6 +802,7 @@ impl Instance {
 /// frozen snapshot as-is, nothing as black in `target`.
 fn render_src<'t>(
     gpu: &Gpu,
+    enc: &mut wgpu::CommandEncoder,
     clock: &ClockSnapshot,
     src: Option<&mut Src>,
     target: &'t wgpu::Texture,
@@ -795,12 +811,19 @@ fn render_src<'t>(
 ) -> &'t wgpu::Texture {
     match src {
         Some(Src::Effect { effect, phase_ns }) => {
-            effect.render(gpu, &phase_clock(clock, *phase_ns), &view(target), w, h);
+            effect.render_in(
+                gpu,
+                enc,
+                &phase_clock(clock, *phase_ns),
+                &view(target),
+                w,
+                h,
+            );
             target
         }
         Some(Src::Frozen) => &targets.tex_frozen,
         None => {
-            clear_transparent(gpu, target);
+            clear_transparent_in(enc, target);
             target
         }
     }
@@ -1243,7 +1266,13 @@ impl ZoneCompositor {
     /// pixel reading its texel of the track's texture through the zone's table; a track
     /// confined to groups blends only on their pixels. One plain track over the base is
     /// that track exactly, so there is no separate 1:1 path.
-    fn render_zone(&mut self, gpu: &Gpu, clock: &ClockSnapshot, s: usize) {
+    fn render_zone(
+        &mut self,
+        gpu: &Gpu,
+        enc: &mut wgpu::CommandEncoder,
+        clock: &ClockSnapshot,
+        s: usize,
+    ) {
         let compositor = &self.compositor;
         let frames = &self.track_frame;
         let blank = &self.blank;
@@ -1269,12 +1298,13 @@ impl ZoneCompositor {
             let f = frames[inst.track];
             let (mode, opacity, key) = (inst.blend_mode, f.opacity * f.presence, inst.key);
             let mask = inst.mask.clone();
-            let Some(tex) = inst.render(gpu, compositor, clock, *mapping) else {
+            let Some(tex) = inst.render(gpu, enc, compositor, clock, *mapping) else {
                 continue;
             };
             let out = if k == last { &*zone_px } else { next };
-            compositor.blend_from(
+            compositor.blend_from_in(
                 gpu,
+                enc,
                 acc,
                 tex,
                 &view(out),
@@ -1327,9 +1357,48 @@ fn view(tex: &wgpu::Texture) -> wgpu::TextureView {
 }
 
 impl FrameContent for ZoneCompositor {
+    /// One frame on its own submission (tests); the render loop uses
+    /// [`encode_into`](FrameContent::encode_into).
     fn render_into(
         &mut self,
         gpu: &Gpu,
+        clock: &ClockSnapshot,
+        zones: &ZoneStates,
+        overlap: &OverlapSnapshot,
+        target: &wgpu::Texture,
+    ) {
+        let mut enc = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("zone-frame"),
+            });
+        self.encode_into(gpu, &mut enc, clock, zones, overlap, target);
+        gpu.queue.submit([enc.finish()]);
+    }
+
+    /// The whole frame recorded into `enc`: every effect, crossfade, fold and zone
+    /// blend, no submission of its own (one per frame, by the render loop). Each
+    /// blend pass takes its own slot in the compositor's uniform ring.
+    fn encode_into(
+        &mut self,
+        gpu: &Gpu,
+        enc: &mut wgpu::CommandEncoder,
+        clock: &ClockSnapshot,
+        zones: &ZoneStates,
+        overlap: &OverlapSnapshot,
+        target: &wgpu::Texture,
+    ) {
+        self.compositor.begin_frame();
+        self.encode_frame(gpu, enc, clock, zones, overlap, target);
+        self.compositor.end_frame();
+    }
+}
+
+impl ZoneCompositor {
+    fn encode_frame(
+        &mut self,
+        gpu: &Gpu,
+        enc: &mut wgpu::CommandEncoder,
         clock: &ClockSnapshot,
         zones: &ZoneStates,
         overlap: &OverlapSnapshot,
@@ -1375,7 +1444,7 @@ impl FrameContent for ZoneCompositor {
         //    at the zone's OWN mapping_size, read per pixel through the zone's table).
         for i in 0..self.contrib.len() {
             let s = self.contrib[i] as usize;
-            self.render_zone(gpu, clock, s);
+            self.render_zone(gpu, enc, clock, s);
         }
 
         // 3. This frame's per-pixel overlap mask, into the persistent buffer (the
@@ -1391,8 +1460,8 @@ impl FrameContent for ZoneCompositor {
         //    dimmer/colour is applied here only on cells the snapshot marks overlapped
         //    (via cell_mask); elsewhere it is deferred to the output stage (§5.2.1).
         let Some((&last, rest)) = self.contrib.split_last() else {
-            // Nothing contributes: the world framebuffer is black this frame.
-            clear_transparent(gpu, target);
+            // Nothing contributes: the framebuffer is black this frame.
+            clear_transparent_in(enc, target);
             return;
         };
 
@@ -1402,8 +1471,9 @@ impl FrameContent for ZoneCompositor {
         for &slot in rest {
             let s = slot as usize;
             let zs = &self.slots[s];
-            self.compositor.blend_zone(
+            self.compositor.blend_zone_in(
                 gpu,
+                enc,
                 acc,
                 &zs.zone_px,
                 &view(next),
@@ -1420,8 +1490,9 @@ impl FrameContent for ZoneCompositor {
         // The last zone blends straight into the render loop's framebuffer.
         let s = last as usize;
         let zs = &self.slots[s];
-        self.compositor.blend_zone(
+        self.compositor.blend_zone_in(
             gpu,
+            enc,
             acc,
             &zs.zone_px,
             &view(target),
@@ -1439,6 +1510,26 @@ impl FrameContent for ZoneCompositor {
 /// fold's base, a missing side of a crossfade, and the no-content frame. Read as rgb
 /// it is black, so the master buffer sees no difference. A bare render pass with a
 /// clear load op; no allocation.
+fn clear_transparent_in(encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture) {
+    let v = view(texture);
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("zone-clear-pass"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &v,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+}
+
 fn clear_transparent(gpu: &Gpu, texture: &wgpu::Texture) {
     let v = view(texture);
     let mut encoder = gpu

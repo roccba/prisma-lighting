@@ -281,6 +281,25 @@ impl Sampler {
 
     /// Record the compute dispatch plus the copy into `destination`, and submit.
     fn dispatch(&self, gpu: &crate::Gpu, framebuffer: &wgpu::Texture, destination: &wgpu::Buffer) {
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("sample-enc"),
+            });
+        self.gather_in(gpu, &mut encoder, framebuffer, destination);
+        gpu.queue.submit([encoder.finish()]);
+    }
+
+    /// [`gather_into`](Self::gather_into), recorded into the caller's `encoder`: the
+    /// render loop puts the whole frame — content, gather, readback copy — in one
+    /// submission.
+    pub fn gather_in(
+        &self,
+        gpu: &crate::Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        framebuffer: &wgpu::Texture,
+        destination: &wgpu::Buffer,
+    ) {
         let view = framebuffer.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("sample-bg"),
@@ -301,11 +320,6 @@ impl Sampler {
             ],
         });
 
-        let mut encoder = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("sample-enc"),
-            });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("sample-pass"),
@@ -317,7 +331,6 @@ impl Sampler {
             pass.dispatch_workgroups(self.pixel_count.div_ceil(64).max(1), 1, 1);
         }
         encoder.copy_buffer_to_buffer(&self.master_buf, 0, destination, 0, destination.size());
-        gpu.queue.submit([encoder.finish()]);
     }
 
     /// Read the gathered master buffer back as canonical linear-light `f16`.

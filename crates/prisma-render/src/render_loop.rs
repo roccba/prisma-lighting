@@ -56,6 +56,22 @@ pub trait FrameContent {
         overlap: &OverlapSnapshot,
         target: &wgpu::Texture,
     );
+
+    /// [`render_into`](Self::render_into), recorded into the frame's `encoder`, so the
+    /// whole frame (content, gather, readback copy) is **one submission**. The default
+    /// renders with its own submissions (they run first, in queue order); a content
+    /// that cares about per-pass overhead records into `encoder` instead.
+    fn encode_into(
+        &mut self,
+        gpu: &crate::Gpu,
+        _encoder: &mut wgpu::CommandEncoder,
+        clock: &ClockSnapshot,
+        zones: &ZoneStates,
+        overlap: &OverlapSnapshot,
+        target: &wgpu::Texture,
+    ) {
+        self.render_into(gpu, clock, zones, overlap, target);
+    }
 }
 
 /// Running min/mean/max of a latency, without unbounded storage on the hot path.
@@ -231,9 +247,22 @@ impl RenderLoop {
         let outcome = match self.ring.try_claim() {
             None => TickOutcome::Stalled,
             Some(slot) => {
-                content.render_into(gpu, clock, zones, overlap, &self.framebuffer);
-                self.sampler
-                    .gather_into(gpu, &self.framebuffer, self.ring.buffer(slot));
+                // One encoder, one submission for the whole frame: per-pass submits
+                // cost CPU on every pass (measured: the compositor's ~100 passes per
+                // frame kept a heavy show under 44 Hz).
+                let mut encoder =
+                    gpu.device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("frame"),
+                        });
+                content.encode_into(gpu, &mut encoder, clock, zones, overlap, &self.framebuffer);
+                self.sampler.gather_in(
+                    gpu,
+                    &mut encoder,
+                    &self.framebuffer,
+                    self.ring.buffer(slot),
+                );
+                gpu.queue.submit([encoder.finish()]);
                 self.ring
                     .begin_map(slot, tick_at, clock.frame, Some(Arc::clone(overlap)));
                 self.stats.frames_rendered += 1;

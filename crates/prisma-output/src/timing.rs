@@ -17,6 +17,9 @@ use std::time::{Duration, Instant};
 use crate::priority::SchedulingMode;
 use crate::transport::OutputStatus;
 
+/// The latency budget, input to visible output (CLAUDE.md §1.3/§1.5).
+pub const LATENCY_BUDGET: Duration = Duration::from_millis(50);
+
 /// Records timing samples during a run. Owned by the output thread.
 pub struct TimingProbe {
     target_period: Duration,
@@ -142,6 +145,15 @@ impl TimingProbe {
                 / self.latencies_ns.len() as f64
         };
         let latency_max = self.latencies_ns.iter().copied().max().unwrap_or(0);
+        let mut lat_sorted = self.latencies_ns.clone();
+        lat_sorted.sort_unstable();
+        let latency_p99 = if lat_sorted.is_empty() {
+            0
+        } else {
+            lat_sorted[((0.99 * (lat_sorted.len() - 1) as f64).round()) as usize]
+        };
+        let budget_ns = LATENCY_BUDGET.as_nanos() as u64;
+        let latency_over_budget = self.latencies_ns.iter().filter(|&&x| x > budget_ns).count();
 
         ProbeReport {
             mode,
@@ -163,6 +175,8 @@ impl TimingProbe {
             generation_mismatches: self.generation_mismatches,
             latency_mean_ns: latency_mean as u64,
             latency_max_ns: latency_max,
+            latency_p99_ns: latency_p99,
+            latency_over_budget,
             histogram,
             outputs,
         }
@@ -249,6 +263,11 @@ pub struct ProbeReport {
     pub generation_mismatches: u64,
     pub latency_mean_ns: u64,
     pub latency_max_ns: u64,
+    /// 99th percentile of produced → wire.
+    pub latency_p99_ns: u64,
+    /// Ticks whose produced → wire exceeded [`LATENCY_BUDGET`] (each is a wire frame
+    /// older than the budget: the render leg did not deliver a fresher one in time).
+    pub latency_over_budget: usize,
     pub histogram: Vec<HistogramBucket>,
     /// Per-output link state and counters at end of run.
     pub outputs: Vec<OutputStatus>,

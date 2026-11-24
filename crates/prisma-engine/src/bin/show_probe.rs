@@ -9,9 +9,13 @@
 //! report gives the render leg and the output side.
 //!
 //! Run on a real GPU with `--release`:
-//!   cargo run -p prisma-engine --bin show_probe --release [seconds_per_point]
+//!   cargo run -p prisma-engine --bin show_probe --release [seconds_per_point] [--check]
 //!
 //! Points: 18,000 px (300 tubes × 60, 106 universes) and 43,500 px (725 tubes, 256).
+//!
+//! `--check` exits non-zero unless, at both points, the compositor sustains the output
+//! rate (frames published ≥ 98 % of 44 Hz × seconds) and produced → wire stays inside
+//! the 50 ms budget on every tick. Thresholds and when to run it: LIVE-MODEL-SPEC §8.6.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
@@ -179,29 +183,30 @@ fn ms(ns: u64) -> f64 {
     ns as f64 / 1e6
 }
 
+/// The output rate the probe's engines run at (EngineConfig default).
+const RATE_HZ: f64 = 44.0;
+/// `--check`: the share of the output rate the compositor must publish.
+const MIN_RATE_SHARE: f64 = 0.98;
+
 fn main() {
-    let seconds: u64 = std::env::args()
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(10);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let check = args.iter().any(|a| a == "--check");
+    let seconds: u64 = args.iter().find_map(|a| a.parse().ok()).unwrap_or(10);
+    let mut failures: Vec<String> = Vec::new();
     let dev_sink = sink::spawn(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).expect("sink");
     println!("show-probe: full engine, real GPU, {seconds} s per point");
     println!(
-        "{:>7} {:>5} | {:>9} {:>9} {:>9} {:>9} | {:>9} {:>9} | {:>8} {:>5} {:>5} | {:>6}",
-        "pixels",
-        "univ",
-        "render",
-        "readback",
-        "t→pub",
-        "t→pub mx",
-        "prod→wire",
-        "p→w max",
-        "jitter",
-        "late",
-        "drops",
-        "frames"
+        "{:>7} {:>5} | {:>9} {:>9} {:>9} {:>9} | {:>9} {:>9} {:>9} {:>5} | {:>8} {:>4} {:>5} | {:>6} {:>5}",
+        "pixels", "univ", "render", "readback", "t→pub", "t→pub mx",
+        "prod→wire", "p→w p99", "p→w max", ">50ms", "jitter", "late", "drops", "frames", "Hz"
     );
-    for tubes in POINTS {
+    // `SHOW_PROBE_TUBES=10,300` overrides the points (e.g. a near-empty rig, to tell the
+    // machine's own GPU hiccups from the compositor's).
+    let points: Vec<u32> = std::env::var("SHOW_PROBE_TUBES")
+        .ok()
+        .map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect())
+        .unwrap_or_else(|| POINTS.to_vec());
+    for tubes in points {
         let show = show(tubes);
         let pixels = tubes * TUBE_PX;
         let universes = pixels.div_ceil(PX_PER_UNIVERSE);
@@ -211,8 +216,9 @@ fn main() {
         let report = engine.shutdown();
         let r = &report.render;
         let o = &report.output;
+        let hz = r.frames_published as f64 / seconds as f64;
         println!(
-            "{:>7} {:>5} | {:>7.3}ms {:>7.3}ms {:>7.3}ms {:>7.3}ms | {:>7.3}ms {:>7.3}ms | {:>6.3}ms {:>5} {:>5} | {:>6}",
+            "{:>7} {:>5} | {:>7.3}ms {:>7.3}ms {:>7.3}ms {:>7.3}ms | {:>7.3}ms {:>7.3}ms {:>7.3}ms {:>5} | {:>6.3}ms {:>4} {:>5} | {:>6} {:>5.1}",
             pixels,
             universes,
             ms(r.render.mean_ns()),
@@ -220,12 +226,38 @@ fn main() {
             ms(r.tick_to_publish.mean_ns()),
             ms(r.tick_to_publish.max_ns),
             ms(o.latency_mean_ns),
+            ms(o.latency_p99_ns),
             ms(o.latency_max_ns),
+            o.latency_over_budget,
             ms(o.jitter_stddev_ns),
             o.late_frames,
             o.drops,
             r.frames_published,
+            hz,
         );
+        if hz < RATE_HZ * MIN_RATE_SHARE {
+            failures.push(format!(
+                "{pixels} px: {hz:.1} Hz < {:.1}",
+                RATE_HZ * MIN_RATE_SHARE
+            ));
+        }
+        if o.latency_over_budget > 0 {
+            failures.push(format!(
+                "{pixels} px: {} ticks over 50 ms (max {:.1} ms)",
+                o.latency_over_budget,
+                ms(o.latency_max_ns)
+            ));
+        }
     }
     let _ = dev_sink.stop_and_collect();
+    if check {
+        if failures.is_empty() {
+            println!("show-probe --check: PASS");
+        } else {
+            for f in &failures {
+                println!("show-probe --check: FAIL {f}");
+            }
+            std::process::exit(1);
+        }
+    }
 }

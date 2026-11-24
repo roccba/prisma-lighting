@@ -517,6 +517,29 @@ impl EffectInstance {
         width: u32,
         height: u32,
     ) {
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("effect-enc"),
+            });
+        self.render_in(gpu, &mut encoder, clock, target, width, height);
+        gpu.queue.submit([encoder.finish()]);
+    }
+
+    /// [`render`](Self::render), recorded into the caller's `encoder` (one submission
+    /// per frame). The uniform write is staged by the queue and lands before the
+    /// submission runs, so an instance must be rendered **at most once per
+    /// submission** — true in the compositor, where every (track, zone) source is its
+    /// own instance.
+    pub fn render_in(
+        &mut self,
+        gpu: &crate::Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        clock: &ClockSnapshot,
+        target: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+    ) {
         // Globals, then each param mapped through its curve to a real value, in
         // manifest order. Tail slots stay zero (padding).
         debug_assert_eq!(self.scratch.len(), self.uniform_f32_len);
@@ -537,12 +560,6 @@ impl EffectInstance {
         }
         gpu.queue
             .write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&self.scratch));
-
-        let mut encoder = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("effect-enc"),
-            });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("effect-pass"),
@@ -564,7 +581,6 @@ impl EffectInstance {
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
-        gpu.queue.submit([encoder.finish()]);
     }
 }
 

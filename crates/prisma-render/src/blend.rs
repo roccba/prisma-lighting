@@ -114,7 +114,20 @@ pub fn create_cell_mask(gpu: &crate::Gpu, mask: &[u32]) -> wgpu::Buffer {
 pub struct Compositor {
     /// Pipeline + bind-group layout, shared via the [`crate::cache`] across recompiles.
     cached: std::sync::Arc<crate::cache::CachedRender>,
-    uniform: wgpu::Buffer,
+    /// The blend parameters of every pass, one slot each, bound with a dynamic
+    /// offset. Passes recorded into one encoder (one submission per frame) each need
+    /// their own slot: a single uniform rewritten per pass would leave every pass of
+    /// the submission reading the last value. Grows (doubling) when a frame needs
+    /// more slots than it has — only on the first frames of a show.
+    ring: std::cell::RefCell<wgpu::Buffer>,
+    /// Bytes between slots: `BlendParams` rounded up to the device's uniform offset
+    /// alignment.
+    stride: u64,
+    capacity: std::cell::Cell<u32>,
+    next: std::cell::Cell<u32>,
+    /// Between [`begin_frame`](Self::begin_frame) and [`end_frame`](Self::end_frame):
+    /// slots are not reused (the ring grows instead).
+    in_frame: std::cell::Cell<bool>,
     /// Bound at binding 3 on the layer path, which never reads the mask. The
     /// binding must still be satisfied, so one zeroed cell stands in.
     dummy_mask: wgpu::Buffer,
@@ -125,108 +138,142 @@ impl Compositor {
         let device = &gpu.device;
         // The blend pipeline + layout depend only on the shader and target format, so
         // they are cached and reused across recompiles (M8 live-apply optimisation).
-        let cached = gpu.cache.render("blend", || {
-            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("blend"),
-                source: wgpu::ShaderSource::Wgsl(
-                    include_str!("../../../shaders/blend.wgsl").into(),
-                ),
-            });
-            let bind_group_layout =
-                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("blend-bgl"),
-                    entries: &[
-                        tex_entry(0),
-                        tex_entry(1),
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 2,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Uniform,
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 3,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 4,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 5,
-                            visibility: wgpu::ShaderStages::FRAGMENT,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                    ],
+        let cached =
+            gpu.cache.render("blend", || {
+                let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("blend"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        include_str!("../../../shaders/blend.wgsl").into(),
+                    ),
                 });
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("blend-pl"),
-                bind_group_layouts: &[Some(&bind_group_layout)],
-                immediate_size: 0,
+                let bind_group_layout =
+                    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                        label: Some("blend-bgl"),
+                        entries: &[
+                            tex_entry(0),
+                            tex_entry(1),
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 2,
+                                visibility: wgpu::ShaderStages::FRAGMENT,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Uniform,
+                                    has_dynamic_offset: true,
+                                    min_binding_size: std::num::NonZeroU64::new(
+                                        std::mem::size_of::<BlendParams>() as u64,
+                                    ),
+                                },
+                                count: None,
+                            },
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 3,
+                                visibility: wgpu::ShaderStages::FRAGMENT,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
+                            },
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 4,
+                                visibility: wgpu::ShaderStages::FRAGMENT,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
+                            },
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 5,
+                                visibility: wgpu::ShaderStages::FRAGMENT,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
+                            },
+                        ],
+                    });
+                let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("blend-pl"),
+                    bind_group_layouts: &[Some(&bind_group_layout)],
+                    immediate_size: 0,
+                });
+                let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("blend"),
+                    layout: Some(&layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("vs"),
+                        buffers: &[],
+                        compilation_options: Default::default(),
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some("fs"),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: wgpu::TextureFormat::Rgba16Float,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: Default::default(),
+                    }),
+                    primitive: wgpu::PrimitiveState::default(),
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                    multiview_mask: None,
+                    cache: None,
+                });
+                crate::cache::CachedRender {
+                    pipeline,
+                    bind_group_layout,
+                }
             });
-            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("blend"),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs"),
-                    buffers: &[],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba16Float,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            });
-            crate::cache::CachedRender {
-                pipeline,
-                bind_group_layout,
-            }
-        });
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("blend-uniform"),
-            size: std::mem::size_of::<BlendParams>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let align = u64::from(device.limits().min_uniform_buffer_offset_alignment).max(1);
+        let stride = (std::mem::size_of::<BlendParams>() as u64).div_ceil(align) * align;
+        const SLOTS: u32 = 64;
         let dummy_mask = create_cell_mask(gpu, &[]);
         Compositor {
             cached,
-            uniform,
+            ring: std::cell::RefCell::new(ring_buffer(gpu, stride, SLOTS)),
+            stride,
+            capacity: std::cell::Cell::new(SLOTS),
+            next: std::cell::Cell::new(0),
+            in_frame: std::cell::Cell::new(false),
             dummy_mask,
         }
+    }
+
+    /// Start recording a frame into one encoder: every pass from here to
+    /// [`end_frame`](Self::end_frame) gets its own uniform slot.
+    pub fn begin_frame(&self) {
+        self.in_frame.set(true);
+        self.next.set(0);
+    }
+
+    /// The frame's passes are recorded (the encoder can be submitted).
+    pub fn end_frame(&self) {
+        self.in_frame.set(false);
+    }
+
+    /// The next free uniform slot's byte offset. Inside a frame a full ring grows
+    /// (a new, larger buffer; passes already recorded keep the old one alive); outside
+    /// one, every pass is submitted on its own, so the ring wraps.
+    fn take_slot(&self, gpu: &crate::Gpu) -> u64 {
+        let mut slot = self.next.get();
+        if slot >= self.capacity.get() {
+            if self.in_frame.get() {
+                let grown = self.capacity.get() * 2;
+                *self.ring.borrow_mut() = ring_buffer(gpu, self.stride, grown);
+                self.capacity.set(grown);
+            } else {
+                slot = 0;
+            }
+        }
+        self.next.set(slot + 1);
+        u64::from(slot) * self.stride
     }
 
     /// Blend `src` onto `dst` (both same-size `Rgba16Float`) with `mode`/`opacity`
@@ -303,6 +350,7 @@ impl Compositor {
             &self.dummy_mask,
             coverage.unwrap_or(&self.dummy_mask),
             Some(src_index),
+            None,
         );
     }
 
@@ -361,6 +409,98 @@ impl Compositor {
         );
     }
 
+    /// [`crossfade`](Self::crossfade), recorded into the frame's `encoder`.
+    pub fn crossfade_in(
+        &self,
+        gpu: &crate::Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        dst: &wgpu::Texture,
+        src: &wgpu::Texture,
+        out: &wgpu::TextureView,
+        t: f32,
+    ) {
+        self.blend_inner_with(
+            gpu,
+            dst,
+            src,
+            out,
+            CROSSFADE_CODE,
+            t,
+            DEFAULT_KEY,
+            0,
+            [1.0; 4],
+            &self.dummy_mask,
+            &self.dummy_mask,
+            None,
+            Some(encoder),
+        );
+    }
+
+    /// [`blend_from`](Self::blend_from), recorded into the frame's `encoder`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn blend_from_in(
+        &self,
+        gpu: &crate::Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        dst: &wgpu::Texture,
+        src: &wgpu::Texture,
+        out: &wgpu::TextureView,
+        mode: BlendMode,
+        opacity: f32,
+        key: [f32; 2],
+        src_index: &wgpu::Buffer,
+        coverage: Option<&wgpu::Buffer>,
+    ) {
+        self.blend_inner_with(
+            gpu,
+            dst,
+            src,
+            out,
+            blend_code(mode),
+            opacity,
+            key,
+            if coverage.is_some() { 2 } else { 0 },
+            [1.0; 4],
+            &self.dummy_mask,
+            coverage.unwrap_or(&self.dummy_mask),
+            Some(src_index),
+            Some(encoder),
+        );
+    }
+
+    /// [`blend_zone`](Self::blend_zone), recorded into the frame's `encoder`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn blend_zone_in(
+        &self,
+        gpu: &crate::Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        dst: &wgpu::Texture,
+        src: &wgpu::Texture,
+        out: &wgpu::TextureView,
+        mode: BlendMode,
+        opacity: f32,
+        zone_scale: [f32; 3],
+        zone_opacity: f32,
+        cell_mask: &wgpu::Buffer,
+        coverage: &wgpu::Buffer,
+    ) {
+        self.blend_inner_with(
+            gpu,
+            dst,
+            src,
+            out,
+            blend_code(mode),
+            opacity,
+            DEFAULT_KEY,
+            1,
+            [zone_scale[0], zone_scale[1], zone_scale[2], zone_opacity],
+            cell_mask,
+            coverage,
+            None,
+            Some(encoder),
+        );
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn blend_inner(
         &self,
@@ -388,6 +528,7 @@ impl Compositor {
             cell_mask,
             coverage,
             None,
+            None,
         );
     }
 
@@ -406,10 +547,13 @@ impl Compositor {
         cell_mask: &wgpu::Buffer,
         coverage: &wgpu::Buffer,
         src_index: Option<&wgpu::Buffer>,
+        encoder: Option<&mut wgpu::CommandEncoder>,
     ) {
+        let offset = self.take_slot(gpu);
+        let ring = self.ring.borrow();
         gpu.queue.write_buffer(
-            &self.uniform,
-            0,
+            &ring,
+            offset,
             bytemuck::bytes_of(&BlendParams {
                 mode,
                 opacity,
@@ -435,7 +579,11 @@ impl Compositor {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: self.uniform.as_entire_binding(),
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &ring,
+                        offset: 0,
+                        size: std::num::NonZeroU64::new(std::mem::size_of::<BlendParams>() as u64),
+                    }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
@@ -452,11 +600,16 @@ impl Compositor {
             ],
         });
 
-        let mut encoder = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("blend-enc"),
-            });
+        drop(ring);
+        let mut own = None;
+        let encoder = match encoder {
+            Some(e) => e,
+            None => own.insert(gpu.device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor {
+                    label: Some("blend-enc"),
+                },
+            )),
+        };
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("blend-pass"),
@@ -475,10 +628,12 @@ impl Compositor {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.cached.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_bind_group(0, &bind_group, &[offset as u32]);
             pass.draw(0..3, 0..1);
         }
-        gpu.queue.submit([encoder.finish()]);
+        if let Some(e) = own {
+            gpu.queue.submit([e.finish()]);
+        }
     }
 
     /// Fold an ordered layer stack (bottom-to-top) over a black base and return
@@ -650,4 +805,14 @@ fn clear_to_black(gpu: &crate::Gpu, texture: &wgpu::Texture) {
         multiview_mask: None,
     });
     gpu.queue.submit([encoder.finish()]);
+}
+
+/// A uniform ring of `slots` slots, `stride` bytes apart.
+fn ring_buffer(gpu: &crate::Gpu, stride: u64, slots: u32) -> wgpu::Buffer {
+    gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("blend-uniform-ring"),
+        size: stride * u64::from(slots),
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
 }
