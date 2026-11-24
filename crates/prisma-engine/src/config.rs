@@ -42,6 +42,10 @@ pub struct EngineConfig {
     /// Pin the output thread to this core. The output loop also RT-elevates itself
     /// (M1); this is the affinity half. `None` leaves it unpinned.
     pub output_pin_core: Option<usize>,
+    /// The first stretch of the run is rendered and sent but not measured by the
+    /// render and output stats (`show-probe`'s warm-up: GPU clocks rising, first-use
+    /// costs). Zero in the product.
+    pub measure_after: std::time::Duration,
 }
 
 impl EngineConfig {
@@ -56,6 +60,7 @@ impl EngineConfig {
             preview_sink: None,
             render_pin_core: None,
             output_pin_core: None,
+            measure_after: std::time::Duration::ZERO,
         }
     }
 }

@@ -42,8 +42,8 @@ pub use blend::{blend_code, create_cell_mask, Compositor, Layer, ZoneComposite};
 pub use cache::{CachedCompute, CachedRender, PipelineCache};
 pub use device::{AdapterPreference, Gpu, GpuError};
 pub use effect::{
-    ColorChannel, EffectInstance, EffectManifest, EffectParams, ParamRole, ParamSpec, Requires,
-    PALETTE_MAX,
+    effect_pipeline, prewarm_pipelines, ColorChannel, EffectInstance, EffectManifest, EffectParams,
+    ParamRole, ParamSpec, Requires, PALETTE_MAX,
 };
 pub use effects::{catalogue, effect_params, manifest_by_id, EffectListing, EffectParam};
 pub use live_params::{LiveParams, MasterHandles, StrobeHandles, ZoneHandles};

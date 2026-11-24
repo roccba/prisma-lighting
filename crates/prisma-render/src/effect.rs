@@ -381,67 +381,7 @@ impl EffectInstance {
         //    cached by `effect_id` and shared across every zone running this effect and
         //    across recompiles (M8 live-apply optimisation). Only the per-instance
         //    uniform buffer and bind group are built here each time.
-        let pipeline = gpu.cache.render(manifest.effect_id, || {
-            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(manifest.effect_id),
-                source: wgpu::ShaderSource::Wgsl(manifest.shader_source.into()),
-            });
-            let uniform_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
-                binding,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            };
-            // Binding 1 (the palette) only for effects that declare one. A UNIFORM, not
-            // a storage buffer, so it also works on the GLES fallback backend.
-            let mut entries = vec![uniform_entry(0)];
-            if manifest.palette.is_some() {
-                entries.push(uniform_entry(1));
-            }
-            let bind_group_layout =
-                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("effect-bgl"),
-                    entries: &entries,
-                });
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("effect-pl"),
-                bind_group_layouts: &[Some(&bind_group_layout)],
-                immediate_size: 0,
-            });
-            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(manifest.effect_id),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs"),
-                    buffers: &[],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba16Float,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState::default(),
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            });
-            crate::cache::CachedRender {
-                pipeline,
-                bind_group_layout,
-            }
-        });
+        let pipeline = effect_pipeline(gpu, manifest);
         let palette_buf = manifest.palette.map(|_| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("effect-palette"),
@@ -588,4 +528,86 @@ impl EffectInstance {
 #[inline]
 fn align_up_usize(n: usize, align: usize) -> usize {
     (n + align - 1) & !(align - 1)
+}
+
+/// The render pipeline of `manifest`'s effect, built once per GPU and cached by
+/// `effect_id` (shared by every zone running it and across recompiles).
+pub fn effect_pipeline(
+    gpu: &crate::Gpu,
+    manifest: &EffectManifest,
+) -> std::sync::Arc<crate::cache::CachedRender> {
+    let device = &gpu.device;
+    gpu.cache.render(manifest.effect_id, || {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(manifest.effect_id),
+            source: wgpu::ShaderSource::Wgsl(manifest.shader_source.into()),
+        });
+        let uniform_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        // Binding 1 (the palette) only for effects that declare one. A UNIFORM, not
+        // a storage buffer, so it also works on the GLES fallback backend.
+        let mut entries = vec![uniform_entry(0)];
+        if manifest.palette.is_some() {
+            entries.push(uniform_entry(1));
+        }
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("effect-bgl"),
+            entries: &entries,
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("effect-pl"),
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(manifest.effect_id),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        crate::cache::CachedRender {
+            pipeline,
+            bind_group_layout,
+        }
+    })
+}
+
+/// Build every pipeline a show can ask for — each effect of the catalogue and the blend
+/// stage — so nothing compiles later: not when a show starts, not when an effect is
+/// launched for the first time (LIVE-MODEL-SPEC §8.6). A no-op for what the GPU's cache
+/// already holds (a recompile reuses the GPU, so only the first load pays).
+pub fn prewarm_pipelines(gpu: &crate::Gpu) {
+    for listing in crate::effects::catalogue() {
+        if let Some(manifest) = crate::effects::manifest_by_id(listing.id) {
+            effect_pipeline(gpu, &manifest);
+        }
+    }
+    drop(crate::blend::Compositor::new(gpu));
 }

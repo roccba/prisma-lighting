@@ -156,6 +156,9 @@ pub struct RenderLoop {
     /// Refreshed at each frame boundary from the same `ZoneStates` the overlap
     /// counter synced from, and stamped onto every published preview frame.
     zone_active: ZoneActiveMask,
+    /// Frames ticked before this instant are not measured (`RenderLoopConfig::
+    /// measure_after`). `None` = measure everything.
+    measure_from: Option<Instant>,
 }
 
 impl RenderLoop {
@@ -179,7 +182,17 @@ impl RenderLoop {
             stats: RenderStats::default(),
             preview: None,
             zone_active: ZoneActiveMask::new(0),
+            measure_from: None,
         }
+    }
+
+    /// Measure only frames ticked from `at` on (a probe's warm-up is not measured).
+    pub fn measure_from(&mut self, at: Instant) {
+        self.measure_from = Some(at);
+    }
+
+    fn measured(&self, tick_at: Instant) -> bool {
+        self.measure_from.is_none_or(|from| tick_at >= from)
     }
 
     /// Attach a preview handoff (M6). The loop then publishes every frame to the
@@ -265,8 +278,10 @@ impl RenderLoop {
                 gpu.queue.submit([encoder.finish()]);
                 self.ring
                     .begin_map(slot, tick_at, clock.frame, Some(Arc::clone(overlap)));
-                self.stats.frames_rendered += 1;
-                self.stats.render.record(Instant::now() - tick_at);
+                if self.measured(tick_at) {
+                    self.stats.frames_rendered += 1;
+                    self.stats.render.record(Instant::now() - tick_at);
+                }
                 TickOutcome::Rendered
             }
         };
@@ -298,36 +313,43 @@ impl RenderLoop {
             stats,
             preview,
             zone_active,
+            measure_from,
             ..
         } = self;
         let now = Instant::now();
-        while let Some((readback, tick_to_publish)) = ring.consume_ready(now, |meta, data| {
-            producer.set_layout_generation(*generation);
-            // The snapshot THIS frame was rendered under — never the current one.
-            producer.set_overlap(meta.overlap.clone());
-            producer.publish(|px| {
-                // f32 → f16 fused into the copy the handoff requires anyway.
-                for (dst, &src) in px.iter_mut().zip(data.iter()) {
-                    *dst = f16::from_f32(src);
-                }
-            });
-
-            // The preview goes SECOND and pays for itself: its own conversion, its
-            // own copy. The output publish above is untouched by its presence.
-            if let Some(preview) = preview.as_mut() {
-                preview.set_layout_generation(*generation);
-                preview.set_overlap(meta.overlap.clone());
-                preview.publish(zone_active, meta.frame, |px| {
+        while let Some((readback, tick_to_publish, measured)) =
+            ring.consume_ready(now, |meta, data| {
+                producer.set_layout_generation(*generation);
+                // The snapshot THIS frame was rendered under — never the current one.
+                producer.set_overlap(meta.overlap.clone());
+                producer.publish(|px| {
+                    // f32 → f16 fused into the copy the handoff requires anyway.
                     for (dst, &src) in px.iter_mut().zip(data.iter()) {
                         *dst = f16::from_f32(src);
                     }
                 });
+
+                // The preview goes SECOND and pays for itself: its own conversion, its
+                // own copy. The output publish above is untouched by its presence.
+                if let Some(preview) = preview.as_mut() {
+                    preview.set_layout_generation(*generation);
+                    preview.set_overlap(meta.overlap.clone());
+                    preview.publish(zone_active, meta.frame, |px| {
+                        for (dst, &src) in px.iter_mut().zip(data.iter()) {
+                            *dst = f16::from_f32(src);
+                        }
+                    });
+                }
+                (
+                    meta.readback_latency(),
+                    now.saturating_duration_since(meta.tick_at),
+                    measure_from.is_none_or(|from| meta.tick_at >= from),
+                )
+            })
+        {
+            if !measured {
+                continue;
             }
-            (
-                meta.readback_latency(),
-                now.saturating_duration_since(meta.tick_at),
-            )
-        }) {
             stats.frames_published += 1;
             stats.readback.record(readback);
             stats.tick_to_publish.record(tick_to_publish);
@@ -380,6 +402,9 @@ pub struct RenderLoopConfig {
     /// The tempo controls in the Parameter Tree (`/clock/bpm`, `/clock/tap`), applied
     /// to the master clock at each frame boundary. `None` = the clock keeps its BPM.
     pub clock_control: Option<ClockControl>,
+    /// Frames rendered in this first stretch are published but not measured (a probe's
+    /// warm-up). Zero = measure from the start.
+    pub measure_after: Duration,
 }
 
 /// The master clock's tempo controls, read by the render loop (which owns the clock)
@@ -404,6 +429,7 @@ impl Default for RenderLoopConfig {
             freeze: Arc::new(AtomicBool::new(false)),
             frozen_rate_hz: 10,
             clock_control: None,
+            measure_after: Duration::ZERO,
         }
     }
 }
@@ -427,6 +453,9 @@ pub fn run_render_loop(
         .min(config.target_rate_hz.max(1));
     let frozen_period = Duration::from_nanos(1_000_000_000 / frozen_hz as u64);
     let start = Instant::now();
+    if !config.measure_after.is_zero() {
+        engine.measure_from(start + config.measure_after);
+    }
     // Incremental deadline: the period is chosen per frame from the freeze state (a
     // constant `start + period * frame` cannot express a rate that changes at runtime).
     let mut deadline = start;

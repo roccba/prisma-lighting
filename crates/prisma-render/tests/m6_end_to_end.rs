@@ -332,6 +332,7 @@ fn m6_preview_matches_the_wire_tracks_faders_live_and_keeps_silenced_zones() {
                     freeze: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     frozen_rate_hz: 44,
                     clock_control: None,
+                    measure_after: std::time::Duration::ZERO,
                 },
             )
         });

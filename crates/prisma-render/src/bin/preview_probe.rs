@@ -281,6 +281,7 @@ fn main() {
             freeze: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             frozen_rate_hz: RATE_HZ,
             clock_control: None,
+            measure_after: std::time::Duration::ZERO,
         },
     );
 

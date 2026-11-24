@@ -52,6 +52,9 @@ pub struct SchedulerConfig {
     /// universe on the same output frame (tear-free multi-node output, §5.1).
     /// `false` = no sync; nodes latch each `ArtDmx` on receipt.
     pub artsync: bool,
+    /// Ticks in this first stretch of the run are sent but not measured (a probe's
+    /// warm-up: GPU clocks rising, first-use costs). Zero = measure from the start.
+    pub measure_after: Duration,
     /// Number of zones the flat-parameter buffer is sized for; must match the
     /// zone slots the frames' overlap snapshots reference.
     pub zone_count: usize,
@@ -75,6 +78,7 @@ impl Default for SchedulerConfig {
             stop: Arc::new(AtomicBool::new(false)),
             pin_to_core: None,
             artsync: false,
+            measure_after: Duration::ZERO,
         }
     }
 }
@@ -142,6 +146,7 @@ pub fn run_output_loop(
         .map(|d| (d.as_secs_f64() * rate.base_hz() as f64) as usize + 16)
         .unwrap_or(1 << 16);
     let mut probe = TimingProbe::with_capacity(period, config.late_threshold, expected_samples);
+    let measure_from = Instant::now() + config.measure_after;
 
     // Optional ArtSync: a constant 14-byte packet built once, sent per node.
     let mut artsync_packet = Vec::new();
@@ -244,7 +249,9 @@ pub fn run_output_loop(
             }
         }
 
-        probe.record_tick(now, produced_at, fresh);
+        if now >= measure_from {
+            probe.record_tick(now, produced_at, fresh);
+        }
         tick += 1;
 
         if config.stop.load(Ordering::Relaxed) {

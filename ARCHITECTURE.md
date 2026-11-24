@@ -236,7 +236,12 @@ Notes:
   where they must be applied before zones are combined.
 - A track reaching a zone through groups blends only on the groups' pixels there (a per-pixel
   mask, `group_pixel_mask`); elsewhere it leaves the zone untouched.
-- Everything GPU-sized is allocated at compile time. Nothing is allocated per frame.
+- Everything GPU-sized is allocated at compile time. Nothing is allocated per frame. Every
+  pipeline (each effect of the catalogue, blend, gather) is built when an engine starts
+  (`prewarm_pipelines`), and the engine renders 4 unpublished warm-up frames before the output
+  starts: launching an effect never compiles, and the first published frame is a steady one.
+- One GPU submission per frame: the render loop records content, gather and readback copy into
+  one encoder; blend passes take their own slot in a dynamic-offset uniform ring.
 - The master buffer is RGB: premultiplied alpha read over black. Output and preview do not see alpha.
 - The engine is RGB. RGBW and RGBWW fixtures get their whites at the output stage, per profile:
   Off, Extract (`white = min(R,G,B)`, subtracted, the default) or Add. RGBWW splits the white

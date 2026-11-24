@@ -356,7 +356,11 @@ impl Engine {
             ContentSource::Show(show) => show.network.clone(),
             ContentSource::Idle => Default::default(),
         };
-        let (zone_content, zone_commands): (Option<ZoneCompositor>, Option<ZoneCommandSender>) =
+        // Every pipeline a show can ask for, built now: a show starting or an effect
+        // launched for the first time compiles nothing (LIVE-MODEL-SPEC §8.6). Cached on
+        // the GPU, so a recompile (same GPU) pays nothing here.
+        prisma_render::prewarm_pipelines(&gpu);
+        let (mut zone_content, zone_commands): (Option<ZoneCompositor>, Option<ZoneCommandSender>) =
             match content {
                 ContentSource::Idle => (None, None),
                 ContentSource::Show(show) => {
@@ -458,6 +462,26 @@ impl Engine {
         let freeze = Arc::new(AtomicBool::new(false));
         let (highlight_producer, highlight_consumer) = highlight_handoff(master_len);
 
+        // --- Warm-up, before any output: a few whole frames of the show rendered and
+        //     waited for, not published. The first frames of a fresh engine pay one-off
+        //     costs (first use of every texture, bind group and pipeline, the GPU's
+        //     clocks rising from idle); measured, they put the first output ticks over
+        //     the 50 ms budget. Paid here, at load, the first published frame is a
+        //     steady-state one. ---
+        if let Some(compositor) = zone_content.as_mut() {
+            warm_up(
+                &gpu,
+                compositor,
+                &patch,
+                &index,
+                &sample_plan,
+                &clock.snapshot(),
+            );
+            // Re-stage the start-up frame now, so the output's first ticks do not send a
+            // frame stamped before the warm-up (its age would read as latency).
+            out_producer.publish(|px| px.fill(f16::ZERO));
+        }
+
         // --- Spawn: output thread (self-elevates to RT — M1). ---
         let output_stop = Arc::new(AtomicBool::new(false));
         let output = {
@@ -481,6 +505,7 @@ impl Engine {
                             stop,
                             pin_to_core: pin,
                             artsync,
+                            measure_after: config.measure_after,
                             ..Default::default()
                         },
                     )
@@ -552,6 +577,7 @@ impl Engine {
                         // unaffected. See RenderLoopConfig::frozen_rate_hz.
                         frozen_rate_hz: 10,
                         clock_control: Some(clock_control),
+                        measure_after: config.measure_after,
                     };
                     // The content (built at load on the setup thread) was moved in.
                     // Either arm runs the SAME loop; only the FrameContent type differs.
@@ -1185,6 +1211,12 @@ impl EngineHandle {
     /// S9). `blink` chooses the pattern: `true` for a ~2 Hz blink (spot one among
     /// many), `false` for solid (compare two side by side). An empty selection — or
     /// fixture ids not in the running layout (e.g. just-placed, not yet recompiled) —
+    /// How many GPU pipelines were ever built on this engine's GPU (every one is built
+    /// at load: this does not move while a show runs — tested).
+    pub fn pipelines_built(&self) -> usize {
+        self.gpu.cache.builds()
+    }
+
     /// clears the highlight. Published wait-free; the output thread picks it up on its
     /// next tick.
     pub fn highlight(&mut self, fixtures: &[Uuid], blink: bool) {
@@ -1361,4 +1393,36 @@ impl Drop for EngineHandle {
             // `self.gpu` drops immediately after this, releasing the GPU last.
         }
     }
+}
+
+/// Frames rendered by [`warm_up`] before the output starts.
+const WARM_UP_FRAMES: usize = 4;
+
+/// Render the show's first frames on the setup thread and wait for the GPU, without
+/// publishing them: every zone lit (so every track and zone pass runs), the clock at
+/// its start. The compositor's state is unchanged but for its last clock reading.
+fn warm_up(
+    gpu: &Gpu,
+    compositor: &mut ZoneCompositor,
+    patch: &Patch,
+    index: &prisma_patch::PatchIndex,
+    plan: &SamplePlan,
+    clock: &prisma_core::ClockSnapshot,
+) {
+    use prisma_render::render_loop::FrameContent;
+    let layout = compositor.pixel_layout();
+    let fb = prisma_render::readback::create_render_target(gpu, layout.width, layout.height);
+    let sampler = Sampler::new(gpu, plan);
+    let mut zones = ZoneStates::new(index.zone_count());
+    for z in 0..index.zone_count() {
+        zones.set_dimmer(z, 1.0);
+    }
+    let mut counter = OverlapCounter::pixel_space(patch, index, &layout);
+    counter.sync(&zones);
+    let overlap = counter.snapshot();
+    for _ in 0..WARM_UP_FRAMES {
+        compositor.render_into(gpu, clock, &zones, &overlap, &fb);
+        sampler.gather(gpu, &fb);
+    }
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
 }

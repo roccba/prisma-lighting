@@ -154,6 +154,16 @@ impl TimingProbe {
         };
         let budget_ns = LATENCY_BUDGET.as_nanos() as u64;
         let latency_over_budget = self.latencies_ns.iter().filter(|&&x| x > budget_ns).count();
+        // Where in the run they fell (tick index; the first 64), to tell start-up from
+        // steady state.
+        let over_budget_ticks: Vec<usize> = self
+            .latencies_ns
+            .iter()
+            .enumerate()
+            .filter(|(_, &x)| x > budget_ns)
+            .map(|(i, _)| i)
+            .take(64)
+            .collect();
 
         ProbeReport {
             mode,
@@ -177,6 +187,7 @@ impl TimingProbe {
             latency_max_ns: latency_max,
             latency_p99_ns: latency_p99,
             latency_over_budget,
+            over_budget_ticks,
             histogram,
             outputs,
         }
@@ -268,6 +279,9 @@ pub struct ProbeReport {
     /// Ticks whose produced → wire exceeded [`LATENCY_BUDGET`] (each is a wire frame
     /// older than the budget: the render leg did not deliver a fresher one in time).
     pub latency_over_budget: usize,
+    /// The tick indices of those (the first 64): tick `i` went out `i` output periods
+    /// after the output started.
+    pub over_budget_ticks: Vec<usize>,
     pub histogram: Vec<HistogramBucket>,
     /// Per-output link state and counters at end of run.
     pub outputs: Vec<OutputStatus>,

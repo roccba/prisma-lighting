@@ -9,7 +9,10 @@
 //! report gives the render leg and the output side.
 //!
 //! Run on a real GPU with `--release`:
-//!   cargo run -p prisma-engine --bin show_probe --release [seconds_per_point] [--check]
+//!   cargo run -p prisma-engine --bin show_probe --release [seconds_per_point] [--warmup N] [--check]
+//!
+//! Each point first runs `--warmup` seconds (default 3) rendered and sent but not
+//! measured, then `seconds_per_point` measured. `--warmup 0` measures the start-up too.
 //!
 //! Points: 18,000 px (300 tubes × 60, 106 universes) and 43,500 px (725 tubes, 256).
 //!
@@ -191,10 +194,24 @@ const MIN_RATE_SHARE: f64 = 0.98;
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let check = args.iter().any(|a| a == "--check");
-    let seconds: u64 = args.iter().find_map(|a| a.parse().ok()).unwrap_or(10);
+    // `--warmup N`: run N seconds before measuring (rendered and sent, not measured).
+    let warmup: u64 = args
+        .iter()
+        .position(|a| a == "--warmup")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3);
+    let seconds: u64 = args
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i == 0 || args[i - 1] != "--warmup")
+        .find_map(|(_, a)| a.parse().ok())
+        .unwrap_or(10);
     let mut failures: Vec<String> = Vec::new();
     let dev_sink = sink::spawn(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).expect("sink");
-    println!("show-probe: full engine, real GPU, {seconds} s per point");
+    println!(
+        "show-probe: full engine, real GPU, {seconds} s per point after {warmup} s of warm-up (not measured)"
+    );
     println!(
         "{:>7} {:>5} | {:>9} {:>9} {:>9} {:>9} | {:>9} {:>9} {:>9} {:>5} | {:>8} {:>4} {:>5} | {:>6} {:>5}",
         "pixels", "univ", "render", "readback", "t→pub", "t→pub mx",
@@ -210,9 +227,16 @@ fn main() {
         let show = show(tubes);
         let pixels = tubes * TUBE_PX;
         let universes = pixels.div_ceil(PX_PER_UNIVERSE);
-        let config = EngineConfig::new(AdapterPreference::HighPerformance, dev_sink.local_addr());
+        let mut config =
+            EngineConfig::new(AdapterPreference::HighPerformance, dev_sink.local_addr());
+        config.measure_after = Duration::from_secs(warmup);
+        let started = std::time::Instant::now();
         let engine = Engine::start_show(show, config).expect("engine starts");
-        std::thread::sleep(Duration::from_secs(seconds));
+        println!(
+            "        engine start (pipelines + warm-up included): {:.0} ms",
+            started.elapsed().as_secs_f64() * 1e3
+        );
+        std::thread::sleep(Duration::from_secs(warmup + seconds));
         let report = engine.shutdown();
         let r = &report.render;
         let o = &report.output;
@@ -235,6 +259,14 @@ fn main() {
             r.frames_published,
             hz,
         );
+        if !o.over_budget_ticks.is_empty() {
+            let at: Vec<String> = o
+                .over_budget_ticks
+                .iter()
+                .map(|&t| format!("{:.2}s", warmup as f64 + t as f64 / RATE_HZ))
+                .collect();
+            println!("        ticks over 50 ms at: {}", at.join(" "));
+        }
         if hz < RATE_HZ * MIN_RATE_SHARE {
             failures.push(format!(
                 "{pixels} px: {hz:.1} Hz < {:.1}",

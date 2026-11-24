@@ -38,6 +38,9 @@ pub struct CachedCompute {
 pub struct PipelineCache {
     render: Mutex<HashMap<String, Arc<CachedRender>>>,
     compute: Mutex<HashMap<String, Arc<CachedCompute>>>,
+    /// How many pipelines were ever built (cache misses): a test asserts it does not
+    /// move once a show runs.
+    builds: std::sync::atomic::AtomicUsize,
 }
 
 impl PipelineCache {
@@ -49,6 +52,8 @@ impl PipelineCache {
             return Arc::clone(hit);
         }
         let built = Arc::new(build());
+        self.builds
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         map.insert(key.to_string(), Arc::clone(&built));
         built
     }
@@ -60,6 +65,8 @@ impl PipelineCache {
             return Arc::clone(hit);
         }
         let built = Arc::new(build());
+        self.builds
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         map.insert(key.to_string(), Arc::clone(&built));
         built
     }
@@ -67,6 +74,11 @@ impl PipelineCache {
     /// How many distinct pipelines are cached (render + compute). For tests/telemetry.
     pub fn len(&self) -> usize {
         self.render.lock().unwrap().len() + self.compute.lock().unwrap().len()
+    }
+
+    /// How many pipelines were ever built on this GPU (every cache miss).
+    pub fn builds(&self) -> usize {
+        self.builds.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Whether the cache holds nothing yet.
