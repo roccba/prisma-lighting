@@ -267,6 +267,27 @@ impl ParameterTree {
         WriteOutcome::Accepted
     }
 
+    /// Write a continuous value **past arbitration, without taking ownership**: it
+    /// lands whoever owns the parameter, and the next accepted write (a fader, a click)
+    /// simply replaces it. For a fade that must land over any hand and yield to the
+    /// next one — the group presets' fades (LIVE-MODEL-SPEC §8.5 step 3): the fader
+    /// notices a hand write because the value is no longer the one it wrote, and
+    /// stops. Notifies like any write. `Dead` for a dead handle.
+    pub fn write_unarbitrated(&self, handle: &ParamHandle, value_norm: f32) -> WriteOutcome {
+        let slot = &handle.0;
+        if !slot.live.load(Ordering::Relaxed) {
+            return WriteOutcome::Dead;
+        }
+        slot.value
+            .store(value_norm.clamp(0.0, 1.0).to_bits(), Ordering::Release);
+        if !slot.dirty.swap(true, Ordering::SeqCst) {
+            if let Some(tx) = self.inner.tx.lock().as_ref() {
+                let _ = tx.send(Notification::Changed(handle.clone()));
+            }
+        }
+        WriteOutcome::Accepted
+    }
+
     /// Write by path (resolves first). `None` if the path does not exist. Prefer
     /// [`write`](Self::write) with a cached handle on the hot path.
     pub fn write_path(&self, path: &str, value_norm: f32, src: SourceId) -> Option<WriteOutcome> {

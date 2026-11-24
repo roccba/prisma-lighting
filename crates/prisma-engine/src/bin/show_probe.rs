@@ -178,6 +178,9 @@ fn show(tubes: u32) -> Show {
         BlendMode::Normal,
     ));
     show.tracks = tracks;
+    // A group master below full, so the output stage's group path runs on every
+    // component of the group (LIVE-MODEL-SPEC §8.5 step 3).
+    show.group_masters = vec![prisma_core::show::GroupMaster { group, level: 0.8 }];
     show.validate().expect("probe show is valid");
     show
 }

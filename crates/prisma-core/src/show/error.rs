@@ -31,6 +31,8 @@ pub enum ShowError {
     UnknownDestinationZone { track: Uuid, zone: Uuid },
     /// A track's destination names a group absent from the embedded patch.
     UnknownDestinationGroup { track: Uuid, group: Uuid },
+    /// A group master or preset names a group absent from the embedded patch.
+    UnknownGroup { group: Uuid },
     /// The network/output config is malformed (e.g. a reversed universe range).
     InvalidNetwork(String),
     /// The embedded patch failed its own validation.
@@ -80,6 +82,9 @@ impl std::fmt::Display for ShowError {
                 f,
                 "track {track} targets zone {zone}, which is not in the patch"
             ),
+            ShowError::UnknownGroup { group } => {
+                write!(f, "group {group} is not in the patch")
+            }
             ShowError::UnknownDestinationGroup { track, group } => write!(
                 f,
                 "track {track} targets group {group}, which is not in the patch"

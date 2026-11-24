@@ -708,6 +708,35 @@ pub struct Show {
     /// separate profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedded_mappings: Option<serde_json::Value>,
+    /// Each group master's level (LIVE-MODEL-SPEC §3.1, phase 5 step 3). A group with
+    /// no entry is at full. Absent in older files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub group_masters: Vec<GroupMaster>,
+    /// Stored group-master levels, applied with a fade (`/group-preset/{i}/apply`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub group_presets: Vec<GroupPreset>,
+}
+
+/// A group master's level: a manual dimmer, applied at the output stage to every pixel
+/// of the group's fixtures (a pixel in several groups takes the product).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct GroupMaster {
+    pub group: Uuid,
+    /// `0.0..=1.0`, as the fader shows it (normalized; the dimmer curve maps it).
+    pub level: f32,
+}
+
+/// A stored set of group-master levels, applied together with a fade.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GroupPreset {
+    pub id: Uuid,
+    pub name: String,
+    /// The masters it sets; groups not listed keep their level.
+    pub levels: Vec<GroupMaster>,
+    /// Fade time in seconds (0 = cut). A hand on a master during the fade stops the
+    /// fade for that group.
+    #[serde(default)]
+    pub fade: f64,
 }
 
 impl Show {
@@ -731,6 +760,8 @@ impl Show {
             master: MasterState::default(),
             network: NetworkConfig::default(),
             embedded_mappings: None,
+            group_masters: Vec::new(),
+            group_presets: Vec::new(),
         }
     }
 
@@ -794,6 +825,17 @@ impl Show {
             }
             if !seen.insert(zs.zone_id) {
                 return Err(ShowError::DuplicateZone { zone: zs.zone_id });
+            }
+        }
+
+        // Group masters and presets name groups of the patch.
+        let unknown = |g: &Uuid| self.patch.group(*g).is_none();
+        if let Some(m) = self.group_masters.iter().find(|m| unknown(&m.group)) {
+            return Err(ShowError::UnknownGroup { group: m.group });
+        }
+        for p in &self.group_presets {
+            if let Some(m) = p.levels.iter().find(|m| unknown(&m.group)) {
+                return Err(ShowError::UnknownGroup { group: m.group });
             }
         }
 

@@ -131,6 +131,13 @@ pub struct FlatParams {
     zones: Vec<[f32; 4]>,
     /// Each zone's white temperature, for fixtures with two whites (RGBWW).
     zone_white: Vec<ZoneWhite>,
+    /// Group masters (LIVE-MODEL-SPEC §8.5 step 3), per master-buffer component: the
+    /// id of its pixel's **group set** (the groups its fixture belongs to). Layout
+    /// data, shared (an `Arc`), set once by the source. Empty = no groups.
+    component_set: std::sync::Arc<[u16]>,
+    /// This frame's scale of each group set: the product of its groups' dimmers.
+    /// Set 0 is "no group" (always 1).
+    set_scale: Vec<f32>,
 }
 
 /// A zone's live "Temperatura de blanco": automatic (follow the colour asked for)
@@ -169,6 +176,33 @@ impl FlatParams {
             master: [1.0; 4],
             zones: vec![[1.0; 4]; zone_count],
             zone_white: vec![ZoneWhite::default(); zone_count],
+            component_set: std::sync::Arc::from(Vec::new()),
+            set_scale: Vec::new(),
+        }
+    }
+
+    /// Install the group-set table (once; a no-op when it is already this one). Its
+    /// sets start at unity. Allocates only when the table changes — the first frame.
+    pub fn set_group_sets(&mut self, component_set: &std::sync::Arc<[u16]>, set_count: usize) {
+        if !std::sync::Arc::ptr_eq(&self.component_set, component_set) {
+            self.component_set = std::sync::Arc::clone(component_set);
+            self.set_scale = vec![1.0; set_count.max(1)];
+        }
+    }
+
+    /// Set one group set's scale (out-of-range ids are ignored).
+    pub fn set_group_set_scale(&mut self, set: usize, scale: f32) {
+        if let Some(s) = self.set_scale.get_mut(set) {
+            *s = scale;
+        }
+    }
+
+    /// The group masters' scale of one master-buffer component: 1 without groups.
+    #[inline]
+    fn group_scale(&self, src: usize) -> f32 {
+        match self.component_set.get(src) {
+            Some(&set) => self.set_scale.get(set as usize).copied().unwrap_or(1.0),
+            None => 1.0,
         }
     }
 
@@ -272,8 +306,9 @@ pub fn scale_component(
             lin *= flat.zone_scale(slot as usize, channel);
         }
     }
-    // Master applies to every pixel, unconditionally.
-    lin * flat.master_scale(channel)
+    // Master and the group masters apply to every pixel, unconditionally (a group
+    // master is never applied in render, so there is nothing to double).
+    lin * flat.master_scale(channel) * flat.group_scale(src)
 }
 
 /// The colour temperature (kelvin) of a linear-light sRGB colour: its CIE xy

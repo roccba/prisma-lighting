@@ -41,7 +41,7 @@ use prisma_core::zone::ZoneStates;
 use prisma_core::{ParamHandle, ParameterTree};
 use prisma_output::plan::{FlatParams, ZoneWhite};
 use prisma_output::scheduler::FlatParamSource;
-use prisma_patch::Patch;
+use prisma_patch::{Patch, PatchIndex};
 
 use crate::render_loop::ZoneStateSource;
 
@@ -114,6 +114,13 @@ pub struct LiveParams {
     /// is a picture, and with `rate == 0` (the default) the gate is a constant 1.0 so
     /// they agree exactly (the M6 preview==wire equivalence holds).
     start: Instant,
+    /// Group masters (LIVE-MODEL-SPEC §8.5 step 3), indexed like `Patch::groups`:
+    /// `/group/{id}/dimmer`. Empty until [`register_groups`](Self::register_groups).
+    groups: Vec<ParamHandle>,
+    /// Each group set's groups (indices into `groups`); set 0 is the empty set.
+    group_sets: std::sync::Arc<[Box<[u16]>]>,
+    /// Per master-buffer component, its pixel's group set (the output stage's table).
+    component_set: std::sync::Arc<[u16]>,
 }
 
 /// Free-running strobe gate. `1.0` (full on) when not engaged; otherwise a hard
@@ -294,7 +301,66 @@ impl LiveParams {
             master,
             zones,
             start: Instant::now(),
+            groups: Vec::new(),
+            group_sets: std::sync::Arc::from(Vec::new()),
+            component_set: std::sync::Arc::from(Vec::new()),
         }
+    }
+
+    /// Register a master for every group of `patch` at `/group/{id}/dimmer` (open by
+    /// default: a group master only ever takes light away) and compile, once for this
+    /// layout, the output stage's table: each pixel's **group set** — the groups its
+    /// fixture is in — and, per master-buffer component, the set of its pixel. Per
+    /// output frame the stage then reads each group once and multiplies each set's
+    /// groups: one scale per set, not per pixel × group.
+    pub fn register_groups(&mut self, tree: &ParameterTree, patch: &Patch, index: &PatchIndex) {
+        self.groups = patch
+            .groups
+            .iter()
+            .map(|g| {
+                tree.register(
+                    &format!("/group/{}/dimmer", g.id),
+                    dimmer_descriptor("group.dimmer", 1.0),
+                )
+            })
+            .collect();
+        let mut sets: Vec<Box<[u16]>> = vec![Box::from([])];
+        let mut set_of: std::collections::HashMap<Vec<u16>, u16> = std::collections::HashMap::new();
+        set_of.insert(Vec::new(), 0);
+        let mut component_set = vec![0u16; index.master_buffer_len()];
+        for fixture in &patch.fixtures {
+            let in_groups: Vec<u16> = patch
+                .groups
+                .iter()
+                .enumerate()
+                .filter(|(_, g)| g.contains(fixture.id))
+                .map(|(i, _)| i as u16)
+                .collect();
+            let set = *set_of.entry(in_groups.clone()).or_insert_with(|| {
+                sets.push(in_groups.into_boxed_slice());
+                (sets.len() - 1) as u16
+            });
+            if set == 0 {
+                continue;
+            }
+            for pixel in &fixture.pixels {
+                let Some(g) = index.global_index(fixture.id, pixel.index) else {
+                    continue;
+                };
+                let offset = index.pixel_component_offset(g) as usize;
+                let count = index.pixel_component_count(g) as usize;
+                for c in component_set.iter_mut().skip(offset).take(count) {
+                    *c = set;
+                }
+            }
+        }
+        self.group_sets = std::sync::Arc::from(sets);
+        self.component_set = std::sync::Arc::from(component_set);
+    }
+
+    /// Group `i`'s master (`Patch::groups` order), if registered.
+    pub fn group(&self, i: usize) -> Option<&ParamHandle> {
+        self.groups.get(i)
     }
 
     #[inline]
@@ -397,6 +463,23 @@ impl FlatParamSource for LiveParams {
                     kelvin: z.white.kelvin.read_real().unwrap_or(4000.0),
                 },
             );
+        }
+
+        // Group masters: one read per group of a set, one scale per set.
+        if self.group_sets.len() > 1 {
+            into.set_group_sets(&self.component_set, self.group_sets.len());
+            for (set, groups) in self.group_sets.iter().enumerate().skip(1) {
+                let scale = groups
+                    .iter()
+                    .map(|&g| {
+                        self.groups
+                            .get(g as usize)
+                            .and_then(|h| h.read_real())
+                            .unwrap_or(1.0)
+                    })
+                    .product();
+                into.set_group_set_scale(set, scale);
+            }
         }
     }
 }

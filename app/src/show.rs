@@ -162,6 +162,18 @@ pub(crate) fn fold_live_into_show(engine: &EngineHandle, show: &mut Show) {
         zs.live.white_auto = z.white.auto.read_bool().unwrap_or(zs.live.white_auto);
         zs.live.white_kelvin = z.white.kelvin.read_real().unwrap_or(zs.live.white_kelvin);
     }
+    // Group masters (normalized, as the fader shows them): stored only when not full,
+    // so a show without touched masters saves none.
+    show.group_masters = show
+        .patch
+        .groups
+        .iter()
+        .enumerate()
+        .filter_map(|(i, g)| {
+            let level = engine.live().group(i)?.read_norm()?;
+            (level < 1.0).then_some(prisma_engine::GroupMaster { group: g.id, level })
+        })
+        .collect();
     // Tracks, by the slot order the engine was assembled in.
     for (slot, t) in show.tracks.iter_mut().enumerate() {
         if let Some(l) = engine.track_live(slot) {

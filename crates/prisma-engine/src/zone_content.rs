@@ -382,6 +382,14 @@ pub fn seed_live_from_show(tree: &ParameterTree, live: &LiveParams, patch: &Patc
         tree.write_real(&h.white.auto, if l.white_auto { 1.0 } else { 0.0 }, src);
         tree.write_real(&h.white.kelvin, l.white_kelvin, src);
     }
+    // Group masters, as saved (normalized, as the fader shows them).
+    for m in &show.group_masters {
+        if let Some(i) = patch.groups.iter().position(|g| g.id == m.group) {
+            if let Some(h) = live.group(i) {
+                tree.write(h, m.level, src);
+            }
+        }
+    }
 }
 
 /// How a content change lands (LIVE-MODEL-SPEC §4.2): a hard cut, or a crossfade on

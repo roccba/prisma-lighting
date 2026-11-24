@@ -167,6 +167,9 @@ pub struct EngineHandle {
     clip_host: Mutex<Option<Arc<dyn ClipHost>>>,
     /// Plays clips from their tree parameters; running once a host is set.
     clip_controller: Mutex<Option<ClipController>>,
+    /// The group presets' fade thread (`/group-preset/{i}/apply`); `None` without
+    /// presets. Stopped with the clip controller, before the tree goes.
+    group_fader: Mutex<Option<crate::group_fader::GroupFader>>,
     live: LiveParams,
     /// The master clock's published face (read the live BPM) and its tempo controls.
     clock: Arc<ClockShared>,
@@ -335,7 +338,9 @@ impl Engine {
 
         // --- Live state: one Parameter Tree binding feeds render, output AND preview. ---
         let tree = Arc::new(ParameterTree::with_defaults());
-        let live = LiveParams::register(&tree, &patch);
+        let mut live = LiveParams::register(&tree, &patch);
+        // Group masters (`/group/{id}/dimmer`) and their output-stage table.
+        live.register_groups(&tree, &patch, &index);
 
         // --- Content: black (no show) or the per-zone compositor built from the show.
         //     Built here on the setup thread — the effect pipelines + zone textures
@@ -360,11 +365,34 @@ impl Engine {
         // launched for the first time compiles nothing (LIVE-MODEL-SPEC §8.6). Cached on
         // the GPU, so a recompile (same GPU) pays nothing here.
         prisma_render::prewarm_pipelines(&gpu);
+        let mut presets: Vec<crate::group_fader::PresetPlan> = Vec::new();
         let (mut zone_content, zone_commands): (Option<ZoneCompositor>, Option<ZoneCommandSender>) =
             match content {
                 ContentSource::Idle => (None, None),
                 ContentSource::Show(show) => {
                     seed_live_from_show(&tree, &live, &patch, &show);
+                    // Group presets: `/group-preset/{i}/apply`, each setting the masters it
+                    // stores with its fade, run by the group fader (§8.5 step 3).
+                    presets = show
+                        .group_presets
+                        .iter()
+                        .enumerate()
+                        .map(|(i, preset)| crate::group_fader::PresetPlan {
+                            trigger: tree.register(
+                                &format!("/group-preset/{i}/apply"),
+                                ParamDescriptor::trigger("group_preset.apply"),
+                            ),
+                            levels: preset
+                                .levels
+                                .iter()
+                                .filter_map(|m| {
+                                    let g = patch.groups.iter().position(|g| g.id == m.group)?;
+                                    Some((live.group(g)?.clone(), m.level))
+                                })
+                                .collect(),
+                            fade: std::time::Duration::from_secs_f64(preset.fade.max(0.0)),
+                        })
+                        .collect();
                     grid = register_clips(&tree, &patch, &show);
                     clip_active = show.tracks.iter().map(|t| t.active).collect();
                     midi_tracks = show.tracks.iter().map(|t| t.id).collect();
@@ -481,6 +509,9 @@ impl Engine {
             // frame stamped before the warm-up (its age would read as latency).
             out_producer.publish(|px| px.fill(f16::ZERO));
         }
+
+        let group_fader = (!presets.is_empty())
+            .then(|| crate::group_fader::GroupFader::start(Arc::clone(&tree), presets));
 
         // --- Spawn: output thread (self-elevates to RT — M1). ---
         let output_stop = Arc::new(AtomicBool::new(false));
@@ -632,6 +663,7 @@ impl Engine {
             clip_active,
             clip_host: Mutex::new(None),
             clip_controller: Mutex::new(None),
+            group_fader: Mutex::new(group_fader),
             live,
             clock: clock_shared,
             tempo,
@@ -1173,6 +1205,7 @@ impl EngineHandle {
     /// Stop the clip controller (before the tree or GPU it uses goes away).
     fn stop_clips(&self) {
         *self.clip_controller.lock().unwrap() = None;
+        *self.group_fader.lock().unwrap() = None;
     }
 
     /// Write one live parameter of a track's running effect (the parameter panel).

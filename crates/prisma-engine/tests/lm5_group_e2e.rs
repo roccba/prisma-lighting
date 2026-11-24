@@ -9,7 +9,9 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
-use prisma_core::show::{Cell, Destination, Layer, ParamSet, Show, Track};
+use prisma_core::show::{
+    Cell, Destination, GroupMaster, GroupPreset, Layer, ParamSet, Show, Track,
+};
 use prisma_engine::demo::{demo_show, DEMO_GROUPS, DEMO_ZONES};
 use prisma_engine::{Engine, EngineConfig};
 use prisma_output::sink;
@@ -103,6 +105,60 @@ fn a_recompiled_group_destination_lights_only_the_groups_pixels_on_the_wire() {
             assert_eq!(*count, 0, "{name} stays dark");
         }
     }
+
+    let report = engine.shutdown();
+    assert_eq!(report.gpu_strong_refs_at_release, 1, "released the GPU");
+    let _ = dev_sink.stop_and_collect();
+}
+
+#[test]
+fn group_masters_and_presets_dim_their_pixels_on_the_wire() {
+    let dev_sink = sink::spawn(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).expect("sink");
+    let config = EngineConfig::new(AdapterPreference::Software, dev_sink.local_addr());
+    let tube = |t: u32| format!("Tubo {t}");
+
+    // The whole ceiling white; the even tubes' master saved at 0; a preset that takes
+    // the odd tubes to 0 with no fade.
+    let mut show = show_with(Destination::zone(DEMO_ZONES[0]));
+    show.group_masters = vec![GroupMaster {
+        group: DEMO_GROUPS[0],
+        level: 0.0,
+    }];
+    show.group_presets = vec![GroupPreset {
+        id: uuid::Uuid::from_u128(0x9),
+        name: "Impares fuera".into(),
+        levels: vec![GroupMaster {
+            group: DEMO_GROUPS[1],
+            level: 0.0,
+        }],
+        fade: 0.0,
+    }];
+    show.validate().expect("valid show");
+    let px = pixels(&show);
+    let engine = Engine::start_show(show, config).expect("engine starts");
+    wait_for(
+        &dev_sink,
+        &px,
+        "the saved master darkens the even tubes",
+        |lit| (1..=8).all(|t| lit.get(&tube(t)) == Some(if t % 2 == 0 { &0 } else { &60 })),
+    );
+
+    // Live: the master up again, through the tree as a fader writes it.
+    let even = format!("/group/{}/dimmer", DEMO_GROUPS[0]);
+    engine.tree().write_path(
+        &even,
+        1.0,
+        prisma_core::source::SourceId::new(prisma_core::source::priority::UI, 1),
+    );
+    wait_for(&dev_sink, &px, "every tube lit", |lit| {
+        (1..=8).all(|t| lit.get(&tube(t)) == Some(&60))
+    });
+
+    // The preset, by its path (a pad or a click).
+    assert!(engine.activate_path("/group-preset/0/apply"));
+    wait_for(&dev_sink, &px, "the preset darkens the odd tubes", |lit| {
+        (1..=8).all(|t| lit.get(&tube(t)) == Some(if t % 2 == 0 { &60 } else { &0 }))
+    });
 
     let report = engine.shutdown();
     assert_eq!(report.gpu_strong_refs_at_release, 1, "released the GPU");

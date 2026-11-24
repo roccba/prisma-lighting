@@ -401,6 +401,12 @@ pub(crate) fn apply_editor_draft(app: &AppHandle, resume: bool) -> Result<(), St
                 .groups
                 .retain(|g| patch.group(*g).is_some());
         }
+        // ...and its master level and its place in every preset.
+        show.group_masters
+            .retain(|m| patch.group(m.group).is_some());
+        for preset in &mut show.group_presets {
+            preset.levels.retain(|m| patch.group(m.group).is_some());
+        }
         show.tracks.retain(|t| !t.destination.is_empty());
         // A newly added zone gets its own track, like `Show::new` gives every zone.
         for pz in &patch.zones {
