@@ -11,7 +11,7 @@ use std::thread::JoinHandle;
 use half::f16;
 use uuid::Uuid;
 
-use prisma_core::show::Show;
+use prisma_core::show::{GroupPreset, Show};
 use prisma_core::source::{priority, SourceId};
 use prisma_core::time::SystemClock;
 use prisma_core::tree::{ParameterTree, WriteOutcome};
@@ -170,6 +170,8 @@ pub struct EngineHandle {
     /// The group presets' fade thread (`/group-preset/{i}/apply`); `None` without
     /// presets. Stopped with the clip controller, before the tree goes.
     group_fader: Mutex<Option<crate::group_fader::GroupFader>>,
+    /// The patch's group ids, in `Patch::groups` order (= the masters' order in `live`).
+    group_ids: Vec<Uuid>,
     live: LiveParams,
     /// The master clock's published face (read the live BPM) and its tempo controls.
     clock: Arc<ClockShared>,
@@ -373,26 +375,7 @@ impl Engine {
                     seed_live_from_show(&tree, &live, &patch, &show);
                     // Group presets: `/group-preset/{i}/apply`, each setting the masters it
                     // stores with its fade, run by the group fader (§8.5 step 3).
-                    presets = show
-                        .group_presets
-                        .iter()
-                        .enumerate()
-                        .map(|(i, preset)| crate::group_fader::PresetPlan {
-                            trigger: tree.register(
-                                &format!("/group-preset/{i}/apply"),
-                                ParamDescriptor::trigger("group_preset.apply"),
-                            ),
-                            levels: preset
-                                .levels
-                                .iter()
-                                .filter_map(|m| {
-                                    let g = patch.groups.iter().position(|g| g.id == m.group)?;
-                                    Some((live.group(g)?.clone(), m.level))
-                                })
-                                .collect(),
-                            fade: std::time::Duration::from_secs_f64(preset.fade.max(0.0)),
-                        })
-                        .collect();
+                    presets = preset_plans(&tree, &live, &patch.groups, &show.group_presets);
                     grid = register_clips(&tree, &patch, &show);
                     clip_active = show.tracks.iter().map(|t| t.active).collect();
                     midi_tracks = show.tracks.iter().map(|t| t.id).collect();
@@ -664,6 +647,7 @@ impl Engine {
             clip_host: Mutex::new(None),
             clip_controller: Mutex::new(None),
             group_fader: Mutex::new(group_fader),
+            group_ids: patch.groups.iter().map(|g| g.id).collect(),
             live,
             clock: clock_shared,
             tempo,
@@ -1250,6 +1234,50 @@ impl EngineHandle {
         self.gpu.cache.builds()
     }
 
+    /// Every group master's level (normalized, as its fader shows it), in
+    /// `Patch::groups` order.
+    pub fn group_levels(&self) -> Vec<f32> {
+        (0..self.group_ids.len())
+            .map(|i| {
+                self.live
+                    .group(i)
+                    .and_then(|h| h.read_norm())
+                    .unwrap_or(1.0)
+            })
+            .collect()
+    }
+
+    /// Set a group master from the UI (normalized). `false` for an unknown group.
+    pub fn set_group_level(&self, group: Uuid, level: f32) -> bool {
+        let Some(i) = self.group_ids.iter().position(|g| *g == group) else {
+            return false;
+        };
+        match self.live.group(i) {
+            Some(h) => {
+                self.tree
+                    .write(h, level.clamp(0.0, 1.0), ui_control_source())
+                    == WriteOutcome::Accepted
+            }
+            None => false,
+        }
+    }
+
+    /// Replace the group presets the engine runs (`/group-preset/{i}/apply`) without a
+    /// recompile: the old triggers go, the new ones are registered and the fader thread
+    /// restarts on them (a fade in progress stops where it is). Nothing else moves.
+    pub fn set_group_presets(&self, groups: &[prisma_patch::Group], presets: &[GroupPreset]) {
+        let mut fader = self.group_fader.lock().unwrap();
+        *fader = None;
+        self.tree.unregister_prefix("/group-preset/");
+        let plans = preset_plans(&self.tree, &self.live, groups, presets);
+        if !plans.is_empty() {
+            *fader = Some(crate::group_fader::GroupFader::start(
+                Arc::clone(&self.tree),
+                plans,
+            ));
+        }
+    }
+
     /// clears the highlight. Published wait-free; the output thread picks it up on its
     /// next tick.
     pub fn highlight(&mut self, fixtures: &[Uuid], blink: bool) {
@@ -1458,4 +1486,33 @@ fn warm_up(
         sampler.gather(gpu, &fb);
     }
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+}
+
+/// The group presets as the fader runs them: `/group-preset/{i}/apply` registered for
+/// each, its levels resolved to the masters' handles (unknown groups skipped).
+fn preset_plans(
+    tree: &ParameterTree,
+    live: &LiveParams,
+    groups: &[prisma_patch::Group],
+    presets: &[GroupPreset],
+) -> Vec<crate::group_fader::PresetPlan> {
+    presets
+        .iter()
+        .enumerate()
+        .map(|(i, preset)| crate::group_fader::PresetPlan {
+            trigger: tree.register(
+                &format!("/group-preset/{i}/apply"),
+                ParamDescriptor::trigger("group_preset.apply"),
+            ),
+            levels: preset
+                .levels
+                .iter()
+                .filter_map(|m| {
+                    let g = groups.iter().position(|g| g.id == m.group)?;
+                    Some((live.group(g)?.clone(), m.level))
+                })
+                .collect(),
+            fade: std::time::Duration::from_secs_f64(preset.fade.max(0.0)),
+        })
+        .collect()
 }

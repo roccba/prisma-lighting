@@ -139,6 +139,7 @@ fn ui_fixture() -> serde_json::Value {
         "editor_preview_port": 0,
         // The patch editor on the demo rig (the harness opens it with `?window=editor`).
         "editor_get_state": state_of(&PatchDraft::new(show.patch.clone())),
+        "main_groups": groups_info(&show, None),
         "editor_fixture_types": FixtureLibrary::seed().types,
         "control_keys": prisma_engine::keys::default_bindings(),
         "midi_status": midi,
@@ -347,4 +348,19 @@ fn a_new_group_gets_a_colour_no_group_has() {
     // All taken: the palette repeats.
     let all: Vec<Group> = GROUP_COLORS.iter().map(|&c| g(c)).collect();
     assert_eq!(next_group_color(&all), GROUP_COLORS[0]);
+}
+
+#[test]
+fn preset_names_take_the_smallest_free_number() {
+    let p = |name: &str| prisma_engine::GroupPreset {
+        id: Uuid::new_v4(),
+        name: name.into(),
+        levels: vec![],
+        fade: 0.0,
+    };
+    assert_eq!(next_preset_name(&[]), "Preset 1");
+    assert_eq!(
+        next_preset_name(&[p("Preset 1"), p("Preset 3")]),
+        "Preset 2"
+    );
 }

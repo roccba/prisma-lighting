@@ -35,3 +35,11 @@ test("track settings dialog @screenshot", async ({ page }) => {
   await expect(dialog).toBeVisible();
   await expect(dialog).toHaveScreenshot("track-dialog.png", { animations: "disabled", caret: "hide" });
 });
+
+test("groups tab @screenshot", async ({ page }) => {
+  await openDemo(page, { density: "normal" });
+  await page.getByRole("tab", { name: "Grupos" }).click();
+  const panel = page.locator(".pr-workrow-panel");
+  await expect(page.locator(".pr-groupstrip")).toHaveCount(3);
+  await expect(panel).toHaveScreenshot("groups-tab.png", { animations: "disabled", caret: "hide" });
+});

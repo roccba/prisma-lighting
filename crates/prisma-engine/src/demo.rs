@@ -41,8 +41,8 @@ use std::time::Duration;
 
 use glam::Vec3;
 use prisma_core::show::{
-    Cell, Destination, LaunchMode, Layer, NetworkConfig, ParamSet, SceneLabel, Show, Source, Track,
-    TrackTransition,
+    Cell, Destination, GroupMaster, GroupPreset, LaunchMode, Layer, NetworkConfig, ParamSet,
+    SceneLabel, Show, Source, Track, TrackTransition,
 };
 use prisma_core::{Easing, TimeBase};
 use prisma_patch::{
@@ -134,7 +134,33 @@ pub fn demo_show() -> Show {
             color: Some(color),
         })
         .collect();
+    show.group_presets = demo_presets();
     show
+}
+
+/// The presets' ids: Sólo pares, Todo.
+pub const DEMO_PRESETS: [Uuid; 2] = [Uuid::from_u128(0xDE30_0301), Uuid::from_u128(0xDE30_0302)];
+
+/// "Sólo pares" fades the odd tubes out in 1.5 s; "Todo" brings every group back in 0.5 s.
+fn demo_presets() -> Vec<GroupPreset> {
+    let level = |g: usize, level: f32| GroupMaster {
+        group: DEMO_GROUPS[g],
+        level,
+    };
+    vec![
+        GroupPreset {
+            id: DEMO_PRESETS[0],
+            name: "Sólo pares".into(),
+            levels: vec![level(0, 1.0), level(1, 0.0)],
+            fade: 1.5,
+        },
+        GroupPreset {
+            id: DEMO_PRESETS[1],
+            name: "Todo".into(),
+            levels: vec![level(0, 1.0), level(1, 1.0), level(2, 1.0)],
+            fade: 0.5,
+        },
+    ]
 }
 
 // --- Patch ------------------------------------------------------------------------------

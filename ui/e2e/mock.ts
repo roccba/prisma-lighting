@@ -121,6 +121,53 @@ function groupEdit(cmd: string, a: Record<string, unknown>): unknown {
   return structuredClone(fx.editor_get_state);
 }
 
+// The Grupos tab (LIVE-MODEL-SPEC §8.5 step 4), on the fixture's `main_groups`.
+interface TabGroups {
+  groups: { id: string; name: string; level: number }[];
+  presets: { id: string; name: string; fade: number }[];
+}
+let presetSeq = 0;
+function groupsTab(cmd: string, a: Record<string, unknown>): unknown {
+  const t = fx.main_groups as unknown as TabGroups;
+  const preset = () => {
+    const p = t.presets.find((x) => x.id === a.preset);
+    if (!p) throw new Error("no such preset");
+    return p;
+  };
+  switch (cmd) {
+    case "main_groups":
+      return structuredClone(t);
+    case "main_set_group_level": {
+      const g = t.groups.find((x) => x.id === a.group);
+      if (g) g.level = a.level as number;
+      return null;
+    }
+    case "main_apply_group_preset":
+      preset();
+      return null;
+    case "main_add_group_preset": {
+      let n = 1;
+      while (t.presets.some((p) => p.name === `Preset ${n}`)) n++;
+      const id = `00000000-0000-4000-9000-${String(++presetSeq).padStart(12, "0")}`;
+      t.presets.push({ id, name: `Preset ${n}`, fade: 0 });
+      return id;
+    }
+    case "main_rename_group_preset":
+      preset().name = (a.name as string).trim();
+      return null;
+    case "main_set_group_preset_fade":
+      preset().fade = a.seconds as number;
+      return null;
+    case "main_rerecord_group_preset":
+      preset();
+      return null;
+    case "main_delete_group_preset":
+      t.presets.splice(t.presets.indexOf(preset()), 1);
+      return null;
+  }
+  return null;
+}
+
 // `?window=editor` opens the patch editor instead of the main window.
 mockWindows(new URLSearchParams(location.search).get("window") ?? "main");
 mockIPC(
@@ -141,6 +188,16 @@ mockIPC(
       return null;
     }
     if (cmd.startsWith("editor_") && cmd.includes("_group")) return groupEdit(cmd, a);
+    if (cmd.startsWith("main_") && cmd.includes("group")) return groupsTab(cmd, a);
+    // Shortcuts: the window actions (`ui:…`) come back to the window, as Rust's dispatch does.
+    if (cmd === "main_key") {
+      const c = a.combo as { key: string; ctrl: boolean; shift: boolean; alt: boolean };
+      const keys = fx.control_keys as { combo: typeof c; path: string }[];
+      const hit = keys.find(
+        (k) => k.combo.key === c.key && !!k.combo.ctrl === c.ctrl && !!k.combo.shift === c.shift && !!k.combo.alt === c.alt,
+      );
+      return hit?.path.startsWith("ui:") ? hit.path : null;
+    }
     // A new destination: the app recompiles and the grid re-fetches on `layout-changed`.
     if (cmd === "main_set_track_destination") {
       const grid = fx.main_grid as {

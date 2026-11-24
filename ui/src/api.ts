@@ -889,3 +889,34 @@ export const sameTarget = (a: MapTarget, b: MapTarget) => JSON.stringify(a) === 
 /** Short human label for a control, e.g. "CC 7 · Ch 2" or "Nota 36 · Ch 1". */
 export const controlLabel = (c: MidiControl) =>
   "cc" in c.kind ? `CC ${c.kind.cc} · Ch ${c.channel + 1}` : `Nota ${c.kind.note} · Ch ${c.channel + 1}`;
+
+// --- Grupos tab (LIVE-MODEL-SPEC §8.5 step 4): group masters and presets ---
+export interface GroupMasterInfo {
+  id: string;
+  name: string;
+  color: [number, number, number];
+  /** Normalized, as the fader shows it. */
+  level: number;
+}
+export interface GroupPresetInfo {
+  id: string;
+  name: string;
+  /** Seconds (0 = cut). */
+  fade: number;
+}
+export interface GroupsInfo {
+  groups: GroupMasterInfo[];
+  presets: GroupPresetInfo[];
+}
+export const mainGroups = () => invoke<GroupsInfo>("main_groups");
+export const setGroupLevel = (group: string, level: number) =>
+  invoke<void>("main_set_group_level", { group, level });
+export const applyGroupPreset = (preset: string) => invoke<void>("main_apply_group_preset", { preset });
+/** "+ Preset": stores the current masters. Returns the new preset's id. */
+export const addGroupPreset = () => invoke<string>("main_add_group_preset");
+export const renameGroupPreset = (preset: string, name: string) =>
+  invoke<void>("main_rename_group_preset", { preset, name });
+export const rerecordGroupPreset = (preset: string) => invoke<void>("main_rerecord_group_preset", { preset });
+export const setGroupPresetFade = (preset: string, seconds: number) =>
+  invoke<void>("main_set_group_preset_fade", { preset, seconds });
+export const deleteGroupPreset = (preset: string) => invoke<void>("main_delete_group_preset", { preset });

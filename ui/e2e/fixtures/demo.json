@@ -179,6 +179,51 @@
         "shift": false
       },
       "path": "ui:panel"
+    },
+    {
+      "combo": {
+        "alt": true,
+        "ctrl": false,
+        "key": "1",
+        "shift": false
+      },
+      "path": "ui:tab/1"
+    },
+    {
+      "combo": {
+        "alt": true,
+        "ctrl": false,
+        "key": "2",
+        "shift": false
+      },
+      "path": "ui:tab/2"
+    },
+    {
+      "combo": {
+        "alt": true,
+        "ctrl": false,
+        "key": "3",
+        "shift": false
+      },
+      "path": "ui:tab/3"
+    },
+    {
+      "combo": {
+        "alt": true,
+        "ctrl": false,
+        "key": "4",
+        "shift": false
+      },
+      "path": "ui:tab/4"
+    },
+    {
+      "combo": {
+        "alt": true,
+        "ctrl": false,
+        "key": "5",
+        "shift": false
+      },
+      "path": "ui:tab/5"
     }
   ],
   "editor_fixture_types": [
@@ -29974,6 +30019,52 @@
           "00000000-0000-0000-0000-0000de300003",
           "00000000-0000-0000-0000-0000de300004"
         ]
+      }
+    ]
+  },
+  "main_groups": {
+    "groups": [
+      {
+        "color": [
+          230,
+          85,
+          85
+        ],
+        "id": "00000000-0000-0000-0000-0000de300201",
+        "level": 1.0,
+        "name": "Tubos pares"
+      },
+      {
+        "color": [
+          240,
+          160,
+          60
+        ],
+        "id": "00000000-0000-0000-0000-0000de300202",
+        "level": 1.0,
+        "name": "Tubos impares"
+      },
+      {
+        "color": [
+          225,
+          205,
+          70
+        ],
+        "id": "00000000-0000-0000-0000-0000de300203",
+        "level": 1.0,
+        "name": "Bordes de cortinas"
+      }
+    ],
+    "presets": [
+      {
+        "fade": 1.5,
+        "id": "00000000-0000-0000-0000-0000de300301",
+        "name": "Sólo pares"
+      },
+      {
+        "fade": 0.5,
+        "id": "00000000-0000-0000-0000-0000de300302",
+        "name": "Todo"
       }
     ]
   },

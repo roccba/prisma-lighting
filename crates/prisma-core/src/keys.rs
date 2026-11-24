@@ -57,6 +57,11 @@ impl KeyCombo {
         self
     }
 
+    pub fn with_alt(mut self) -> KeyCombo {
+        self.alt = true;
+        self
+    }
+
     /// The menu keeps these (F3 editor, F4 devices, F7–F10 tools, F11 full screen, and
     /// the Ctrl+N/O/S/M file and learn shortcuts): a shortcut can never take them.
     pub fn is_reserved(&self) -> bool {
@@ -111,6 +116,12 @@ pub mod paths {
     pub fn scene(row: usize) -> String {
         format!("/scene/{row}/launch")
     }
+
+    /// Window action: show the bottom panel's tab `n` (1-based; LIVE-MODEL-SPEC §8.5
+    /// step 4). A number with no tab does nothing.
+    pub fn panel_tab(n: usize) -> String {
+        format!("ui:tab/{n}")
+    }
 }
 
 /// Whether a shortcut's action is a window action the UI performs (not a tree path).
@@ -118,12 +129,16 @@ pub fn is_ui_action(path: &str) -> bool {
     path.starts_with("ui:")
 }
 
+/// How many bottom-panel tabs get a default key (Alt+1…Alt+5).
+pub const PANEL_TAB_KEYS: usize = 5;
+
 /// How many scenes get a default number key (1…9).
 pub const DEFAULT_SCENE_KEYS: usize = 9;
 
 /// The default shortcuts (LIVE-MODEL-SPEC §8.2): Space GO, Esc disarm, Ctrl+Backspace
 /// stop all, Shift+B blackout, 1…9 scenes, arrows move the selection, Enter launches
-/// and Shift+Enter arms the selected clip, Tab shows / hides the parameter panel.
+/// and Shift+Enter arms the selected clip, Tab shows / hides the parameter panel, Alt+1…5
+/// pick the bottom panel's tab.
 pub fn default_bindings() -> Vec<KeyBinding> {
     let bind = |combo: KeyCombo, path: &str| KeyBinding {
         combo,
@@ -150,6 +165,12 @@ pub fn default_bindings() -> Vec<KeyBinding> {
         bind(KeyCombo::plain("Enter").with_shift(), paths::ARM_SELECTED),
         bind(KeyCombo::plain("Tab"), paths::TOGGLE_PANEL),
     ]);
+    for n in 1..=PANEL_TAB_KEYS {
+        keys.push(bind(
+            KeyCombo::plain(&n.to_string()).with_alt(),
+            &paths::panel_tab(n),
+        ));
+    }
     keys
 }
 

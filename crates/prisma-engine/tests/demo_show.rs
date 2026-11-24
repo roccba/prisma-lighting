@@ -412,3 +412,19 @@ fn the_groups_are_even_and_odd_tubes_and_the_curtain_edges() {
         patch.groups.iter().map(|g| g.display_color).collect();
     assert_eq!(colors.len(), 3);
 }
+
+#[test]
+fn the_presets_fade_the_tube_groups() {
+    use prisma_engine::demo::{DEMO_GROUPS, DEMO_PRESETS};
+    let show = demo_show();
+    let ids: Vec<_> = show.group_presets.iter().map(|p| p.id).collect();
+    assert_eq!(ids, DEMO_PRESETS);
+    let solo = &show.group_presets[0];
+    assert_eq!(solo.name, "Sólo pares");
+    assert!(solo.fade > 0.0, "a fade to see");
+    assert!(solo
+        .levels
+        .iter()
+        .any(|m| m.group == DEMO_GROUPS[1] && m.level == 0.0));
+    show.validate().expect("valid");
+}

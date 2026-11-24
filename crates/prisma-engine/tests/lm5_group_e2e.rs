@@ -160,6 +160,33 @@ fn group_masters_and_presets_dim_their_pixels_on_the_wire() {
         (1..=8).all(|t| lit.get(&tube(t)) == Some(if t % 2 == 0 { &60 } else { &0 }))
     });
 
+    // Presets replaced in place (the Grupos tab), no recompile: the new preset 0 cuts
+    // the even tubes and brings the odd ones back.
+    let demo = demo_show();
+    engine.set_group_presets(
+        &demo.patch.groups,
+        &[GroupPreset {
+            id: uuid::Uuid::from_u128(0xA),
+            name: "Pares fuera".into(),
+            levels: vec![
+                GroupMaster {
+                    group: DEMO_GROUPS[0],
+                    level: 0.0,
+                },
+                GroupMaster {
+                    group: DEMO_GROUPS[1],
+                    level: 1.0,
+                },
+            ],
+            fade: 0.0,
+        }],
+    );
+    assert!(engine.activate_path("/group-preset/0/apply"));
+    wait_for(&dev_sink, &px, "the reloaded preset applies", |lit| {
+        (1..=8).all(|t| lit.get(&tube(t)) == Some(if t % 2 == 0 { &0 } else { &60 }))
+    });
+    assert_eq!(engine.group_levels()[0], 0.0);
+
     let report = engine.shutdown();
     assert_eq!(report.gpu_strong_refs_at_release, 1, "released the GPU");
     let _ = dev_sink.stop_and_collect();

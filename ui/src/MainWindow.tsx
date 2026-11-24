@@ -1,3 +1,5 @@
+import { GroupsTab } from "./GroupsTab";
+import { loadPanelTab, PANEL_TAB_KEYS, PANEL_TABS, savePanelTab, tabOfShortcut, type PanelTabId } from "./panelTabs";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { emit, listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -166,6 +168,16 @@ function MainWindowBody() {
     }
   }, [panelHidden]);
   const togglePanel = useCallback(() => setPanelHidden((h) => !h), []);
+  // The bottom panel's tab (LIVE-MODEL-SPEC §8.5 step 4), remembered per machine.
+  // Selecting a cell never changes it; picking a tab shows the panel if it was hidden.
+  const [panelTab, setPanelTabState] = useState<PanelTabId>(loadPanelTab);
+  const selectPanelTab = useCallback((id: PanelTabId) => {
+    setPanelTabState(id);
+    savePanelTab(id);
+    setPanelHidden(false);
+  }, []);
+  const selectPanelTabRef = useRef(selectPanelTab);
+  selectPanelTabRef.current = selectPanelTab;
   // Vista → Bloquear layout (LIVE-MODEL-SPEC §10.2): no dragging, adding or deleting
   // tracks and no destination changes while it is on. Per machine, like the density.
   const [layoutLocked, setLayoutLocked] = useState(() => {
@@ -217,6 +229,8 @@ function MainWindowBody() {
       mainKey(hit.combo, hit.focus)
         .then((path) => {
           if (path === "ui:panel") togglePanelRef.current();
+          const tab = path ? tabOfShortcut(path) : null;
+          if (tab) selectPanelTabRef.current(tab);
         })
         .catch(() => {});
     };
@@ -689,8 +703,23 @@ function MainWindowBody() {
               </section>
             </div>
 
-            {/* The parameter panel's show / hide handle. */}
+            {/* The bottom panel's tabs and its show / hide handle. */}
             <div className="pr-panelbar">
+              <div className="pr-paneltabs" role="tablist" aria-label="Panel">
+                {PANEL_TABS.map((t, i) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    role="tab"
+                    className={`pr-paneltab${t.id === panelTab && !panelHidden ? " is-active" : ""}`}
+                    aria-selected={t.id === panelTab}
+                    title={i < PANEL_TAB_KEYS ? `${t.label} (Alt+${i + 1})` : t.label}
+                    onClick={() => selectPanelTab(t.id)}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
               <button
                 type="button"
                 className="pr-btn pr-panelbar-btn"
@@ -702,8 +731,10 @@ function MainWindowBody() {
               </button>
             </div>
             {!panelHidden && (
-              <section className="pr-region pr-workrow-panel">
-                {selectedTrack ? (
+              <section className="pr-region pr-workrow-panel" role="tabpanel" data-tab={panelTab}>
+                {panelTab === "groups" ? (
+                  <GroupsTab onError={setError} />
+                ) : selectedTrack ? (
                   <EffectParams trackId={selectedTrack} cell={selectedCell} rev={gridRev} onGridChange={bumpGrid} />
                 ) : (
                   <div className="pr-placeholder-body">Seleccioná una celda</div>

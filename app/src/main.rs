@@ -10,6 +10,7 @@
 //! - `control` — the selection in the tree and the keyboard shortcuts.
 //! - `zones` — the zone row, the master, the tempo, and the engine's clip host.
 //! - `grid` — tracks, clips, scenes and the effect parameter panel.
+//! - `groups` — the Grupos tab: group masters and presets.
 //! - `autosave` — the unsaved-session autosave and its thread.
 //!
 //! Every module does `use super::*`, and this file imports every module's items, so a name
@@ -20,6 +21,7 @@
 mod autosave;
 mod control;
 mod grid;
+mod groups;
 mod midi;
 mod network;
 mod patch;
@@ -64,6 +66,7 @@ use uuid::Uuid;
 use autosave::autosave_tick;
 use control::*;
 use grid::*;
+use groups::*;
 use midi::*;
 use network::*;
 use patch::*;
@@ -135,6 +138,14 @@ fn main() {
             editor_add_zone,
             editor_rename_zone,
             editor_remove_zone,
+            main_groups,
+            main_set_group_level,
+            main_apply_group_preset,
+            main_add_group_preset,
+            main_rename_group_preset,
+            main_rerecord_group_preset,
+            main_set_group_preset_fade,
+            main_delete_group_preset,
             editor_add_group,
             editor_rename_group,
             editor_set_group_color,

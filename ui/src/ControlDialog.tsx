@@ -1,3 +1,4 @@
+import { PANEL_TAB_KEYS, PANEL_TABS } from "./panelTabs";
 import { useEffect, useState } from "react";
 import { controlKeys, controlResetKeys, controlSetKey, type KeyBinding, type KeyCombo } from "./api";
 import { comboLabel, comboOf, isModifierOnly, isReserved } from "./keyboard";
@@ -27,6 +28,10 @@ const ACTIONS: Action[] = [
   { path: "/select/launch", label: "Lanzar la celda seleccionada" },
   { path: "/select/arm", label: "Armar la celda seleccionada" },
   { path: "ui:panel", label: "Mostrar / ocultar el panel de parámetros" },
+  ...Array.from({ length: PANEL_TAB_KEYS }, (_, i) => ({
+    path: `ui:tab/${i + 1}`,
+    label: `Panel: pestaña ${i + 1}${PANEL_TABS[i] ? ` (${PANEL_TABS[i].label})` : ""}`,
+  })),
 ];
 
 export function ControlDialog({ onClose }: { onClose: () => void }) {
