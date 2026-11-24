@@ -61,10 +61,12 @@ use prisma_render::blend::Compositor;
 use prisma_render::effect::{EffectInstance, EffectParams};
 use prisma_render::live_params::LiveParams;
 use prisma_render::overlap::zone_cell_coverage;
-use prisma_render::place::{footprint_from_coverage, Footprint, ZonePlacer};
+use prisma_render::pixel_layout::PixelLayout;
+use prisma_render::place::{footprint_from_coverage, Footprint};
 use prisma_render::readback::create_render_target;
 use prisma_render::render_loop::FrameContent;
 use prisma_render::{create_cell_mask, manifest_by_id, Gpu};
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// Where the engine writes the Show's initial parameter values from. A load-time
@@ -110,49 +112,114 @@ pub fn destination_groups(patch: &Patch, track: &Track) -> Vec<Option<Vec<Uuid>>
         .collect()
 }
 
-/// The cells of zone `slot`'s texture (`mapping`, row-major, one `u32` each, 1 =
-/// inside) that the fixtures of `groups` light: each pixel of a member fixture the zone
-/// owns, through its world cell, to the zone texel the placement pass samples for that
-/// cell (nearest, the inverse of `place.wgsl`). Where several world cells share one
-/// texel (a zone matrix coarser than its footprint) the texel is in when any of them
-/// is — the same cell sharing as everywhere else (§5.2.1).
-pub fn group_zone_mask(
-    patch: &Patch,
-    slot: usize,
-    groups: &[Uuid],
-    footprint: Footprint,
-    mapping: (u32, u32),
-) -> Vec<u32> {
-    let (mw, mh) = (mapping.0.max(1), mapping.1.max(1));
-    let mut mask = vec![0u32; (mw as usize) * (mh as usize)];
-    let Some(zone) = patch.zones.get(slot) else {
-        return mask;
-    };
-    if footprint.is_empty() {
-        return mask;
-    }
-    let member = |id: Uuid| {
-        groups
-            .iter()
-            .any(|g| patch.group(*g).is_some_and(|g| g.contains(id)))
-    };
-    for fixture in patch
-        .fixtures
-        .iter()
-        .filter(|f| f.zone == zone.id && member(f.id))
-    {
+/// "Not in this zone" in a pixel → texel table ([`zone_texel_table`]).
+pub const NO_TEXEL: u32 = u32::MAX;
+
+/// The world cell of each global pixel (`None` = outside the matrix), by the shared
+/// nearest rule (`cell_of`).
+fn pixel_cells(patch: &Patch, index: &PatchIndex) -> Vec<Option<(u32, u32)>> {
+    let mut cells = vec![None; index.pixel_count() as usize];
+    for fixture in &patch.fixtures {
         for pixel in &fixture.pixels {
-            let Some(c) = cell_of(pixel.position) else {
+            let Some(g) = index.global_index(fixture.id, pixel.index) else {
                 continue;
             };
-            let u = (c[0] as f32 + 0.5 - footprint.origin[0]) / footprint.size[0];
-            let v = (c[1] as f32 + 0.5 - footprint.origin[1]) / footprint.size[1];
-            if !(0.0..1.0).contains(&u) || !(0.0..1.0).contains(&v) {
-                continue;
+            cells[g as usize] = cell_of(pixel.position).and_then(|c| {
+                let inside = (0..3).all(|a| c[a] >= 0 && c[a] < patch.matrix_size[a] as i64);
+                inside.then_some((c[0] as u32, c[1] as u32))
+            });
+        }
+    }
+    cells
+}
+
+/// Zone `slot`'s pixel → texel table in the pixel layout (one `u32` per pixel texel):
+/// for each pixel of the zone, the row-major texel of the zone's texture (`mapping`)
+/// it shows; [`NO_TEXEL`] for every other pixel. The texel is the one the world
+/// placement used to put on the pixel's cell — nearest, `floor(u · mapping)` with `u`
+/// the cell centre's position in the footprint — computed here in exact integer
+/// arithmetic: `floor((2·(x − origin) + 1) · mapping / (2 · footprint))`.
+pub fn zone_texel_table(
+    patch: &Patch,
+    index: &PatchIndex,
+    slot: usize,
+    footprint: Footprint,
+    mapping: (u32, u32),
+    layout: &PixelLayout,
+) -> Vec<u32> {
+    let mut table = vec![NO_TEXEL; layout.texels()];
+    if footprint.is_empty() || slot >= index.zone_count() {
+        return table;
+    }
+    let cells = pixel_cells(patch, index);
+    let (ox, oy) = (footprint.origin[0] as i64, footprint.origin[1] as i64);
+    let (fw, fh) = (footprint.size[0] as i64, footprint.size[1] as i64);
+    let (mw, mh) = (mapping.0.max(1) as i64, mapping.1.max(1) as i64);
+    let near = |c: i64, o: i64, f: i64, m: i64| -> Option<i64> {
+        let twice = 2 * (c - o) + 1; // 2 · (cell centre − origin)
+        (twice >= 0 && twice < 2 * f).then(|| ((twice * m) / (2 * f)).min(m - 1))
+    };
+    for &g in index.zone_members(slot) {
+        let Some((cx, cy)) = cells[g as usize] else {
+            continue;
+        };
+        if let (Some(sx), Some(sy)) = (near(cx as i64, ox, fw, mw), near(cy as i64, oy, fh, mh)) {
+            table[g as usize] = (sy * mw + sx) as u32;
+        }
+    }
+    table
+}
+
+/// Zone `slot`'s coverage in the pixel layout: 1 for each of its pixels (with a cell
+/// in the matrix), 0 elsewhere. Exact per pixel (LIVE-MODEL-SPEC §8.6).
+pub fn zone_pixel_coverage(
+    patch: &Patch,
+    index: &PatchIndex,
+    slot: usize,
+    layout: &PixelLayout,
+) -> Vec<u32> {
+    let cells = pixel_cells(patch, index);
+    let mut mask = vec![0u32; layout.texels()];
+    if slot < index.zone_count() {
+        for &g in index.zone_members(slot) {
+            if cells[g as usize].is_some() {
+                mask[g as usize] = 1;
             }
-            let sx = ((u * mw as f32).floor() as u32).min(mw - 1);
-            let sy = ((v * mh as f32).floor() as u32).min(mh - 1);
-            mask[(sy * mw + sx) as usize] = 1;
+        }
+    }
+    mask
+}
+
+/// The pixels of zone `slot` whose fixture is in one of `groups`, in the pixel layout
+/// (1 = in). Exact per pixel: a pixel outside the groups is never in, whatever the
+/// zone's `mapping_size` or other pixels at the same spot (LIVE-MODEL-SPEC §8.6).
+pub fn group_pixel_mask(
+    patch: &Patch,
+    index: &PatchIndex,
+    slot: usize,
+    groups: &[Uuid],
+    layout: &PixelLayout,
+) -> Vec<u32> {
+    let mut mask = vec![0u32; layout.texels()];
+    if slot >= index.zone_count() {
+        return mask;
+    }
+    let in_groups = |f: Uuid| {
+        groups
+            .iter()
+            .any(|g| patch.group(*g).is_some_and(|g| g.contains(f)))
+    };
+    let mut zone = vec![false; index.pixel_count() as usize];
+    for &g in index.zone_members(slot) {
+        zone[g as usize] = true;
+    }
+    for fixture in patch.fixtures.iter().filter(|f| in_groups(f.id)) {
+        for pixel in &fixture.pixels {
+            if let Some(g) = index.global_index(fixture.id, pixel.index) {
+                if zone[g as usize] {
+                    mask[g as usize] = 1;
+                }
+            }
         }
     }
     mask
@@ -588,11 +655,10 @@ struct Instance {
     /// nesting launch and the next render, e.g. two launches landing in one frame).
     below_rendered: bool,
     targets: Targets,
-    /// The track reaches this zone through groups: their cells in the zone's texture
-    /// space, uploaded once. `None` = the whole zone.
-    /// An `Arc` so the fold can hold it while `render` borrows the instance (a
-    /// reference count, not an allocation).
-    mask: Option<std::sync::Arc<wgpu::Buffer>>,
+    /// The track reaches this zone through groups: their pixels in the pixel layout,
+    /// uploaded once. `None` = the whole zone. An `Arc` so the fold can hold it while
+    /// `render` borrows the instance (a reference count, not an allocation).
+    mask: Option<Arc<wgpu::Buffer>>,
 }
 
 impl Instance {
@@ -753,31 +819,32 @@ fn copy_texture(gpu: &Gpu, from: &wgpu::Texture, to: &wgpu::Texture) {
 
 /// One zone's GPU-side resources, all sized once at construction.
 struct ZoneSlot {
-    /// The zone's own local matrix resolution (`Zone::mapping_size`, X/Y).
+    /// The zone's own local matrix resolution (`Zone::mapping_size`, X/Y): where its
+    /// effects render.
     mapping: (u32, u32),
-    /// Where the zone's local space lands on the world framebuffer — derived from
-    /// the zone's coverage mask so placement is always a superset of coverage
-    /// (M8-PARTA §2.3).
-    footprint: Footprint,
-    /// The zone's folded tracks at `mapping`, once per frame.
-    zone_tex: wgpu::Texture,
-    /// The placed result at world resolution — the compositor's input for this zone.
-    placed_tex: wgpu::Texture,
-    /// Per-cell coverage mask (world cells), uploaded once.
+    /// Whether the zone has any pixel in the matrix (an empty zone composites nothing).
+    has_pixels: bool,
+    /// Pixel → texel of this zone's texture, per pixel of the layout (`NO_TEXEL` =
+    /// not in the zone). The fold reads every track through it, uploaded once.
+    src_index: Arc<wgpu::Buffer>,
+    /// The zone's pixels in the pixel layout (1 = in), uploaded once.
     coverage: wgpu::Buffer,
     /// How this zone blends onto the zones below it.
     blend_mode: BlendMode,
     /// Every track reaching this zone, in track (compositing) order.
     instances: Vec<Instance>,
-    /// Ping/pong at `mapping` for folding tracks.
+    /// The zone's folded tracks, in pixel space, once per frame.
+    zone_px: wgpu::Texture,
+    /// Ping/pong in pixel space for folding tracks.
     fold: (wgpu::Texture, wgpu::Texture),
 }
 
 /// How [`ZoneCompositor::with_options`] builds the content.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CompositorOptions {
-    /// Fold every zone, even one whose only playing track is plain — disables the
-    /// 1:1 shortcut. For tests that compare the two paths; never in the product.
+    /// Kept for the tests that compared the 1:1 shortcut with the fold. In pixel space
+    /// every zone folds over a transparent base (one plain track over it IS the track),
+    /// so the two paths are one and this changes nothing.
     pub force_fold: bool,
 }
 
@@ -816,20 +883,24 @@ impl TrackFrame {
 /// [`IdleContent`](crate::IdleContent) when a show runs.
 pub struct ZoneCompositor {
     compositor: Compositor,
-    placer: ZonePlacer,
     /// Bottom-to-top compositing order (`PatchIndex::composite_order`), once.
     order: Vec<u32>,
     slots: Vec<ZoneSlot>,
     tracks: Vec<TrackSlot>,
     /// This frame's track controls, one per track. Rewritten in place each frame.
     track_frame: Vec<TrackFrame>,
-    force_fold: bool,
-    /// This frame's per-cell overlap mask (world cells). Persistent; rewritten each
+    /// The pixel framebuffer's layout: every pixel-space texture below is this size,
+    /// and so must be the render loop's framebuffer (LIVE-MODEL-SPEC §8.6).
+    layout: PixelLayout,
+    /// This frame's per-pixel overlap mask (pixel layout). Persistent; rewritten each
     /// frame from the snapshot with `write_buffer`.
     cell_mask: wgpu::Buffer,
-    /// World-sized ping/pong scratch for the zone fold. Persistent.
+    /// Pixel-space ping/pong scratch for the zone fold. Persistent.
     ping: wgpu::Texture,
     pong: wgpu::Texture,
+    /// A pixel-space texture cleared to transparent once and never written again: the
+    /// base every fold starts from (no clear pass per frame).
+    blank: wgpu::Texture,
     /// Reused each frame: contributing zones in compositing order. Cleared + refilled
     /// in place, so it allocates only on the first (or a larger) frame.
     contrib: Vec<u32>,
@@ -877,7 +948,7 @@ impl ZoneCompositor {
         patch: &Patch,
         index: &PatchIndex,
         tracks: Vec<TrackContent>,
-        options: CompositorOptions,
+        _options: CompositorOptions,
     ) -> ZoneCompositor {
         let world = (patch.matrix_size[0].max(1), patch.matrix_size[1].max(1));
         let zone_count = index.zone_count();
@@ -886,7 +957,9 @@ impl ZoneCompositor {
             (z.mapping_size[0].max(1), z.mapping_size[1].max(1))
         };
 
-        // Footprints first: a group mask maps world cells to zone texels through them.
+        // The world placement of each zone (its footprint) decides which texel of the
+        // zone's texture a pixel shows; it is folded into the pixel → texel tables.
+        let layout = PixelLayout::of(index);
         let coverage_masks = zone_cell_coverage(patch, index);
         let footprints: Vec<Footprint> = (0..zone_count)
             .map(|slot| footprint_from_coverage(&coverage_masks[slot], world.0))
@@ -906,9 +979,9 @@ impl ZoneCompositor {
                     continue;
                 }
                 let mask = confined.map(|g| {
-                    std::sync::Arc::new(create_cell_mask(
+                    Arc::new(create_cell_mask(
                         gpu,
-                        &group_zone_mask(patch, zone, &g, footprints[zone], mapping_of(zone)),
+                        &group_pixel_mask(patch, index, zone, &g, &layout),
                     ))
                 });
                 let (w, h) = mapping_of(zone);
@@ -943,25 +1016,30 @@ impl ZoneCompositor {
                 let zone = &patch.zones[slot];
                 let mapping = mapping_of(slot);
                 let footprint = footprints[slot];
+                let (lw, lh) = layout.size();
+                let table = zone_texel_table(patch, index, slot, footprint, mapping, &layout);
                 ZoneSlot {
                     mapping,
-                    footprint,
-                    zone_tex: create_render_target(gpu, mapping.0, mapping.1),
-                    placed_tex: create_render_target(gpu, world.0, world.1),
-                    coverage: create_cell_mask(gpu, &coverage_masks[slot]),
+                    has_pixels: table.iter().any(|&t| t != NO_TEXEL),
+                    src_index: Arc::new(create_cell_mask(gpu, &table)),
+                    coverage: create_cell_mask(
+                        gpu,
+                        &zone_pixel_coverage(patch, index, slot, &layout),
+                    ),
                     blend_mode: zone.blend_mode,
                     instances,
+                    zone_px: create_render_target(gpu, lw, lh),
                     fold: (
-                        create_render_target(gpu, mapping.0, mapping.1),
-                        create_render_target(gpu, mapping.0, mapping.1),
+                        create_render_target(gpu, lw, lh),
+                        create_render_target(gpu, lw, lh),
                     ),
                 }
             })
             .collect();
 
-        let cell_count = (world.0 as usize) * (world.1 as usize);
+        let cell_count = layout.texels();
         let cell_mask = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("zone-cell-overlap-mask"),
+            label: Some("zone-pixel-overlap-mask"),
             size: (cell_count * std::mem::size_of::<u32>()).max(4) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -977,20 +1055,31 @@ impl ZoneCompositor {
         ];
         ZoneCompositor {
             compositor: Compositor::new(gpu),
-            placer: ZonePlacer::new(gpu),
             order: index.composite_order().to_vec(),
             slots,
             tracks: track_slots,
             track_frame,
-            force_fold: options.force_fold,
             cell_mask,
-            ping: create_render_target(gpu, world.0, world.1),
-            pong: create_render_target(gpu, world.0, world.1),
+            layout,
+            ping: create_render_target(gpu, layout.width, layout.height),
+            pong: create_render_target(gpu, layout.width, layout.height),
+            blank: {
+                let blank = create_render_target(gpu, layout.width, layout.height);
+                clear_transparent(gpu, &blank);
+                blank
+            },
             contrib: Vec::new(),
             commands_rx,
             commands_tx,
             last_show_ns: None,
         }
+    }
+
+    /// The pixel framebuffer this compositor renders into: the render loop's
+    /// framebuffer must be this size, and gather with
+    /// [`SamplePlan::pixel_space`](prisma_render::sample::SamplePlan::pixel_space).
+    pub fn pixel_layout(&self) -> PixelLayout {
+        self.layout
     }
 
     /// A producer for the frame-boundary command queue (M8-PARTA §3). Hand these to
@@ -1149,43 +1238,30 @@ impl ZoneCompositor {
             .any(|i| i.has_content() && self.track_frame[i.track].audible())
     }
 
-    /// Render zone `s`'s tracks into its `zone_tex`: straight in when one plain track
-    /// plays with no crossfade (the shortcut), otherwise folded over black in track
-    /// order with each track's blend mode and this frame's opacity.
+    /// Fold zone `s`'s tracks into its `zone_px`, in pixel space: over a transparent
+    /// base, in track order, each with its blend mode and this frame's opacity, every
+    /// pixel reading its texel of the track's texture through the zone's table; a track
+    /// confined to groups blends only on their pixels. One plain track over the base is
+    /// that track exactly, so there is no separate 1:1 path.
     fn render_zone(&mut self, gpu: &Gpu, clock: &ClockSnapshot, s: usize) {
         let compositor = &self.compositor;
         let frames = &self.track_frame;
-        let force_fold = self.force_fold;
+        let blank = &self.blank;
         let ZoneSlot {
             mapping,
-            zone_tex,
+            zone_px,
             instances,
+            src_index,
             fold: (a, b),
             ..
         } = &mut self.slots[s];
         let shows = |i: &Instance| i.has_content() && frames[i.track].audible();
-        let playing = instances.iter().filter(|i| shows(i)).count();
         let Some(last) = instances.iter().rposition(shows) else {
             return;
         };
-
-        let only = &instances[last];
-        let f = frames[only.track];
-        let plain = only.blend_mode == BlendMode::Normal
-            && f.opacity * f.presence >= 1.0
-            && only.mask.is_none();
-        if playing == 1 && plain && only.fade.is_none() && !force_fold {
-            let inst = &mut instances[last];
-            if let Some(effect) = inst.effect.as_mut() {
-                let c = phase_clock(clock, inst.phase_ns);
-                effect.render(gpu, &c, &view(zone_tex), mapping.0, mapping.1);
-            }
-            return;
-        }
-
-        clear_transparent(gpu, a);
-        let mut acc: &wgpu::Texture = a;
-        let mut other: &wgpu::Texture = b;
+        let mut acc: &wgpu::Texture = blank;
+        let mut next: &wgpu::Texture = a;
+        let mut spare: &wgpu::Texture = b;
         for (k, inst) in instances.iter_mut().enumerate() {
             if !(inst.has_content() && frames[inst.track].audible()) {
                 continue;
@@ -1196,17 +1272,21 @@ impl ZoneCompositor {
             let Some(tex) = inst.render(gpu, compositor, clock, *mapping) else {
                 continue;
             };
-            let out = if k == last {
-                view(zone_tex)
-            } else {
-                view(other)
-            };
-            match &mask {
-                Some(m) => compositor.blend_masked(gpu, acc, tex, &out, mode, opacity, key, m),
-                None => compositor.blend_keyed(gpu, acc, tex, &out, mode, opacity, key),
-            }
+            let out = if k == last { &*zone_px } else { next };
+            compositor.blend_from(
+                gpu,
+                acc,
+                tex,
+                &view(out),
+                mode,
+                opacity,
+                key,
+                src_index,
+                mask.as_deref(),
+            );
             if k != last {
-                std::mem::swap(&mut acc, &mut other);
+                acc = next;
+                std::mem::swap(&mut next, &mut spare);
             }
         }
     }
@@ -1282,33 +1362,24 @@ impl FrameContent for ZoneCompositor {
 
         // 1. Which zones actually contribute this frame, in compositing order. A
         //    zone contributes iff it has live state (contributes_pixels), at least one
-        //    playing track, and a non-empty footprint. Reuses `contrib` in place.
+        //    playing track, and pixels in the matrix. Reuses `contrib` in place.
         self.contrib.clear();
         for &slot in &self.order {
             let s = slot as usize;
-            if zones.contributes_pixels(s)
-                && self.zone_has_content(s)
-                && !self.slots[s].footprint.is_empty()
-            {
+            if zones.contributes_pixels(s) && self.zone_has_content(s) && self.slots[s].has_pixels {
                 self.contrib.push(slot);
             }
         }
 
-        // 2. Render each contributing zone's tracks at its OWN mapping_size (folded in
-        //    track order), then PLACE the result into the world framebuffer.
+        // 2. Fold each contributing zone's tracks in pixel space (each track rendered
+        //    at the zone's OWN mapping_size, read per pixel through the zone's table).
         for i in 0..self.contrib.len() {
             let s = self.contrib[i] as usize;
             self.render_zone(gpu, clock, s);
-            let slot_ref = &self.slots[s];
-            self.placer.place(
-                gpu,
-                &slot_ref.zone_tex,
-                &view(&slot_ref.placed_tex),
-                slot_ref.footprint,
-            );
         }
 
-        // 3. This frame's per-cell overlap mask, into the persistent buffer.
+        // 3. This frame's per-pixel overlap mask, into the persistent buffer (the
+        //    counter is built pixel-space, so its cells are the pixels).
         gpu.queue.write_buffer(
             &self.cell_mask,
             0,
@@ -1325,17 +1396,17 @@ impl FrameContent for ZoneCompositor {
             return;
         };
 
-        clear_transparent(gpu, &self.ping);
-        let mut acc: &wgpu::Texture = &self.ping;
-        let mut other: &wgpu::Texture = &self.pong;
+        let mut acc: &wgpu::Texture = &self.blank;
+        let mut next: &wgpu::Texture = &self.ping;
+        let mut spare: &wgpu::Texture = &self.pong;
         for &slot in rest {
             let s = slot as usize;
             let zs = &self.slots[s];
             self.compositor.blend_zone(
                 gpu,
                 acc,
-                &zs.placed_tex,
-                &view(other),
+                &zs.zone_px,
+                &view(next),
                 zs.blend_mode,
                 1.0,
                 zone_scale(zones, s),
@@ -1343,7 +1414,8 @@ impl FrameContent for ZoneCompositor {
                 &self.cell_mask,
                 &zs.coverage,
             );
-            std::mem::swap(&mut acc, &mut other);
+            acc = next;
+            std::mem::swap(&mut next, &mut spare);
         }
         // The last zone blends straight into the render loop's framebuffer.
         let s = last as usize;
@@ -1351,7 +1423,7 @@ impl FrameContent for ZoneCompositor {
         self.compositor.blend_zone(
             gpu,
             acc,
-            &zs.placed_tex,
+            &zs.zone_px,
             &view(target),
             zs.blend_mode,
             1.0,

@@ -156,6 +156,21 @@ impl OverlapCounter {
         }
     }
 
+    /// A counter for a **pixel-space** framebuffer ([`crate::pixel_layout`]): every
+    /// pixel is its own cell, so the cell promotion of §5.2.1 is the identity — a
+    /// pixel is overlapped only when it is itself multiply covered, and the snapshot's
+    /// cell mask lines up with the pixel framebuffer texel for texel.
+    pub fn pixel_space(
+        patch: &Patch,
+        index: &PatchIndex,
+        layout: &crate::pixel_layout::PixelLayout,
+    ) -> OverlapCounter {
+        let mut counter = OverlapCounter::new(patch, index);
+        counter.cell_count = layout.texels();
+        counter.cells = (0..index.pixel_count()).collect();
+        counter
+    }
+
     /// The layout this counter was built against; compare before reusing it after
     /// a patch recompile.
     #[inline]

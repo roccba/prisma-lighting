@@ -197,36 +197,45 @@ arrows, the controller's bank window) goes through the table.
 ```mermaid
 flowchart TB
     tick[clock tick → ClockSnapshot]
-    subgraph zone [per zone, at the zone's mapping_size]
-        fx[render each track's clip<br/>RGBA, premultiplied alpha]
+    subgraph zone [per zone]
+        fx[render each track's clip at the zone's mapping_size<br/>RGBA, premultiplied alpha]
         tr[transitions: linear crossfade<br/>outgoing ↔ incoming, nested up to 2]
-        fold[fold tracks in order<br/>blend mode × opacity × presence]
+        fold[fold tracks in PIXEL SPACE, in order<br/>each pixel reads its texel through the zone's table<br/>blend mode × opacity × presence, group masks per pixel]
         fx --> tr --> fold
     end
-    place[place zone texture into the world framebuffer]
-    over[zone over zone: overlap mask,<br/>zone dimmer as opacity on overlapped cells]
-    gather[gather: framebuffer cell → pixel<br/>SamplePlan]
+    over[zone over zone, in pixel space:<br/>coverage and overlap per pixel,<br/>zone dimmer as opacity on overlapped pixels]
+    gather[gather: pixel framebuffer → master buffer<br/>a copy, SamplePlan::pixel_space]
     master[master buffer, linear f16]
     out[output thread: OutputPlan<br/>zone + master dimmer/colour, whites from RGB,<br/>gamma, colour order, universes]
     artnet[Art-Net + ArtSync]
     prev[preview: same dimmer/colour stage,<br/>sRGB encode → WebSocket]
 
-    tick --> zone --> place --> over --> gather --> master
+    tick --> zone --> over --> gather --> master
     master --> out --> artnet
     master --> prev
 ```
 
 Notes:
 
-- One track in `Normal` at full opacity skips the fold and renders straight into the zone texture.
-  The two paths are tested to give the same frame.
+- The framebuffer is in **pixel space** (LIVE-MODEL-SPEC §8.6): one texel per patch pixel, the
+  global pixel index in rows of 256 (`PixelLayout`). Effects still render at their zone's
+  `mapping_size`; each zone has a pixel → texel table built once per layout (the texel the old world
+  placement put on the pixel's cell, in exact integer arithmetic), and the fold reads every track
+  through it (`Compositor::blend_from`). Zone coverage, group masks and the overlap mask are per
+  pixel, so a group is exact per pixel and the §5.2.1 cell promotion is the identity. The world
+  matrix (`Patch::matrix_size`) stays the space of positions: the editor canvas, and the input of
+  the tables. Every fold starts from a transparent texture cleared once; one plain track over it is
+  that track, so there is no separate 1:1 path. Bit-identical to the previous world-cell pipeline
+  for every pixel that does not share a cell with another (checked on six shows before the switch).
 - A track that reaches several zones has one effect instance per zone, at that zone's
   `mapping_size`, all reading one set of parameter handles (`EffectParams`): one write moves
   every zone. Each instance keeps its own animation phase (the zone's VEL). An instance whose
   handles were replaced by a newer clip keeps the last values it read, so a crossfade's
   outgoing side keeps its look.
-- Zone dimmer, colour filter and master apply at the output stage, except on overlapped cells, where
-  they must be applied before zones are combined.
+- Zone dimmer, colour filter and master apply at the output stage, except on overlapped pixels,
+  where they must be applied before zones are combined.
+- A track reaching a zone through groups blends only on the groups' pixels there (a per-pixel
+  mask, `group_pixel_mask`); elsewhere it leaves the zone untouched.
 - Everything GPU-sized is allocated at compile time. Nothing is allocated per frame.
 - The master buffer is RGB: premultiplied alpha read over black. Output and preview do not see alpha.
 - The engine is RGB. RGBW and RGBWW fixtures get their whites at the output stage, per profile:
@@ -321,7 +330,8 @@ holds the keyboard shortcuts and which devices had their defaults seeded; a v4 p
 | Engine assembly, recompile | `crates/prisma-engine/src/engine.rs` |
 | Effects and their manifests | `crates/prisma-render/src/effects.rs`, `shaders/*.wgsl` |
 | Blend modes | `shaders/blend.wgsl`, `crates/prisma-render/src/blend.rs` |
-| Gather | `crates/prisma-render/src/sample.rs`, `shaders/sample.wgsl` |
+| Gather, pixel framebuffer layout | `crates/prisma-render/src/{sample,pixel_layout}.rs`, `shaders/sample.wgsl` |
+| Pixel → texel tables, zone coverage, group masks | `crates/prisma-engine/src/zone_content.rs` (`zone_texel_table`, `zone_pixel_coverage`, `group_pixel_mask`) |
 | Master / zone live values (tree bindings) | `crates/prisma-render/src/live_params.rs` |
 | Render loop, clock tempo | `crates/prisma-render/src/render_loop.rs` |
 | Wire plan, flat parameters, whites | `crates/prisma-output/src/plan.rs` |

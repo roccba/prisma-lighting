@@ -311,7 +311,11 @@ impl Engine {
         let generation = index.generation();
         let master_len = index.master_buffer_len();
         let zone_count = index.zone_count();
-        let matrix = (patch.matrix_size[0], patch.matrix_size[1]);
+        // The framebuffer is in pixel space: one texel per patch pixel (LIVE-MODEL-SPEC
+        // §8.6). The per-zone compositor folds tracks and zones there, so groups, zone
+        // coverage and overlap are exact per pixel; the gather is a straight copy.
+        let layout = prisma_render::pixel_layout::PixelLayout::of(&index);
+        let matrix = layout.size();
 
         // Fixture → its master-buffer component offsets, for resolving a Highlight
         // selection (§7 / S9) without walking the index per call.
@@ -425,8 +429,8 @@ impl Engine {
         let descriptor = PreviewDescriptor::build(&preview_plan, &patch, &index);
 
         // --- Render inputs (built on the main thread; no GPU work here). ---
-        let sample_plan = SamplePlan::compile(&patch, &index);
-        let counter = OverlapCounter::new(&patch, &index);
+        let sample_plan = SamplePlan::pixel_space(&index, &layout);
+        let counter = OverlapCounter::pixel_space(&patch, &index, &layout);
         let clock = MasterClock::new(Arc::new(SystemClock::new()));
         // Tempo (LIVE-MODEL-SPEC §7 global bar): `/clock/bpm` and `/clock/tap`, applied
         // by the render loop that owns the clock; the result is read back through the

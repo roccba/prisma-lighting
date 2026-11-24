@@ -86,6 +86,29 @@ impl SamplePlan {
         }
     }
 
+    /// The gather from a **pixel-space** framebuffer ([`crate::pixel_layout`]): pixel
+    /// `g` is sampled at its own texel `(g % width, g / width)`, so the gather is a
+    /// straight copy. Used with the per-zone compositor, which composites in pixel
+    /// space (LIVE-MODEL-SPEC §8.6).
+    pub fn pixel_space(
+        index: &PatchIndex,
+        layout: &crate::pixel_layout::PixelLayout,
+    ) -> SamplePlan {
+        let samples = (0..index.pixel_count())
+            .map(|g| PixelSample {
+                cell_x: (g % layout.width) as i32,
+                cell_y: (g / layout.width) as i32,
+                offset: index.pixel_component_offset(g),
+                components: index.pixel_component_count(g) as u32,
+            })
+            .collect();
+        SamplePlan {
+            samples,
+            generation: index.generation(),
+            master_len: index.master_buffer_len(),
+        }
+    }
+
     /// The layout generation this plan was compiled against.
     #[inline]
     pub fn generation(&self) -> LayoutGeneration {

@@ -1,8 +1,9 @@
 //! Live model phase 5, step 2 — groups as a track destination (docs/LIVE-MODEL-SPEC.md
 //! §4.1 step 3, §8.5): a track that reaches a zone through a group renders there as for
-//! the whole zone and is confined to the group's cells; a group spanning two zones
-//! reaches both; a zone named directly wins over a group of it; with a zone matrix
-//! coarser than the rig, a texel shared by a group pixel and another pixel is in.
+//! the whole zone and is confined to the group's pixels; a group spanning two zones
+//! reaches both; a zone named directly wins over a group of it; and the group is exact
+//! per pixel (§8.6): a pixel outside it never takes the group track, even when it shares
+//! a texel of a coarse zone matrix or the very same spot with a group pixel.
 //!
 //! Runs on lavapipe (deterministic).
 
@@ -10,13 +11,13 @@ use half::f16;
 use prisma_core::show::{Cell, Destination, Layer, ParamSet, Show, ZoneReach};
 use prisma_core::zone::ZoneStates;
 use prisma_core::{ClockSnapshot, ParameterTree};
-use prisma_engine::{build_track_effects, destination_slots, group_zone_mask, ZoneCompositor};
+use prisma_engine::{build_track_effects, destination_slots, group_pixel_mask, ZoneCompositor};
 use prisma_patch::{
     BlendMode, ColorOrder, ComponentSet, Fixture, FixtureProfile, GammaCalibration, Group, Patch,
     PatchIndex, Pixel, Zone,
 };
 use prisma_render::overlap::OverlapCounter;
-use prisma_render::place::Footprint;
+use prisma_render::pixel_layout::PixelLayout;
 use prisma_render::readback::create_render_target;
 use prisma_render::render_loop::FrameContent;
 use prisma_render::sample::{SamplePlan, Sampler};
@@ -128,10 +129,13 @@ fn red(gpu: &Gpu, show: &Show) -> Vec<f32> {
     let tracks = build_track_effects(gpu, &tree, patch, show, &[]);
     let mut content = ZoneCompositor::new(gpu, patch, &index, tracks);
     let zones = lit(patch.zones.len());
-    let mut counter = OverlapCounter::new(patch, &index);
+    let mut counter = OverlapCounter::pixel_space(patch, &index, &PixelLayout::of(&index));
     counter.sync(&zones);
     let overlap = counter.snapshot();
-    let fb = create_render_target(gpu, patch.matrix_size[0], 1);
+    let fb = {
+        let (w, h) = PixelLayout::of(&index).size();
+        create_render_target(gpu, w, h)
+    };
     let clock = ClockSnapshot {
         frame: 0,
         wall_ns: 0,
@@ -141,7 +145,10 @@ fn red(gpu: &Gpu, show: &Show) -> Vec<f32> {
         playing: true,
     };
     content.render_into(gpu, &clock, &zones, &overlap, &fb);
-    let sampler = Sampler::new(gpu, &SamplePlan::compile(patch, &index));
+    let sampler = Sampler::new(
+        gpu,
+        &SamplePlan::pixel_space(&index, &PixelLayout::of(&index)),
+    );
     sampler.gather(gpu, &fb);
     let master: Vec<f16> = sampler.read_master_f16(gpu);
     (0..index.pixel_count())
@@ -203,22 +210,39 @@ fn a_group_with_no_fixture_in_a_zone_does_not_reach_it() {
 }
 
 #[test]
-fn a_coarse_zone_matrix_lights_the_whole_shared_texel() {
-    // Zone A at 2 texels over 4 cells: fixtures 0–1 share texel 0, 2–3 texel 1. The
-    // group has fixtures 1 and 2, so both texels are in.
-    let patch = rig(2);
-    let foot = Footprint {
-        origin: [0.0, 0.0],
-        size: [4.0, 1.0],
-    };
-    assert_eq!(group_zone_mask(&patch, 0, &[G], foot, (2, 1)), vec![1, 1]);
-    // Only fixture 1: texel 0 alone.
-    let mut one = patch.clone();
+fn a_coarse_zone_matrix_does_not_light_the_neighbour_sharing_a_texel() {
+    // Zone A at 2 texels over 4 pixels: fixtures 0–1 share texel 0, 2–3 texel 1. Only
+    // fixture 1 is in the group: fixture 0 shows the same texel of the effect, but it
+    // is not in the group, so it stays with the background (inverted in §8.6: before
+    // pixel space, the shared texel lit fixture 0 too).
+    let mut one = rig(2);
     one.groups[0].members = vec![fixture_id(1)];
-    assert_eq!(group_zone_mask(&one, 0, &[G], foot, (2, 1)), vec![1, 0]);
+    let index = one.compile().expect("compiles");
+    let layout = PixelLayout::of(&index);
+    let mask = group_pixel_mask(&one, &index, 0, &[G], &layout);
+    assert_eq!(&mask[..4], &[0, 1, 0, 0], "fixture 1 only");
     let s = show(&one, groups(&[G]));
     let got = red(software_gpu(), &s);
-    assert_red(&got, &[1.0, 1.0, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]);
+    assert_red(&got, &[0.25, 1.0, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25]);
+}
+
+#[test]
+fn a_pixel_at_the_same_spot_as_a_group_pixel_is_not_lit() {
+    // A ninth fixture, not in the group, at exactly fixture 1's position (the editor
+    // allows shared cells). Before pixel space the gather read one cell for both.
+    let mut patch = rig(4);
+    let mut extra = patch.fixtures[1].clone();
+    extra.id = Uuid::from_u128(0x999);
+    extra.name = "vecino".into();
+    extra.pixels[0].start_channel = 8 * 3 + 1;
+    patch.fixtures.push(extra);
+    for z in &mut patch.zones {
+        z.members.clear();
+    }
+    patch.fill_zone_members_from_ownership();
+    let s = show(&patch, groups(&[G]));
+    let got = red(software_gpu(), &s);
+    assert_red(&got, &[0.25, 1.0, 1.0, 0.25, 0.25, 1.0, 0.25, 0.25, 0.25]);
 }
 
 #[test]

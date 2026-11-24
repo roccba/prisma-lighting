@@ -30,6 +30,7 @@ pub mod effect;
 pub mod effects;
 pub mod live_params;
 pub mod overlap;
+pub mod pixel_layout;
 pub mod place;
 pub mod probe;
 pub mod readback;

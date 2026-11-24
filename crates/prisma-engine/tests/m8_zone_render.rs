@@ -23,6 +23,7 @@ use prisma_patch::{
 use prisma_render::effect::EffectInstance;
 use prisma_render::effects;
 use prisma_render::overlap::OverlapCounter;
+use prisma_render::pixel_layout::PixelLayout;
 use prisma_render::readback::create_render_target;
 use prisma_render::render_loop::FrameContent;
 use prisma_render::sample::{SamplePlan, Sampler};
@@ -128,14 +129,20 @@ fn render_and_gather(
     content: &mut impl FrameContent,
     zones: &ZoneStates,
 ) -> Vec<[f32; 3]> {
-    let mut counter = OverlapCounter::new(patch, index);
+    let mut counter = OverlapCounter::pixel_space(patch, index, &PixelLayout::of(index));
     counter.sync(zones);
     let overlap = counter.snapshot();
 
-    let framebuffer = create_render_target(gpu, patch.matrix_size[0], patch.matrix_size[1].max(1));
+    let framebuffer = {
+        let (w, h) = PixelLayout::of(index).size();
+        create_render_target(gpu, w, h)
+    };
     content.render_into(gpu, &still_clock(), zones, &overlap, &framebuffer);
 
-    let sampler = Sampler::new(gpu, &SamplePlan::compile(patch, index));
+    let sampler = Sampler::new(
+        gpu,
+        &SamplePlan::pixel_space(index, &PixelLayout::of(index)),
+    );
     sampler.gather(gpu, &framebuffer);
     let master: Vec<f16> = sampler.read_master_f16(gpu);
     (0..index.pixel_count())
@@ -160,14 +167,20 @@ fn render_and_gather_at(
     zones: &ZoneStates,
     clock: &ClockSnapshot,
 ) -> Vec<[f32; 3]> {
-    let mut counter = OverlapCounter::new(patch, index);
+    let mut counter = OverlapCounter::pixel_space(patch, index, &PixelLayout::of(index));
     counter.sync(zones);
     let overlap = counter.snapshot();
 
-    let framebuffer = create_render_target(gpu, patch.matrix_size[0], patch.matrix_size[1].max(1));
+    let framebuffer = {
+        let (w, h) = PixelLayout::of(index).size();
+        create_render_target(gpu, w, h)
+    };
     content.render_into(gpu, clock, zones, &overlap, &framebuffer);
 
-    let sampler = Sampler::new(gpu, &SamplePlan::compile(patch, index));
+    let sampler = Sampler::new(
+        gpu,
+        &SamplePlan::pixel_space(index, &PixelLayout::of(index)),
+    );
     sampler.gather(gpu, &framebuffer);
     let master: Vec<f16> = sampler.read_master_f16(gpu);
     (0..index.pixel_count())

@@ -49,7 +49,8 @@ struct BlendParams {
     mode: u32,
     opacity: f32,
     use_mask: u32,
-    _pad0: u32,
+    /// 1 = read the source through the pixel → texel table (binding 5).
+    src_indirect: u32,
     /// rgb = zone dimmer × colour filter, a = zone dimmer (its opacity).
     zone_scale: [f32; 4],
     /// LumaKey: x = threshold, y = softness.
@@ -167,6 +168,16 @@ impl Compositor {
                             },
                             count: None,
                         },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 5,
+                            visibility: wgpu::ShaderStages::FRAGMENT,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
                     ],
                 });
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -260,12 +271,14 @@ impl Compositor {
         );
     }
 
-    /// [`blend_keyed`](Self::blend_keyed) confined to `coverage` (one `u32` per texel of
-    /// `dst`, non-zero = inside): outside it `dst` passes through untouched. A track that
-    /// reaches a zone through groups blends this way, with the groups' cells
-    /// (LIVE-MODEL-SPEC §4.1 step 3).
+    /// Blend a zone-texture `src` onto a **pixel-space** accumulator `dst` (LIVE-MODEL-SPEC
+    /// §8.6): each output pixel reads its source texel through `src_index` (one `u32` per
+    /// pixel texel, `u32::MAX` = not in the zone → transparent). With `coverage` (one
+    /// `u32` per pixel texel, non-zero = inside) the blend is confined to it: outside,
+    /// `dst` passes through untouched — a track that reaches the zone through groups
+    /// (exact per pixel).
     #[allow(clippy::too_many_arguments)]
-    pub fn blend_masked(
+    pub fn blend_from(
         &self,
         gpu: &crate::Gpu,
         dst: &wgpu::Texture,
@@ -274,7 +287,8 @@ impl Compositor {
         mode: BlendMode,
         opacity: f32,
         key: [f32; 2],
-        coverage: &wgpu::Buffer,
+        src_index: &wgpu::Buffer,
+        coverage: Option<&wgpu::Buffer>,
     ) {
         self.blend_inner_with(
             gpu,
@@ -284,10 +298,11 @@ impl Compositor {
             blend_code(mode),
             opacity,
             key,
-            2,
+            if coverage.is_some() { 2 } else { 0 },
             [1.0; 4],
             &self.dummy_mask,
-            coverage,
+            coverage.unwrap_or(&self.dummy_mask),
+            Some(src_index),
         );
     }
 
@@ -372,6 +387,7 @@ impl Compositor {
             zone_scale.unwrap_or([1.0; 4]),
             cell_mask,
             coverage,
+            None,
         );
     }
 
@@ -389,6 +405,7 @@ impl Compositor {
         scale: [f32; 4],
         cell_mask: &wgpu::Buffer,
         coverage: &wgpu::Buffer,
+        src_index: Option<&wgpu::Buffer>,
     ) {
         gpu.queue.write_buffer(
             &self.uniform,
@@ -397,7 +414,7 @@ impl Compositor {
                 mode,
                 opacity,
                 use_mask,
-                _pad0: 0,
+                src_indirect: u32::from(src_index.is_some()),
                 zone_scale: scale,
                 key: [key[0], key[1], 0.0, 0.0],
             }),
@@ -427,6 +444,10 @@ impl Compositor {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: coverage.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: src_index.unwrap_or(&self.dummy_mask).as_entire_binding(),
                 },
             ],
         });

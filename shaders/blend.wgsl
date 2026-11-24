@@ -40,7 +40,11 @@ struct BlendParams {
     // 1 = zone composite (consult the mask and apply zone_scale), 0 = layer blend,
     // 2 = layer blend confined to a coverage mask (a track's groups in its zone).
     use_mask: u32,
-    _pad0: u32,
+    // 1 = read the source through `src_index` (pixel space, LIVE-MODEL-SPEC §8.6): the
+    // output is a pixel framebuffer, the source a zone's mapping_size texture, and
+    // src_index[pixel] is the source texel that pixel shows (NONE = not in the zone:
+    // transparent). 0 = the source is read 1:1.
+    src_indirect: u32,
     // rgb = zone dimmer x colour filter, a = zone dimmer (its opacity on overlapped
     // cells). Unused when use_mask == 0.
     zone_scale: vec4<f32>,
@@ -56,6 +60,9 @@ struct BlendParams {
 // Outside its coverage a zone must leave the accumulator untouched — this is what
 // makes zones independent, the product's whole thesis. Only read when use_mask==1.
 @group(0) @binding(4) var<storage, read> zone_coverage: array<u32>;
+// The pixel → source texel table read when src_indirect == 1 (row-major texel index in
+// the source, 0xFFFFFFFF = none).
+@group(0) @binding(5) var<storage, read> src_index: array<u32>;
 
 @vertex
 fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
@@ -96,7 +103,17 @@ fn fs(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     // 1:1 target ↔ inputs; integer load avoids any sampler filtering.
     let p = vec2<i32>(i32(frag.x), i32(frag.y));
     let a = textureLoad(dst_tex, p, 0);
-    var b = textureLoad(src_tex, p, 0);
+    var b = vec4<f32>(0.0);
+    if (bp.src_indirect == 1u) {
+        let width = i32(textureDimensions(dst_tex).x);
+        let t = src_index[u32(p.y * width + p.x)];
+        if (t != 0xffffffffu) {
+            let sw = textureDimensions(src_tex).x;
+            b = textureLoad(src_tex, vec2<i32>(i32(t % sw), i32(t / sw)), 0);
+        }
+    } else {
+        b = textureLoad(src_tex, p, 0);
+    }
 
     // A track that reaches its zone through groups (LIVE-MODEL-SPEC §4.1 step 3): the
     // same coverage rule as a zone, in the zone's own texture space — outside the
